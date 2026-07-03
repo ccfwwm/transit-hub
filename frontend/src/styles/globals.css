@@ -1,0 +1,83 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --background: 0 0% 100%;
+    --foreground: 220 58% 5%;
+    --card: 0 0% 100%;
+    --card-foreground: 220 58% 5%;
+    --surface: 210 40% 98%;
+    --surface-elevated: 0 0% 100%;
+    --surface-line: 214 32% 91%;
+    --primary: 221 83% 53%;
+    --primary-foreground: 210 40% 98%;
+    --accent: 167 84% 32%;
+    --accent-foreground: 0 0% 100%;
+    --signal: 143 86% 42%;
+    --signal-foreground: 0 0% 100%;
+    --warning: 39 96% 46%;
+    --warning-foreground: 0 0% 100%;
+    --secondary: 210 40% 96.1%;
+    --secondary-foreground: 222.2 47.4% 11.2%;
+    --muted: 210 40% 96.1%;
+    --muted-foreground: 215.4 16.3% 46.9%;
+    --border: 214.3 31.8% 91.4%;
+  }
+
+  .dark {
+    --background: 222.2 84% 4.9%;
+    --foreground: 210 40% 98%;
+    --card: 222.2 84% 4.9%;
+    --card-foreground: 210 40% 98%;
+    --surface: 223 47% 11%;
+    --surface-elevated: 217.2 32.6% 17.5%;
+    --surface-line: 216 34% 17%;
+    --primary: 217.2 91.2% 59.8%;
+    --primary-foreground: 222.2 47.4% 11.2%;
+    --accent: 167 84% 52%;
+    --accent-foreground: 220 58% 5%;
+    --signal: 143 86% 52%;
+    --signal-foreground: 220 58% 5%;
+    --warning: 39 96% 56%;
+    --warning-foreground: 220 58% 5%;
+    --secondary: 217.2 32.6% 17.5%;
+    --secondary-foreground: 210 40% 98%;
+    --muted: 217.2 32.6% 17.5%;
+    --muted-foreground: 215 20.2% 65.1%;
+    --border: 217.2 32.6% 17.5%;
+  }
+}
+
+html,
+body,
+#app {
+  min-height: 100%;
+}
+
+body {
+  margin: 0;
+  background-color: hsl(var(--background));
+  background-image:
+    radial-gradient(circle at 18% 8%, hsl(var(--primary) / 0.05), transparent 30%),
+    radial-gradient(circle at 84% 16%, hsl(var(--accent) / 0.05), transparent 26%),
+    radial-gradient(circle at 70% 88%, hsl(var(--warning) / 0.05), transparent 28%),
+    linear-gradient(180deg, hsl(var(--background)) 0%, hsl(var(--surface)) 100%);
+  background-attachment: fixed;
+  color: hsl(var(--foreground));
+  font-family: 'Aptos', 'IBM Plex Sans', ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
+  transition: color 0.3s ease, background-color 0.3s ease;
+}
+
+.dark body {
+  background-image:
+    radial-gradient(circle at 18% 8%, hsl(var(--primary) / 0.22), transparent 30%),
+    radial-gradient(circle at 84% 16%, hsl(var(--accent) / 0.16), transparent 26%),
+    radial-gradient(circle at 70% 88%, hsl(var(--warning) / 0.12), transparent 28%),
+    linear-gradient(180deg, hsl(var(--background)) 0%, hsl(var(--surface)) 100%);
+}
+
+a {
+  color: inherit;
+}

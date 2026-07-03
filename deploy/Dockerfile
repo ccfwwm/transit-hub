@@ -1,0 +1,31 @@
+# ---- 阶段 1：前端构建 ----
+FROM node:22-alpine AS frontend-builder
+WORKDIR /src/frontend
+COPY frontend/package.json frontend/package-lock.json ./
+RUN npm ci
+COPY frontend/ .
+ARG VITE_API_BASE_URL=/api
+ENV VITE_API_BASE_URL=${VITE_API_BASE_URL}
+RUN npm run build
+
+# ---- 阶段 2：后端构建 ----
+FROM golang:1.25-alpine AS backend-builder
+WORKDIR /src/backend
+COPY backend/go.mod backend/go.sum ./
+RUN go mod download
+COPY backend/ .
+RUN CGO_ENABLED=0 go build -o /out/transithub-api ./cmd/api
+
+# ---- 阶段 3：运行时 ----
+FROM alpine:3.20
+RUN apk add --no-cache ca-certificates tzdata
+RUN mkdir -p /app/data
+
+COPY --from=backend-builder /out/transithub-api /app/transithub-api
+COPY --from=frontend-builder /src/frontend/dist /app/public
+
+ENV PORT=10621
+ENV PUBLIC_DIR=/app/public
+EXPOSE 10621
+
+ENTRYPOINT ["/app/transithub-api"]

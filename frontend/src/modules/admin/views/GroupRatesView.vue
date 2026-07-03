@@ -1,0 +1,1050 @@
+<script setup lang="ts">
+import { computed, ref } from 'vue'
+import { useI18n } from 'vue-i18n'
+import { useRouter } from 'vue-router'
+import { AlertCircle, ArrowUpDown, Edit3, History, Link2, Loader2, Megaphone, RefreshCw, Search, X } from 'lucide-vue-next'
+import { Button } from '@/components/ui/button'
+import { getMySiteMappingOptions, realConnect, realBind, listUpstreamKeys, listRealConnections, realDisconnect } from '../api/mySites'
+import { getDashboardAdminStatus } from '../api/dashboardAdmin'
+import { useGroupRates } from '../composables/useGroupRates'
+import type { GroupRate, GroupRateHistoryRow } from '../types/groupRates'
+import type { MySiteMapping, MySiteMappingOwnGroupOption, RealConnection, UpstreamKeyItem } from '../types/mySites'
+import { NEW_API_CHANNEL_TYPES } from '../types/mySites'
+
+const { t, locale } = useI18n()
+const router = useRouter()
+
+const {
+  rates,
+  history,
+  total,
+  page,
+  pageSize,
+  totalPages,
+  types,
+  typeFilter,
+  isLoading,
+  isHistoryLoading,
+  isActionLoading,
+  errorKey,
+  historyErrorKey,
+  loadRates,
+  loadHistory,
+  saveType,
+  setTypeFilter,
+  goToPage,
+} = useGroupRates()
+
+const selectedRate = ref<GroupRate | null>(null)
+const isHistoryOpen = ref(false)
+const editingRate = ref<GroupRate | null>(null)
+const connectingRate = ref<GroupRate | null>(null)
+const editTypeValue = ref('')
+const connectOwnGroups = ref<string[]>([])
+const connectMode = ref<'real' | 'bind'>('real')
+const ownGroups = ref<MySiteMappingOwnGroupOption[]>([])
+const mySiteMappings = ref<MySiteMapping[]>([])
+const hasLoadedMappingOptions = ref(false)
+const searchQuery = ref('')
+const mappedFilter = ref<'all' | 'mapped' | 'unmapped' | 'deleted'>('all')
+const sortMode = ref<'multiplierAsc' | 'multiplierDesc' | 'siteNameAsc' | 'groupNameAsc'>('multiplierAsc')
+const realConnectionsData = ref<RealConnection[]>([])
+const disconnectingRate = ref<GroupRate | null>(null)
+const disconnectMode = ref<'unlink' | 'full'>('unlink')
+const isDisconnecting = ref(false)
+const disconnectError = ref('')
+const selectedGroupType = ref('')
+const selectedChannelType = ref(0)
+const adminPlatform = ref('')
+const upstreamKeys = ref<UpstreamKeyItem[]>([])
+const selectedKeyId = ref('')
+const isLoadingKeys = ref(false)
+
+const totalGroups = computed(() => rates.value.length)
+const updatedCount = computed(() => rates.value.filter((rate) => rate.updatedAt).length)
+const editTypeOptions = computed(() => {
+  const options = new Set(types.value)
+  if (editingRate.value?.type) options.add(editingRate.value.type)
+  return Array.from(options).sort((first, second) => first.localeCompare(second))
+})
+const mappedOwnGroupsForRate = (rate: GroupRate): string[] => (
+  mySiteMappings.value
+    .filter((mapping) => mapping.upstreamTargets.some((target) => target.siteId === rate.siteId && target.groupName === rate.groupName))
+    .map((mapping) => mapping.ownGroup)
+)
+
+const firstMappedOwnGroupForRate = (rate: GroupRate): string => mappedOwnGroupsForRate(rate)[0] ?? ''
+
+const filteredOwnGroups = computed(() => {
+  // new-api admin 不按渠道类型筛选，直接显示全部自有分组
+  if (isAdminNewAPI.value) return ownGroups.value
+  const upstreamType = (connectingRate.value?.type || selectedGroupType.value).toLowerCase()
+  if (upstreamType) {
+    return ownGroups.value.filter(g => g.platform.toLowerCase() === upstreamType)
+  }
+  return ownGroups.value
+})
+
+const realConnectionForRate = (rate: GroupRate): RealConnection | undefined =>
+  realConnectionsData.value.find(c => c.upstreamSiteId === rate.siteId && c.upstreamGroupId === rate.groupId)
+
+const isRealConnected = (rate: GroupRate): boolean => !!realConnectionForRate(rate)
+
+const loadRealConnections = async () => {
+  try {
+    realConnectionsData.value = await listRealConnections()
+  } catch {
+    realConnectionsData.value = []
+  }
+}
+
+void loadRealConnections()
+
+const loadAdminPlatform = async () => {
+  try {
+    const status = await getDashboardAdminStatus()
+    adminPlatform.value = status.platform ?? ''
+  } catch {
+    adminPlatform.value = ''
+  }
+}
+void loadAdminPlatform()
+
+const filteredRates = computed(() => {
+  const filtered = rates.value.filter(rate => {
+    const searchMatch = !searchQuery.value ||
+      rate.siteName.toLowerCase().includes(searchQuery.value.toLowerCase()) ||
+      rate.groupName.toLowerCase().includes(searchQuery.value.toLowerCase())
+
+    const typeMatch = !typeFilter.value || rate.type === typeFilter.value
+
+    if (mappedFilter.value === 'deleted') {
+      return searchMatch && typeMatch && rate.deleted
+    }
+
+    if (rate.deleted) return false
+
+    const mappedMatch = mappedFilter.value === 'all' ||
+      (mappedFilter.value === 'mapped' && rate.mapped) ||
+      (mappedFilter.value === 'unmapped' && !rate.mapped)
+
+    return searchMatch && typeMatch && mappedMatch
+  })
+
+  return [...filtered].sort((a, b) => {
+    switch (sortMode.value) {
+      case 'multiplierAsc':
+        return (a.currentMultiplier ?? Infinity) - (b.currentMultiplier ?? Infinity)
+      case 'multiplierDesc':
+        return (b.currentMultiplier ?? -Infinity) - (a.currentMultiplier ?? -Infinity)
+      case 'siteNameAsc':
+        return a.siteName.localeCompare(b.siteName)
+      case 'groupNameAsc':
+        return a.groupName.localeCompare(b.groupName)
+    }
+  })
+})
+const canGoPrevious = computed(() => page.value > 1 && !isLoading.value)
+const canGoNext = computed(() => page.value < totalPages.value && !isLoading.value)
+
+const isAdminNewAPI = computed(() => adminPlatform.value === 'newapi')
+const needsGroupTypeSelection = computed(() => !connectingRate.value?.type && !isAdminNewAPI.value)
+const needsChannelTypeSelection = computed(() => isAdminNewAPI.value)
+
+// new-api admin：根据自有分组类型过滤可选的渠道类型
+// 分组类型已知时只显示对应渠道，未知时显示全部
+const groupTypeToChannelIds: Record<string, number[]> = {
+  openai: [1],
+  anthropic: [14],
+  gemini: [24],
+  deepseek: [43],
+}
+const filteredChannelTypes = computed(() => {
+  const groupType = (connectingRate.value?.type || '').toLowerCase()
+  const matchedIds = groupTypeToChannelIds[groupType]
+  if (matchedIds) {
+    return NEW_API_CHANNEL_TYPES.filter(ct => matchedIds.includes(ct.id))
+  }
+  return NEW_API_CHANNEL_TYPES
+})
+
+const canSubmitConnect = computed(() => {
+  if (!connectingRate.value || connectOwnGroups.value.length === 0) return false
+  // sub2api admin：分组类型未知时必须手动选择
+  if (needsGroupTypeSelection.value && !selectedGroupType.value) return false
+  // new-api admin：必须选择渠道类型
+  if (needsChannelTypeSelection.value && !selectedChannelType.value) return false
+  if (connectMode.value === 'bind') return !!selectedKeyId.value
+  return true
+})
+
+const handleTypeChange = async (event: Event) => {
+  const target = event.target as HTMLSelectElement
+  await setTypeFilter(target.value)
+}
+
+const formatMultiplier = (value: number | null): string => {
+  if (value === null || !Number.isFinite(value)) return t('admin.groupRates.common.placeholder')
+  return t('admin.groupRates.format.multiplier', { value: Number(value.toFixed(4)).toString() })
+}
+
+const formatDelta = (delta: number | null): string => {
+  if (delta === null || !Number.isFinite(delta)) return t('admin.groupRates.common.placeholder')
+
+  const sign = delta > 0 ? '+' : ''
+  const deltaValue = `${sign}${Number(delta.toFixed(4)).toString()}`
+  return t('admin.groupRates.format.deltaMultiplier', { value: deltaValue })
+}
+
+const formatDateTime = (value: string | null): string => {
+  if (!value) return t('admin.groupRates.common.placeholder')
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return t('admin.groupRates.common.placeholder')
+  return new Intl.DateTimeFormat(locale.value, {
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+  }).format(date)
+}
+
+const platformLabel = (platform: string | null): string => {
+  if (!platform) return t('admin.groupRates.common.unknown')
+  if (platform === 'newapi') return t('admin.groupRates.platforms.newapi')
+  if (platform === 'sub2api') return t('admin.groupRates.platforms.sub2api')
+  return platform
+}
+
+const typeLabel = (type: string | null): string => {
+  if (!type) return t('admin.groupRates.common.unknown')
+  return type
+}
+
+const platformClasses = (platform: string | null): string => {
+  if (platform === 'newapi') return 'border-sky-400/30 bg-sky-500/10 text-sky-600 dark:text-sky-300'
+  if (platform === 'sub2api') return 'border-violet-400/30 bg-violet-500/10 text-violet-600 dark:text-violet-300'
+  return 'border-border/60 bg-surface-elevated text-muted-foreground'
+}
+
+const typeClasses = (type: string | null): string => {
+  if (!type) return 'border-border/60 bg-surface-elevated text-muted-foreground'
+
+  let hash = 0
+  for (const char of type) {
+    hash = (hash + char.charCodeAt(0)) % 4
+  }
+
+  return [
+    'border-emerald-400/30 bg-emerald-500/10 text-emerald-600 dark:text-emerald-300',
+    'border-amber-400/30 bg-amber-500/10 text-amber-600 dark:text-amber-300',
+    'border-rose-400/30 bg-rose-500/10 text-rose-600 dark:text-rose-300',
+    'border-cyan-400/30 bg-cyan-500/10 text-cyan-600 dark:text-cyan-300',
+  ][hash]
+}
+
+const deltaClasses = (delta: number | null): string => {
+  if (delta === null || !Number.isFinite(delta)) return 'bg-surface-elevated text-muted-foreground border-border/50'
+  if (delta > 0) return 'bg-red-500/10 text-red-500 border-red-500/20'
+  if (delta < 0) return 'bg-emerald-500/10 text-emerald-500 border-emerald-500/20'
+  return 'bg-primary/10 text-primary border-primary/20'
+}
+
+const historyActionLabel = (rate: GroupRate): string => (
+  t('admin.groupRates.actions.viewHistoryForRate', {
+    site: rate.siteName,
+    group: rate.groupName,
+    delta: formatDelta(rate.delta),
+  })
+)
+
+const openHistory = async (rate: GroupRate) => {
+  selectedRate.value = rate
+  isHistoryOpen.value = true
+  await loadHistory({
+    siteId: rate.siteId,
+    groupId: rate.groupId,
+    groupName: rate.groupId || rate.groupName,
+    platform: rate.platform,
+  })
+}
+
+const closeHistory = () => {
+  isHistoryOpen.value = false
+  selectedRate.value = null
+}
+
+const openTypeEditor = (rate: GroupRate) => {
+  editingRate.value = rate
+  editTypeValue.value = rate.type ?? ''
+}
+
+const closeTypeEditor = () => {
+  editingRate.value = null
+  editTypeValue.value = ''
+}
+
+const openConnector = async (rate: GroupRate) => {
+  connectingRate.value = rate
+  connectOwnGroups.value = []
+  connectMode.value = 'real'
+  selectedGroupType.value = ''
+  selectedChannelType.value = 0
+  await loadMySiteMappingData()
+}
+
+const closeConnector = () => {
+  connectingRate.value = null
+  connectOwnGroups.value = []
+  connectMode.value = 'real'
+  realConnectError.value = ''
+  selectedGroupType.value = ''
+  selectedChannelType.value = 0
+  upstreamKeys.value = []
+  selectedKeyId.value = ''
+  isLoadingKeys.value = false
+}
+
+const submitTypeEditor = async () => {
+  if (!editingRate.value) return
+  await saveType(editingRate.value, editTypeValue.value.trim())
+  closeTypeEditor()
+}
+
+const loadMySiteMappingData = async () => {
+  if (hasLoadedMappingOptions.value) return
+  isActionLoading.value = true
+  try {
+    const options = await getMySiteMappingOptions()
+    ownGroups.value = options.ownGroups
+    mySiteMappings.value = options.mappings ?? []
+    hasLoadedMappingOptions.value = true
+  } finally {
+    isActionLoading.value = false
+  }
+}
+
+const toggleOwnGroup = (groupId: string) => {
+  const index = connectOwnGroups.value.indexOf(groupId)
+  if (index === -1) {
+    connectOwnGroups.value = [...connectOwnGroups.value, groupId]
+  } else {
+    connectOwnGroups.value = connectOwnGroups.value.filter(id => id !== groupId)
+  }
+}
+
+const submitConnector = async () => {
+  if (!connectingRate.value || connectOwnGroups.value.length === 0) return
+
+  if (connectMode.value === 'bind') {
+    await submitBind()
+  } else {
+    await submitRealConnect()
+  }
+}
+
+const realConnectError = ref('')
+
+const submitRealConnect = async () => {
+  if (!connectingRate.value || connectOwnGroups.value.length === 0) return
+  realConnectError.value = ''
+  isActionLoading.value = true
+  const payload = {
+    upstreamSiteId: connectingRate.value.siteId,
+    upstreamGroupId: connectingRate.value.groupId ?? '',
+    upstreamGroupName: connectingRate.value.groupName,
+    groupType: selectedGroupType.value,
+    channelType: selectedChannelType.value || undefined,
+    ownGroupIds: connectOwnGroups.value,
+  }
+  console.log('[real-connect] payload:', JSON.stringify(payload, null, 2))
+  try {
+    const result = await realConnect(payload)
+    console.log('[real-connect] success:', JSON.stringify(result, null, 2))
+    closeConnector()
+    await Promise.all([loadRates(), loadRealConnections()])
+  } catch (err: any) {
+    console.error('[real-connect] error:', err)
+    realConnectError.value = t('admin.groupRates.connect.realFailed')
+  } finally {
+    isActionLoading.value = false
+  }
+}
+
+const loadUpstreamKeys = async (siteId: string) => {
+  isLoadingKeys.value = true
+  try {
+    upstreamKeys.value = await listUpstreamKeys(siteId)
+  } catch {
+    upstreamKeys.value = []
+  } finally {
+    isLoadingKeys.value = false
+  }
+}
+
+const submitBind = async () => {
+  if (!connectingRate.value || connectOwnGroups.value.length === 0 || !selectedKeyId.value) return
+  const selectedKey = upstreamKeys.value.find(k => k.id === selectedKeyId.value)
+  if (!selectedKey) return
+  realConnectError.value = ''
+  isActionLoading.value = true
+  try {
+    await realBind({
+      upstreamSiteId: connectingRate.value.siteId,
+      upstreamGroupId: connectingRate.value.groupId ?? '',
+      upstreamGroupName: connectingRate.value.groupName,
+      upstreamKeyId: selectedKey.id,
+      upstreamKey: selectedKey.key,
+      ownGroupIds: connectOwnGroups.value,
+      groupType: selectedGroupType.value,
+    })
+    closeConnector()
+    await Promise.all([loadRates(), loadRealConnections()])
+  } catch (err: any) {
+    console.error('[real-bind] error:', err)
+    realConnectError.value = t('admin.groupRates.connect.bindFailed')
+  } finally {
+    isActionLoading.value = false
+  }
+}
+
+const openDisconnect = (rate: GroupRate) => {
+  disconnectingRate.value = rate
+  disconnectMode.value = 'unlink'
+  disconnectError.value = ''
+}
+
+const closeDisconnect = () => {
+  disconnectingRate.value = null
+  disconnectMode.value = 'unlink'
+  disconnectError.value = ''
+}
+
+const submitDisconnect = async () => {
+  if (!disconnectingRate.value) return
+  const conn = realConnectionForRate(disconnectingRate.value)
+  if (!conn) return
+
+  isDisconnecting.value = true
+  disconnectError.value = ''
+  try {
+    await realDisconnect({ connectionId: conn.id, mode: disconnectMode.value })
+    closeDisconnect()
+    await Promise.all([loadRates(), loadRealConnections()])
+  } catch {
+    disconnectError.value = t('admin.groupRates.disconnect.failed')
+  } finally {
+    isDisconnecting.value = false
+  }
+}
+
+const historyTitle = computed(() => {
+  if (!selectedRate.value) return t('admin.groupRates.history.title')
+  return t('admin.groupRates.history.titleWithGroup', {
+    site: selectedRate.value.siteName,
+    group: selectedRate.value.groupName,
+  })
+})
+
+const editTypeTitle = computed(() => {
+  if (!editingRate.value) return t('admin.groupRates.edit.title')
+  return t('admin.groupRates.edit.titleWithGroup', {
+    site: editingRate.value.siteName,
+    group: editingRate.value.groupName,
+  })
+})
+
+const historyRowKey = (row: GroupRateHistoryRow, index: number): string => (
+  `${row.siteId}-${row.groupId || row.groupName}-${row.platform ?? 'all'}-${row.createdAt ?? index}`
+)
+
+</script>
+
+<template>
+  <div class="h-[calc(100vh-8rem)] flex flex-col space-y-6">
+    <div class="flex items-center gap-1 rounded-xl bg-surface border border-border/50 p-1 w-fit shrink-0">
+      <button
+        v-for="tab in (['all', 'mapped', 'unmapped', 'deleted'] as const)"
+        :key="tab"
+        type="button"
+        :class="[
+          'px-4 py-1.5 rounded-lg text-sm font-medium transition-all',
+          mappedFilter === tab
+            ? 'bg-primary text-primary-foreground shadow-sm'
+            : 'text-muted-foreground hover:text-foreground hover:bg-surface-elevated'
+        ]"
+        @click="mappedFilter = tab"
+      >
+        {{ t(`admin.groupRates.tabs.${tab}`) }}
+      </button>
+    </div>
+
+    <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-4 shrink-0">
+      <div class="flex items-center gap-3 w-full sm:w-auto flex-1">
+        <div class="relative w-full sm:w-80 max-w-sm">
+          <Search class="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+          <input
+            v-model="searchQuery"
+            type="text"
+            :placeholder="t('admin.groupRates.filters.searchPlaceholder')"
+            class="w-full h-10 pl-10 pr-4 rounded-xl bg-surface border border-border/50 focus:border-primary focus:ring-1 focus:ring-primary outline-none transition-all text-sm text-foreground placeholder:text-muted-foreground"
+          />
+        </div>
+
+        <div class="relative w-full sm:w-48">
+          <select
+            v-model="typeFilter"
+            class="h-10 w-full rounded-xl border border-border/50 bg-surface px-3 pr-8 text-sm text-foreground outline-none appearance-none transition-all focus:border-primary focus:ring-1 focus:ring-primary"
+            @change="handleTypeChange"
+          >
+            <option value="">{{ t('admin.groupRates.common.allTypes') }}</option>
+            <option v-for="type in types" :key="type" :value="type">{{ typeLabel(type) }}</option>
+          </select>
+          <div class="absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none text-muted-foreground">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg>
+          </div>
+        </div>
+
+        <div class="relative w-full sm:w-52">
+          <ArrowUpDown class="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground pointer-events-none" />
+          <select
+            v-model="sortMode"
+            class="h-10 w-full rounded-xl border border-border/50 bg-surface pl-9 pr-8 text-sm text-foreground outline-none appearance-none transition-all focus:border-primary focus:ring-1 focus:ring-primary"
+          >
+            <option value="multiplierAsc">{{ t('admin.groupRates.sort.multiplierAsc') }}</option>
+            <option value="multiplierDesc">{{ t('admin.groupRates.sort.multiplierDesc') }}</option>
+            <option value="siteNameAsc">{{ t('admin.groupRates.sort.siteNameAsc') }}</option>
+            <option value="groupNameAsc">{{ t('admin.groupRates.sort.groupNameAsc') }}</option>
+          </select>
+          <div class="absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none text-muted-foreground">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg>
+          </div>
+        </div>
+      </div>
+
+      <div class="flex items-center gap-2 w-full sm:w-auto shrink-0">
+        <Button variant="secondary" class="w-full sm:w-auto h-10 rounded-xl gap-2 shrink-0" @click="router.push('/admin/group-rate-campaigns?action=create')">
+          <Megaphone class="h-4 w-4" />
+          {{ t('admin.groupRates.actions.createCampaign') }}
+        </Button>
+        <Button class="w-full sm:w-auto h-10 rounded-xl gap-2 bg-primary text-primary-foreground hover:bg-primary/90 shadow-sm shrink-0" :disabled="isLoading" @click="loadRates">
+          <Loader2 v-if="isLoading" class="h-4 w-4 animate-spin" />
+          <RefreshCw v-else class="h-4 w-4" />
+          {{ t('admin.groupRates.actions.refresh') }}
+        </Button>
+      </div>
+    </div>
+
+    <div v-if="errorKey" class="flex items-start gap-3 rounded-2xl border border-warning/20 bg-warning/10 p-4 text-sm text-warning shrink-0">
+      <AlertCircle class="mt-0.5 h-4 w-4 shrink-0" />
+      <span>{{ t(errorKey) }}</span>
+    </div>
+
+    <div class="flex-1 min-h-0 overflow-hidden rounded-2xl border border-border/50 bg-card shadow-sm flex flex-col">
+      <div v-if="isLoading" class="flex flex-1 items-center justify-center text-muted-foreground">
+        <Loader2 class="mr-2 h-5 w-5 animate-spin" />
+        {{ t('admin.groupRates.status.loading') }}
+      </div>
+
+      <div v-else-if="rates.length === 0" class="flex flex-1 flex-col items-center justify-center px-6 text-center">
+        <div class="flex h-12 w-12 items-center justify-center rounded-2xl border border-border/50 bg-surface-elevated text-muted-foreground">
+          <History class="h-5 w-5" />
+        </div>
+        <h3 class="mt-4 font-semibold text-foreground">{{ t('admin.groupRates.empty.title') }}</h3>
+        <p class="mt-2 max-w-sm text-sm text-muted-foreground">{{ t('admin.groupRates.empty.description') }}</p>
+      </div>
+
+      <div v-else class="flex-1 overflow-auto">
+        <table class="w-full min-w-[980px] text-left text-sm relative">
+          <thead class="sticky top-0 z-10 border-b border-border/50 bg-surface-elevated/90 backdrop-blur-sm">
+            <tr>
+              <th class="px-6 py-3 font-medium text-muted-foreground">{{ t('admin.groupRates.fields.siteName') }}</th>
+              <th class="px-6 py-3 font-medium text-muted-foreground">{{ t('admin.groupRates.fields.groupName') }}</th>
+              <th class="px-6 py-3 font-medium text-muted-foreground">{{ t('admin.groupRates.fields.type') }}</th>
+              <th class="px-6 py-3 font-medium text-muted-foreground">{{ t('admin.groupRates.fields.platform') }}</th>
+              <th class="px-6 py-3 font-medium text-muted-foreground">{{ t('admin.groupRates.fields.currentMultiplier') }}</th>
+              <th class="px-6 py-3 font-medium text-muted-foreground">{{ t('admin.groupRates.fields.delta') }}</th>
+              <th class="px-6 py-3 font-medium text-muted-foreground">{{ t('admin.groupRates.fields.updatedAt') }}</th>
+              <th class="px-6 py-3 text-right font-medium text-muted-foreground">{{ t('admin.groupRates.fields.actions') }}</th>
+            </tr>
+          </thead>
+          <tbody class="divide-y divide-border/50">
+            <tr v-for="rate in filteredRates" :key="`${rate.siteId}-${rate.groupName}-${rate.platform ?? 'all'}`" class="transition-colors hover:bg-surface/30">
+              <td class="px-4 py-2.5">
+                <div class="font-medium text-foreground">{{ rate.siteName }}</div>
+              </td>
+              <td class="px-4 py-2.5">
+                <div class="flex items-center gap-1.5">
+                  <span class="font-medium text-foreground">{{ rate.groupName }}</span>
+                  <span v-if="rate.deleted" class="inline-flex rounded-md border border-red-500/20 bg-red-500/10 px-1.5 py-0.5 text-[10px] font-semibold text-red-500">{{ t('admin.groupRates.status.deleted') }}</span>
+                </div>
+              </td>
+              <td class="px-4 py-2.5">
+                <span :class="['inline-flex rounded-md border px-2 py-1 text-xs font-semibold uppercase tracking-wider', typeClasses(rate.type)]">
+                  {{ typeLabel(rate.type) }}
+                </span>
+              </td>
+              <td class="px-4 py-2.5">
+                <span :class="['inline-flex rounded-md border px-2 py-1 text-xs font-semibold uppercase tracking-wider', platformClasses(rate.platform)]">
+                  {{ platformLabel(rate.platform) }}
+                </span>
+              </td>
+              <td class="px-4 py-2.5 font-semibold text-foreground">{{ formatMultiplier(rate.currentMultiplier) }}</td>
+              <td class="px-4 py-2.5">
+                <button
+                  type="button"
+                  :class="[
+                    'inline-flex rounded-md border px-2.5 py-1 text-xs font-semibold transition-all hover:-translate-y-px hover:shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2 focus-visible:ring-offset-background',
+                    deltaClasses(rate.delta),
+                  ]"
+                  :title="historyActionLabel(rate)"
+                  :aria-label="historyActionLabel(rate)"
+                  @click="openHistory(rate)"
+                >
+                  {{ formatDelta(rate.delta) }}
+                </button>
+              </td>
+              <td class="px-4 py-2.5 text-muted-foreground">{{ formatDateTime(rate.updatedAt) }}</td>
+              <td class="px-4 py-2.5 text-right">
+                <div v-if="!rate.deleted" class="flex justify-end gap-2">
+                  <Button
+                    v-if="isRealConnected(rate)"
+                    variant="destructive"
+                    size="sm"
+                    class="gap-1.5"
+                    :disabled="isActionLoading || isDisconnecting"
+                    @click="openDisconnect(rate)"
+                  >
+                    <X class="h-3.5 w-3.5" />
+                    {{ t('admin.groupRates.disconnect.action') }}
+                  </Button>
+                  <Button
+                    v-else
+                    variant="secondary"
+                    size="sm"
+                    class="gap-1.5 text-primary hover:text-primary"
+                    :disabled="isActionLoading"
+                    @click="openConnector(rate)"
+                  >
+                    <Link2 class="h-3.5 w-3.5" />
+                    {{ t('admin.groupRates.actions.connect') }}
+                  </Button>
+                  <!-- <Button variant="secondary" size="sm" class="gap-1.5" :disabled="isActionLoading" @click="openTypeEditor(rate)">
+                    <Edit3 class="h-3.5 w-3.5" />
+                    {{ t('admin.groupRates.actions.editType') }}
+                  </Button> -->
+                </div>
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="flex flex-col gap-3 border-t border-border/50 bg-surface-elevated/30 px-4 py-4 text-sm text-muted-foreground sm:flex-row sm:items-center sm:justify-between">
+        <div class="flex flex-wrap items-center gap-x-4 gap-y-1">
+          <span>{{ t('admin.groupRates.pagination.total', { total }) }}</span>
+          <span>{{ t('admin.groupRates.pagination.pageSize', { pageSize }) }}</span>
+          <span>{{ t('admin.groupRates.pagination.currentPage', { page, totalPages }) }}</span>
+        </div>
+
+        <div class="flex items-center gap-2">
+          <Button variant="secondary" size="sm" :disabled="!canGoPrevious" @click="goToPage(page - 1)">
+            {{ t('admin.groupRates.pagination.previous') }}
+          </Button>
+          <Button variant="secondary" size="sm" :disabled="!canGoNext" @click="goToPage(page + 1)">
+            {{ t('admin.groupRates.pagination.next') }}
+          </Button>
+        </div>
+      </div>
+    </div>
+
+    <div v-if="isHistoryOpen" class="fixed inset-0 z-50 flex items-center justify-center bg-background/80 p-4 backdrop-blur-sm">
+      <div class="w-full max-w-4xl overflow-hidden rounded-2xl border border-border/50 bg-card shadow-xl">
+        <div class="flex items-start justify-between gap-4 border-b border-border/50 p-6">
+          <div>
+            <h2 class="text-xl font-semibold text-foreground">{{ historyTitle }}</h2>
+            <p v-if="selectedRate" class="mt-2 text-sm text-muted-foreground">
+              {{ t('admin.groupRates.history.subtitle', { platform: platformLabel(selectedRate.platform) }) }}
+            </p>
+          </div>
+          <button class="rounded-lg p-2 text-muted-foreground transition-colors hover:bg-surface-line hover:text-foreground" @click="closeHistory">
+            <X class="h-5 w-5" />
+            <span class="sr-only">{{ t('admin.groupRates.actions.closeHistory') }}</span>
+          </button>
+        </div>
+
+        <div v-if="historyErrorKey" class="m-6 flex items-start gap-3 rounded-xl border border-warning/20 bg-warning/10 p-4 text-sm text-warning">
+          <AlertCircle class="mt-0.5 h-4 w-4 shrink-0" />
+          <span>{{ t(historyErrorKey) }}</span>
+        </div>
+
+        <div v-if="isHistoryLoading" class="flex min-h-[260px] items-center justify-center text-muted-foreground">
+          <Loader2 class="mr-2 h-5 w-5 animate-spin" />
+          {{ t('admin.groupRates.history.loading') }}
+        </div>
+
+        <div v-else-if="history.length === 0" class="flex min-h-[260px] flex-col items-center justify-center px-6 text-center">
+          <History class="h-8 w-8 text-muted-foreground" />
+          <h3 class="mt-4 font-semibold text-foreground">{{ t('admin.groupRates.history.emptyTitle') }}</h3>
+          <p class="mt-2 text-sm text-muted-foreground">{{ t('admin.groupRates.history.emptyDescription') }}</p>
+        </div>
+
+        <div v-else class="max-h-[60vh] overflow-auto">
+          <table class="w-full min-w-[680px] text-left text-sm">
+            <thead class="sticky top-0 border-b border-border/50 bg-surface-elevated">
+              <tr>
+                <th class="px-6 py-3 font-medium text-muted-foreground">{{ t('admin.groupRates.fields.siteName') }}</th>
+                <th class="px-6 py-3 font-medium text-muted-foreground">{{ t('admin.groupRates.fields.groupName') }}</th>
+                <th class="px-6 py-3 font-medium text-muted-foreground">{{ t('admin.groupRates.fields.type') }}</th>
+                <th class="px-6 py-3 font-medium text-muted-foreground">{{ t('admin.groupRates.fields.platform') }}</th>
+                <th class="px-6 py-3 font-medium text-muted-foreground">{{ t('admin.groupRates.history.multiplier') }}</th>
+                <th class="px-6 py-3 font-medium text-muted-foreground">{{ t('admin.groupRates.history.delta') }}</th>
+                <th class="px-6 py-3 font-medium text-muted-foreground">{{ t('admin.groupRates.history.createdAt') }}</th>
+              </tr>
+            </thead>
+            <tbody class="divide-y divide-border/50">
+              <tr v-for="(row, index) in history" :key="historyRowKey(row, index)" class="transition-colors hover:bg-surface/30">
+                <td class="px-6 py-4 font-medium text-foreground">{{ row.siteName }}</td>
+                <td class="px-6 py-4 text-foreground">
+                  <div class="flex items-center gap-1.5">
+                    <span>{{ row.groupName }}</span>
+                    <span v-if="row.deleted" class="inline-flex rounded-md border border-red-500/20 bg-red-500/10 px-1.5 py-0.5 text-[10px] font-semibold text-red-500">{{ t('admin.groupRates.status.deleted') }}</span>
+                  </div>
+                </td>
+                <td class="px-6 py-4 text-muted-foreground">{{ typeLabel(row.type) }}</td>
+                <td class="px-6 py-4 text-muted-foreground">{{ platformLabel(row.platform) }}</td>
+                <td class="px-6 py-4">
+                  <span class="font-semibold text-foreground">{{ formatMultiplier(row.currentMultiplier ?? row.multiplier) }}</span>
+                  <span v-if="row.currentMultiplier !== null && row.currentMultiplier !== row.multiplier" class="ml-1 text-[10px] text-muted-foreground">{{ formatMultiplier(row.multiplier) }}</span>
+                </td>
+                <td class="px-6 py-4">
+                  <span
+                    class="inline-flex items-center rounded-md border px-2 py-0.5 text-xs font-semibold"
+                    :class="deltaClasses(row.delta)"
+                  >
+                    {{ formatDelta(row.delta) }}
+                  </span>
+                </td>
+                <td class="px-6 py-4 text-muted-foreground">{{ formatDateTime(row.createdAt) }}</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+    <div v-if="editingRate" class="fixed inset-0 z-50 flex items-center justify-center bg-background/80 p-4 backdrop-blur-sm">
+      <div class="w-full max-w-md overflow-hidden rounded-2xl border border-border/50 bg-card shadow-xl">
+        <div class="flex items-start justify-between gap-4 border-b border-border/50 p-6">
+          <div>
+            <h2 class="text-xl font-semibold text-foreground">{{ editTypeTitle }}</h2>
+            <p class="mt-2 text-sm text-muted-foreground">{{ t('admin.groupRates.edit.description') }}</p>
+          </div>
+          <button class="rounded-lg p-2 text-muted-foreground transition-colors hover:bg-surface-line hover:text-foreground" :disabled="isActionLoading" @click="closeTypeEditor">
+            <X class="h-5 w-5" />
+            <span class="sr-only">{{ t('admin.groupRates.actions.closeEdit') }}</span>
+          </button>
+        </div>
+
+        <form class="space-y-5 p-6" @submit.prevent="submitTypeEditor">
+          <label class="block space-y-2">
+            <span class="text-sm font-medium text-foreground">{{ t('admin.groupRates.edit.typeLabel') }}</span>
+            <select
+              v-model="editTypeValue"
+              class="h-11 w-full rounded-xl border border-border/70 bg-surface px-4 text-sm text-foreground outline-none transition focus:border-primary focus:ring-1 focus:ring-primary"
+              :disabled="isActionLoading"
+            >
+              <option value="">{{ t('admin.groupRates.edit.typePlaceholder') }}</option>
+              <option v-for="type in editTypeOptions" :key="type" :value="type">{{ typeLabel(type) }}</option>
+            </select>
+          </label>
+
+          <div class="flex justify-end gap-2">
+            <Button type="button" variant="secondary" :disabled="isActionLoading" @click="closeTypeEditor">
+              {{ t('admin.groupRates.actions.cancel') }}
+            </Button>
+            <Button type="submit" class="gap-2" :disabled="isActionLoading">
+              <Loader2 v-if="isActionLoading" class="h-4 w-4 animate-spin" />
+              {{ t('admin.groupRates.actions.saveType') }}
+            </Button>
+          </div>
+        </form>
+      </div>
+    </div>
+
+    <div v-if="connectingRate" class="fixed inset-0 z-50 flex items-center justify-center bg-background/80 p-4 backdrop-blur-sm">
+      <div class="w-full max-w-lg overflow-hidden rounded-2xl border border-border/50 bg-card shadow-xl">
+        <div class="flex items-start justify-between gap-4 border-b border-border/50 p-6">
+          <div>
+            <h2 class="text-xl font-semibold text-foreground">
+              {{ t('admin.groupRates.connect.titleWithGroup', { site: connectingRate.siteName, group: connectingRate.groupName }) }}
+            </h2>
+            <p class="mt-2 text-sm text-muted-foreground">
+              {{ connectMode === 'bind' ? t('admin.groupRates.connect.bindDescription') : t('admin.groupRates.connect.realDescription') }}
+            </p>
+          </div>
+          <button class="rounded-lg p-2 text-muted-foreground transition-colors hover:bg-surface-line hover:text-foreground" :disabled="isActionLoading" @click="closeConnector">
+            <X class="h-5 w-5" />
+            <span class="sr-only">{{ t('admin.groupRates.actions.closeConnect') }}</span>
+          </button>
+        </div>
+
+        <form class="space-y-5 p-6" @submit.prevent="submitConnector">
+          <div class="flex items-center gap-1 rounded-xl bg-surface border border-border/50 p-1">
+            <button
+              type="button"
+              :class="[
+                'flex-1 px-4 py-1.5 rounded-lg text-sm font-medium transition-all',
+                connectMode === 'real'
+                  ? 'bg-primary text-primary-foreground shadow-sm'
+                  : 'text-muted-foreground hover:text-foreground hover:bg-surface-elevated'
+              ]"
+              @click="connectMode = 'real'; connectOwnGroups = []; selectedGroupType = ''; selectedChannelType = 0"
+            >
+              {{ t('admin.groupRates.connect.modeReal') }}
+            </button>
+            <button
+              type="button"
+              :class="[
+                'flex-1 px-4 py-1.5 rounded-lg text-sm font-medium transition-all',
+                connectMode === 'bind'
+                  ? 'bg-primary text-primary-foreground shadow-sm'
+                  : 'text-muted-foreground hover:text-foreground hover:bg-surface-elevated'
+              ]"
+              @click="connectMode = 'bind'; connectOwnGroups = []; selectedGroupType = ''; selectedChannelType = 0; selectedKeyId = ''; connectingRate && loadUpstreamKeys(connectingRate.siteId)"
+            >
+              {{ t('admin.groupRates.connect.modeBind') }}
+            </button>
+          </div>
+
+          <div class="rounded-xl border border-border/50 bg-surface/50 p-4 space-y-3">
+            <div class="flex items-center justify-between">
+              <span class="text-xs font-medium text-muted-foreground">{{ t('admin.groupRates.connect.upstreamSiteLabel') }}</span>
+              <span class="text-sm font-medium text-foreground">{{ connectingRate?.siteName }}</span>
+            </div>
+            <div class="flex items-center justify-between">
+              <span class="text-xs font-medium text-muted-foreground">{{ t('admin.groupRates.connect.upstreamGroupNameLabel') }}</span>
+              <span class="text-sm font-medium text-foreground">{{ connectingRate?.groupName }}</span>
+            </div>
+            <div class="flex items-center justify-between">
+              <span class="text-xs font-medium text-muted-foreground">{{ t('admin.groupRates.connect.upstreamMultiplierLabel') }}</span>
+              <span class="text-sm font-semibold text-primary">{{ formatMultiplier(connectingRate?.currentMultiplier ?? null) }}</span>
+            </div>
+            <div class="flex items-center justify-between">
+              <span class="text-xs font-medium text-muted-foreground">{{ t('admin.groupRates.connect.upstreamPlatformLabel') }}</span>
+              <span :class="['inline-flex rounded-md border px-2 py-0.5 text-xs font-semibold uppercase tracking-wider', platformClasses(connectingRate?.platform ?? null)]">
+                {{ platformLabel(connectingRate?.platform ?? null) }}
+              </span>
+            </div>
+          </div>
+
+          <!-- sub2api admin：分组类型选择（仅在无法自动检测时显示） -->
+          <div v-if="needsGroupTypeSelection" class="space-y-2">
+            <span class="text-sm font-medium text-foreground">{{ t('admin.groupRates.connect.groupTypeLabel') }}</span>
+            <div class="relative">
+              <select
+                v-model="selectedGroupType"
+                class="h-10 w-full rounded-xl border border-border/50 bg-surface px-3 pr-8 text-sm text-foreground outline-none appearance-none transition-all focus:border-primary focus:ring-1 focus:ring-primary"
+                :disabled="isActionLoading"
+              >
+                <option value="">{{ t('admin.groupRates.connect.groupTypePlaceholder') }}</option>
+                <option value="openai">{{ t('admin.groupRates.connect.groupTypeOpenai') }}</option>
+                <option value="anthropic">{{ t('admin.groupRates.connect.groupTypeAnthropic') }}</option>
+                <option value="gemini">{{ t('admin.groupRates.connect.groupTypeGemini') }}</option>
+                <option value="antigravity">{{ t('admin.groupRates.connect.groupTypeAntigravity') }}</option>
+              </select>
+              <div class="absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none text-muted-foreground">
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg>
+              </div>
+            </div>
+          </div>
+
+          <!-- new-api admin：渠道类型选择 -->
+          <div v-if="needsChannelTypeSelection" class="space-y-2">
+            <span class="text-sm font-medium text-foreground">{{ t('admin.groupRates.connect.channelTypeLabel') }}</span>
+            <div class="relative">
+              <select
+                v-model.number="selectedChannelType"
+                class="h-10 w-full rounded-xl border border-border/50 bg-surface px-3 pr-8 text-sm text-foreground outline-none appearance-none transition-all focus:border-primary focus:ring-1 focus:ring-primary"
+                :disabled="isActionLoading"
+              >
+                <option :value="0">{{ t('admin.groupRates.connect.channelTypePlaceholder') }}</option>
+                <option v-for="ct in filteredChannelTypes" :key="ct.id" :value="ct.id">{{ ct.name }}</option>
+              </select>
+              <div class="absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none text-muted-foreground">
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg>
+              </div>
+            </div>
+          </div>
+
+          <div v-if="connectMode === 'bind'" class="space-y-2">
+            <span class="text-sm font-medium text-foreground">{{ t('admin.groupRates.connect.bindSelectKey') }}</span>
+            <div v-if="isLoadingKeys" class="flex items-center justify-center py-6 text-muted-foreground">
+              <Loader2 class="mr-2 h-4 w-4 animate-spin" />
+              {{ t('admin.groupRates.connect.bindKeysLoading') }}
+            </div>
+            <div v-else-if="upstreamKeys.length === 0" class="px-4 py-6 text-center text-sm text-muted-foreground">
+              {{ t('admin.groupRates.connect.bindKeysEmpty') }}
+            </div>
+            <div v-else class="max-h-48 overflow-auto rounded-xl border border-border/50 bg-surface divide-y divide-border/30">
+              <label
+                v-for="keyItem in upstreamKeys"
+                :key="keyItem.id"
+                :class="[
+                  'flex items-center gap-3 px-4 py-2.5 cursor-pointer transition-colors',
+                  selectedKeyId === keyItem.id ? 'bg-primary/5' : 'hover:bg-surface-elevated'
+                ]"
+              >
+                <input
+                  type="radio"
+                  :value="keyItem.id"
+                  :checked="selectedKeyId === keyItem.id"
+                  class="h-4 w-4 border-border text-primary focus:ring-primary"
+                  :disabled="isActionLoading"
+                  @change="selectedKeyId = keyItem.id"
+                />
+                <div class="flex-1 min-w-0">
+                  <div class="text-sm font-medium text-foreground truncate">{{ keyItem.name }}</div>
+                  <div class="text-xs text-muted-foreground font-mono truncate">{{ keyItem.key.slice(0, 8) }}...{{ keyItem.key.slice(-6) }}</div>
+                </div>
+                <span v-if="keyItem.groupName" class="inline-flex rounded-md border border-border/50 bg-surface-elevated px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground shrink-0">
+                  {{ keyItem.groupName }}
+                </span>
+                <span
+                  :class="[
+                    'inline-flex rounded-md border px-1.5 py-0.5 text-[10px] font-semibold shrink-0',
+                    keyItem.status === 'active'
+                      ? 'border-emerald-400/30 bg-emerald-500/10 text-emerald-600 dark:text-emerald-300'
+                      : 'border-border/60 bg-surface-elevated text-muted-foreground'
+                  ]"
+                >
+                  {{ keyItem.status }}
+                </span>
+              </label>
+            </div>
+          </div>
+
+          <div class="space-y-2">
+            <span class="text-sm font-medium text-foreground">{{ t('admin.groupRates.connect.ownGroupLabel') }}</span>
+            <div class="max-h-48 overflow-auto rounded-xl border border-border/50 bg-surface divide-y divide-border/30">
+              <label
+                v-for="group in filteredOwnGroups"
+                :key="group.id"
+                class="flex items-center gap-3 px-4 py-2.5 cursor-pointer transition-colors hover:bg-surface-elevated"
+              >
+                <input
+                  type="checkbox"
+                  :checked="connectOwnGroups.includes(group.id)"
+                  class="h-4 w-4 rounded border-border text-primary focus:ring-primary"
+                  :disabled="isActionLoading"
+                  @change="toggleOwnGroup(group.id)"
+                />
+                <span class="text-sm text-foreground">{{ group.groupName }}</span>
+                <span v-if="group.platform" class="inline-flex rounded-md border border-border/50 bg-surface-elevated px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+                  {{ group.platform }}
+                </span>
+                <span class="ml-auto text-xs text-muted-foreground">{{ formatMultiplier(group.multiplier) }}</span>
+              </label>
+              <div v-if="filteredOwnGroups.length === 0" class="px-4 py-3 text-sm text-muted-foreground">
+                {{ t('admin.groupRates.connect.ownGroupPlaceholder') }}
+              </div>
+            </div>
+          </div>
+
+          <div v-if="realConnectError" class="flex items-start gap-3 rounded-xl border border-warning/20 bg-warning/10 p-3 text-sm text-warning">
+            <AlertCircle class="mt-0.5 h-4 w-4 shrink-0" />
+            <span>{{ realConnectError }}</span>
+          </div>
+
+          <div class="flex justify-end gap-2">
+            <Button type="button" variant="secondary" :disabled="isActionLoading" @click="closeConnector">
+              {{ t('admin.groupRates.actions.cancel') }}
+            </Button>
+            <Button type="submit" class="gap-2" :disabled="isActionLoading || !canSubmitConnect">
+              <Loader2 v-if="isActionLoading" class="h-4 w-4 animate-spin" />
+              {{ t('admin.groupRates.actions.saveConnect') }}
+            </Button>
+          </div>
+        </form>
+      </div>
+    </div>
+
+    <div v-if="disconnectingRate" class="fixed inset-0 z-50 flex items-center justify-center bg-background/80 p-4 backdrop-blur-sm">
+      <div class="w-full max-w-md overflow-hidden rounded-2xl border border-border/50 bg-card shadow-xl">
+        <div class="flex items-start justify-between gap-4 border-b border-border/50 p-6">
+          <div>
+            <h2 class="text-xl font-semibold text-foreground">{{ t('admin.groupRates.disconnect.title') }}</h2>
+            <p class="mt-2 text-sm text-muted-foreground">
+              {{ t('admin.groupRates.disconnect.description', { site: disconnectingRate.siteName, group: disconnectingRate.groupName }) }}
+            </p>
+          </div>
+          <button class="rounded-lg p-2 text-muted-foreground transition-colors hover:bg-surface-line hover:text-foreground" :disabled="isDisconnecting" @click="closeDisconnect">
+            <X class="h-5 w-5" />
+          </button>
+        </div>
+
+        <div v-if="disconnectError" class="mx-6 mt-6 flex items-start gap-3 rounded-xl border border-warning/20 bg-warning/10 p-3 text-sm text-warning">
+          <AlertCircle class="mt-0.5 h-4 w-4 shrink-0" />
+          <span>{{ disconnectError }}</span>
+        </div>
+
+        <div class="space-y-4 p-6">
+          <div class="space-y-3">
+            <label
+              class="flex cursor-pointer items-start gap-3 rounded-xl border p-4 transition-colors"
+              :class="disconnectMode === 'unlink'
+                ? 'border-primary bg-primary/5'
+                : 'border-border/50 bg-surface hover:bg-surface-elevated'"
+            >
+              <input
+                v-model="disconnectMode"
+                type="radio"
+                value="unlink"
+                class="mt-0.5 h-4 w-4 border-border text-primary focus:ring-primary"
+                :disabled="isDisconnecting"
+              />
+              <div>
+                <span class="text-sm font-medium text-foreground">{{ t('admin.groupRates.disconnect.unlinkOnly') }}</span>
+                <p class="mt-1 text-xs text-muted-foreground">{{ t('admin.groupRates.disconnect.unlinkOnlyHint') }}</p>
+              </div>
+            </label>
+
+            <label
+              class="flex cursor-pointer items-start gap-3 rounded-xl border p-4 transition-colors"
+              :class="disconnectMode === 'full'
+                ? 'border-red-500/50 bg-red-500/5'
+                : 'border-border/50 bg-surface hover:bg-surface-elevated'"
+            >
+              <input
+                v-model="disconnectMode"
+                type="radio"
+                value="full"
+                class="mt-0.5 h-4 w-4 border-border text-red-500 focus:ring-red-500"
+                :disabled="isDisconnecting"
+              />
+              <div>
+                <span class="text-sm font-medium text-red-600 dark:text-red-400">{{ t('admin.groupRates.disconnect.deleteAll') }}</span>
+                <p class="mt-1 text-xs text-red-500/70">{{ t('admin.groupRates.disconnect.deleteAllHint') }}</p>
+              </div>
+            </label>
+          </div>
+
+          <div class="flex justify-end gap-2">
+            <Button variant="secondary" :disabled="isDisconnecting" @click="closeDisconnect">
+              {{ t('admin.groupRates.actions.cancel') }}
+            </Button>
+            <Button
+              :variant="disconnectMode === 'full' ? 'destructive' : 'default'"
+              class="gap-2"
+              :disabled="isDisconnecting"
+              @click="submitDisconnect"
+            >
+              <Loader2 v-if="isDisconnecting" class="h-4 w-4 animate-spin" />
+              {{ t('admin.groupRates.disconnect.confirm') }}
+            </Button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</template>

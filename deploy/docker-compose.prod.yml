@@ -1,0 +1,59 @@
+# TransitHub 生产部署示例。
+# 部署前必须修改所有 change-this-* 占位值，并确认镜像地址和版本号正确。
+services:
+  # TransitHub 应用服务：包含 Go 后端和已构建的前端静态文件。
+  app:
+    # 改成你实际发布的镜像地址和 tag。
+    image: deviseo/transithub:0.1.0
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    ports:
+      # 左侧 10621 是宿主机访问端口，可按需修改；右侧 10621 是容器内服务端口。
+      - "10621:10621"
+    environment:
+      PORT: "10621"
+      # PostgreSQL 连接串。这里的密码必须和 postgres.POSTGRES_PASSWORD 保持一致。
+      DATABASE_URL: postgres://transithub:transithub@postgres:5432/transithub?sslmode=disable
+      REDIS_URL: redis://redis:6379/0
+      # 首次空库启动时自动创建的管理员账号。已有用户时不会覆盖密码。
+      ADMIN_EMAIL: admin@example.com
+      ADMIN_PASSWORD: transithub
+      # 生产环境建议关闭公开注册，只允许使用初始化管理员登录。
+      ALLOW_PUBLIC_REGISTER: "false"
+      # 当前运行版本号，仅用于后台纯展示。
+      APP_VERSION: latest
+
+  # PostgreSQL 数据库服务。
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: transithub
+      POSTGRES_USER: transithub
+      # 必须修改，并同步到 app.environment.DATABASE_URL 中。
+      POSTGRES_PASSWORD: transithub
+    volumes:
+      # 持久化数据库数据。
+      - ../data/postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U transithub -d transithub"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Redis 服务：用于后台会话、缓存和定时刷新任务。
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    volumes:
+      # 持久化 Redis 数据。
+      - ../data/redis:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
