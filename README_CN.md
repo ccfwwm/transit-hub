@@ -28,15 +28,11 @@
 <table>
 <thead>
 <tr>
-<th align="center" valign="middle" width="30%">名称</th>
-<th align="left" valign="middle" width="70%">描述</th>
+<th align="center" valign="middle" width="130">名称</th>
+<th align="left" valign="middle" width="78%">描述</th>
 </tr>
 </thead>
 <tbody>
-<tr>
-<td align="center" valign="middle" width="130"><a href="https://web.ymocode.com"><img src="docs/assets/sponsors/yimous.png" alt="Yimo-US logo" height="22"><br><strong>Yimo-US</strong></a></td>
-<td valign="middle" width="78%">专注于稳定接入与多上游聚合的 API 服务品牌，面向高可用访问、资源整合与持续服务体验打造专业化接入能力。</td>
-</tr>
 <tr>
 <td align="center" valign="middle" width="130"><a href="https://www.recycleai.vip/"><img src="docs/assets/sponsors/recycleai-logo.png" alt="RecycleAI logo" height="28"><br><strong>RecycleAI</strong></a></td>
 <td valign="middle" width="78%">面向 AI 资源复用与智能服务循环的创新平台，致力于提升算力、模型与应用能力之间的协同效率。</td>
@@ -52,6 +48,22 @@
 <tr>
 <td align="center" valign="middle" width="130"><a href="https://sparkcode.top"><img src="docs/assets/sponsors/sparkcode-logo.png" alt="SparkCode logo" height="30"><br><strong>SparkCode</strong></a></td>
 <td valign="middle" width="78%">稳定高效的 API 中转服务商，提供 Claude Code、Codex、Gemini（含 NanoBanana 系列模型）等主流 AI 编程模型接入；支持包月与按量计费、高并发调用、充值开票、企业专属对接与技术支持，并提供长期有效的邀请返佣福利。</td>
+</tr>
+<tr>
+<td align="center" valign="middle" width="130"><a href="https://uuapi.net"><img src="docs/assets/sponsors/uuapi.svg" alt="UU API logo" height="30"><br><strong>UU API</strong></a></td>
+<td valign="middle" width="78%">面向全球开发者与企业的 AI 算力网关，一站式接入 ChatGPT、Claude、Gemini 等主流大模型；坚持渠道透明、官方直连或一手渠道，已为数千位开发者和上百家企业提供稳定 AI 基础设施服务，让每一次调用都值得。</td>
+</tr>
+<tr>
+<td align="center" valign="middle" width="130"><a href="https://hk.getelucid.com/"><img src="docs/assets/sponsors/ElucidRelay.png" alt="ElucidRelay logo" height="30"><br><strong>ElucidRelay</strong></a></td>
+<td valign="middle" width="78%">高吞吐 API relay，通过单一 OpenAI-compatible endpoint 稳定接入 OpenAI、Claude、Gemini 等海外主流模型；适合希望一站式启动服务的站点运营者、代理商和下游平台，兼顾稳定容量与有竞争力的价格。</td>
+</tr>
+<tr>
+<td align="center" valign="middle" width="130"><a href="https://songsongai.com/"><img src="docs/assets/sponsors/songsongai.png" alt="songsongAi logo" height="30"><br><strong>songsongAi</strong></a></td>
+<td valign="middle" width="78%">面向高品质智能应用体验的 AI 服务品牌，聚焦优质模型能力、稳定服务交付与简洁高效的使用路径，为个人创作者和团队提供值得信赖的智能生产力入口。</td>
+</tr>
+<tr>
+<td align="center" valign="middle" width="130"><a href="https://web.ymocode.com"><img src="docs/assets/sponsors/yimous.png" alt="Yimo-US logo" height="22"><br><strong>Yimo-US</strong></a></td>
+<td valign="middle" width="78%">专注于稳定接入与多上游聚合的 API 服务品牌，面向高可用访问、资源整合与持续服务体验打造专业化接入能力。</td>
 </tr>
 </tbody>
 </table>
