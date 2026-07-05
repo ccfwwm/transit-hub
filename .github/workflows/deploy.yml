@@ -53,6 +53,7 @@ jobs:
             cd "$DEPLOY_PATH"
             git remote set-url origin "$REPO_URL"
             git fetch --prune origin "$BRANCH"
+            git clean -fd -e .env.production -e data/
             git reset --hard "origin/$BRANCH"
           fi
 
