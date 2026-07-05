@@ -385,7 +385,8 @@ func (s *Service) realConnectSub2API(ctx context.Context, userID string, req Rea
 	}, nil
 }
 
-// realConnectNewAPI new-api 对接流程：创建 Token → 回查 Token ID → 获取完整 Key → 创建 Channel → 回查 Channel ID。
+// realConnectNewAPI new-api 对接流程：创建 Token → 回查 Token ID → 获取完整 Key，
+// 再按 admin 站点平台创建 Sub2API 转发账号或 New-API Channel。
 func (s *Service) realConnectNewAPI(ctx context.Context, userID string, req RealConnectRequest, state *State, upstreamSite *upstream.Site, groupType, groupName string) (RealConnection, error) {
 	log.Printf("[real-connect] new-api 开始对接 site=%s group=%s type=%s", upstreamSite.Name, groupName, groupType)
 	upstreamSession := *upstreamSite.Session
@@ -399,20 +400,10 @@ func (s *Service) realConnectNewAPI(ctx context.Context, userID string, req Real
 	}
 	log.Printf("[real-connect] new-api token 创建成功 token_id=%s key=%s...", tokenID, safeKeyPreview(tokenKey))
 
-	// 步骤 2：在 admin 端创建 Channel
-	// 优先使用前端传入的 channelType（new-api 渠道类型 ID），否则按 groupType 字符串映射
-	channelType := req.ChannelType
-	if channelType <= 0 {
-		channelType = groupTypeToNewAPIChannelType(groupType)
-	}
-	channelTypeName := newAPIChannelTypeName(channelType)
-	channelName := fmt.Sprintf("%s-【%s】-%s", channelTypeName, upstreamSite.Name, groupName)
-	channelID, err := s.platformService.CreateNewAPIChannel(state.Session, channelName, upstreamSite.BaseURL, tokenKey, channelType, req.OwnGroupIDs)
+	adminTargetID, adminTargetName, err := s.createAdminTargetForNewAPIUpstream(state.Session, req, upstreamSite, groupType, groupName, tokenKey, tokenID)
 	if err != nil {
-		log.Printf("[real-connect] new-api 创建 channel 失败 token_id=%s err=%v", tokenID, err)
 		return RealConnection{}, err
 	}
-	log.Printf("[real-connect] new-api channel 创建成功 channel_id=%s name=%s", channelID, channelName)
 
 	connID, err := randomConnID()
 	if err != nil {
@@ -427,12 +418,52 @@ func (s *Service) realConnectNewAPI(ctx context.Context, userID string, req Real
 		UpstreamGroupName:       groupName,
 		UpstreamKeyID:           tokenID,
 		UpstreamKey:             tokenKey,
-		AdminAccountID:          channelID,
-		AdminAccountName:        channelName,
+		AdminAccountID:          adminTargetID,
+		AdminAccountName:        adminTargetName,
 		OwnGroupIDs:             req.OwnGroupIDs,
 		GroupType:               groupType,
 		CreatedAt:               time.Now().Format(time.RFC3339),
 	}, nil
+}
+
+func (s *Service) createAdminTargetForNewAPIUpstream(adminSession upstream.Session, req RealConnectRequest, upstreamSite *upstream.Site, groupType, groupName, tokenKey, tokenID string) (string, string, error) {
+	switch adminSession.Platform {
+	case upstream.PlatformSub2API:
+		ownGroupIDInts, err := stringsToInts(req.OwnGroupIDs)
+		if err != nil {
+			log.Printf("[real-connect] new-api 自有分组 ID 转换失败 err=%v", err)
+			return "", "", requestError(ErrorRequest)
+		}
+		typePrefix := groupTypePrefix(groupType)
+		accountName := fmt.Sprintf("%s-【%s】-%s", typePrefix, upstreamSite.Name, groupName)
+		payload := buildAccountPayload(groupType, upstreamSite.BaseURL, tokenKey, ownGroupIDInts, accountName)
+		accountID, err := s.platformService.CreateSub2APIAdminAccount(adminSession, payload)
+		if err != nil {
+			log.Printf("[real-connect] new-api 创建 sub2api admin 账号失败 token_id=%s err=%v", tokenID, err)
+			return "", "", err
+		}
+		log.Printf("[real-connect] new-api sub2api admin 账号创建成功 account_id=%s name=%s", accountID, accountName)
+		return accountID, accountName, nil
+
+	case upstream.PlatformNewAPI:
+		// 优先使用前端传入的 channelType（new-api 渠道类型 ID），否则按 groupType 字符串映射。
+		channelType := req.ChannelType
+		if channelType <= 0 {
+			channelType = groupTypeToNewAPIChannelType(groupType)
+		}
+		channelTypeName := newAPIChannelTypeName(channelType)
+		channelName := fmt.Sprintf("%s-【%s】-%s", channelTypeName, upstreamSite.Name, groupName)
+		channelID, err := s.platformService.CreateNewAPIChannel(adminSession, channelName, upstreamSite.BaseURL, tokenKey, channelType, req.OwnGroupIDs)
+		if err != nil {
+			log.Printf("[real-connect] new-api 创建 channel 失败 token_id=%s err=%v", tokenID, err)
+			return "", "", err
+		}
+		log.Printf("[real-connect] new-api channel 创建成功 channel_id=%s name=%s", channelID, channelName)
+		return channelID, channelName, nil
+
+	default:
+		return "", "", requestError(ErrorRequest)
+	}
 }
 
 // groupTypeToNewAPIChannelType 将分组平台类型映射为 new-api channel type 数字（回退用）。
@@ -599,7 +630,7 @@ func (s *Service) ListRealConnections(ctx context.Context, userID string) ([]Rea
 
 // RealDisconnect 取消真实对接：根据 mode 决定是仅删除记录还是同时清理远端资源。
 // mode == "unlink"：仅删除 real_connections 记录（所有平台通用）。
-// mode == "full"：按平台分支删除远端资源（sub2api 删 admin 账号+上游 key，new-api 删 channel+token），再删除记录。
+// mode == "full"：按 admin 站点平台删除转发目标，再按上游站点平台删除 key/token，最后删除记录。
 func (s *Service) RealDisconnect(ctx context.Context, userID string, req RealDisconnectRequest) error {
 	if strings.TrimSpace(req.ConnectionID) == "" || (req.Mode != "unlink" && req.Mode != "full") {
 		return requestError(ErrorRequest)
@@ -632,41 +663,11 @@ func (s *Service) RealDisconnect(ctx context.Context, userID string, req RealDis
 		}
 		upstreamSession := *upstreamSite.Session
 
-		switch upstreamSession.Platform {
-		case upstream.PlatformNewAPI:
-			// new-api：先删 admin channel，再删上游 token
-			if conn.AdminAccountID != "" {
-				log.Printf("[real-disconnect] new-api 开始删除 channel channel_id=%s", conn.AdminAccountID)
-				if err := s.platformService.DeleteNewAPIChannel(state.Session, conn.AdminAccountID); err != nil {
-					log.Printf("[real-disconnect] new-api 删除 channel 失败 channel_id=%s err=%v", conn.AdminAccountID, err)
-					return err
-				}
-				log.Printf("[real-disconnect] new-api channel 已删除 channel_id=%s", conn.AdminAccountID)
-			}
-			if conn.UpstreamKeyID != "" {
-				log.Printf("[real-disconnect] new-api 开始删除 token token_id=%s", conn.UpstreamKeyID)
-				if err := s.platformService.DeleteNewAPIToken(upstreamSession, conn.UpstreamKeyID); err != nil {
-					log.Printf("[real-disconnect] new-api 删除 token 失败 token_id=%s err=%v", conn.UpstreamKeyID, err)
-					return err
-				}
-				log.Printf("[real-disconnect] new-api token 已删除 token_id=%s", conn.UpstreamKeyID)
-			}
-
-		default:
-			// sub2api：先删 admin 账号，再删上游 key（保持原有逻辑）
-			log.Printf("[real-disconnect] 开始删除 admin 账号 account_id=%s", conn.AdminAccountID)
-			if err := s.platformService.DeleteSub2APIAdminAccount(state.Session, conn.AdminAccountID); err != nil {
-				log.Printf("[real-disconnect] 删除 admin 账号失败 account_id=%s err=%v", conn.AdminAccountID, err)
-				return err
-			}
-			log.Printf("[real-disconnect] admin 账号已删除 account_id=%s", conn.AdminAccountID)
-
-			log.Printf("[real-disconnect] 开始删除上游 key key_id=%s", conn.UpstreamKeyID)
-			if err := s.platformService.DeleteSub2APIKey(upstreamSession, conn.UpstreamKeyID); err != nil {
-				log.Printf("[real-disconnect] 删除上游 key 失败 key_id=%s err=%v", conn.UpstreamKeyID, err)
-				return err
-			}
-			log.Printf("[real-disconnect] 上游 key 已删除 key_id=%s", conn.UpstreamKeyID)
+		if err := s.deleteAdminRealConnectTarget(state.Session, conn.AdminAccountID); err != nil {
+			return err
+		}
+		if err := s.deleteUpstreamRealConnectKey(upstreamSession, conn.UpstreamKeyID); err != nil {
+			return err
 		}
 	}
 
@@ -677,6 +678,56 @@ func (s *Service) RealDisconnect(ctx context.Context, userID string, req RealDis
 	s.removeUpstreamMapping(ctx, userID, adminAccountID, conn.UpstreamSiteID, conn.UpstreamGroupName)
 
 	log.Printf("[real-disconnect] 取消对接完成 conn_id=%s mode=%s", req.ConnectionID, req.Mode)
+	return nil
+}
+
+func (s *Service) deleteAdminRealConnectTarget(adminSession upstream.Session, adminTargetID string) error {
+	if strings.TrimSpace(adminTargetID) == "" {
+		return nil
+	}
+	switch adminSession.Platform {
+	case upstream.PlatformNewAPI:
+		log.Printf("[real-disconnect] new-api 开始删除 channel channel_id=%s", adminTargetID)
+		if err := s.platformService.DeleteNewAPIChannel(adminSession, adminTargetID); err != nil {
+			log.Printf("[real-disconnect] new-api 删除 channel 失败 channel_id=%s err=%v", adminTargetID, err)
+			return err
+		}
+		log.Printf("[real-disconnect] new-api channel 已删除 channel_id=%s", adminTargetID)
+	case upstream.PlatformSub2API:
+		log.Printf("[real-disconnect] sub2api 开始删除 admin 账号 account_id=%s", adminTargetID)
+		if err := s.platformService.DeleteSub2APIAdminAccount(adminSession, adminTargetID); err != nil {
+			log.Printf("[real-disconnect] sub2api 删除 admin 账号失败 account_id=%s err=%v", adminTargetID, err)
+			return err
+		}
+		log.Printf("[real-disconnect] sub2api admin 账号已删除 account_id=%s", adminTargetID)
+	default:
+		return requestError(ErrorRequest)
+	}
+	return nil
+}
+
+func (s *Service) deleteUpstreamRealConnectKey(upstreamSession upstream.Session, upstreamKeyID string) error {
+	if strings.TrimSpace(upstreamKeyID) == "" {
+		return nil
+	}
+	switch upstreamSession.Platform {
+	case upstream.PlatformNewAPI:
+		log.Printf("[real-disconnect] new-api 开始删除 token token_id=%s", upstreamKeyID)
+		if err := s.platformService.DeleteNewAPIToken(upstreamSession, upstreamKeyID); err != nil {
+			log.Printf("[real-disconnect] new-api 删除 token 失败 token_id=%s err=%v", upstreamKeyID, err)
+			return err
+		}
+		log.Printf("[real-disconnect] new-api token 已删除 token_id=%s", upstreamKeyID)
+	case upstream.PlatformSub2API:
+		log.Printf("[real-disconnect] sub2api 开始删除上游 key key_id=%s", upstreamKeyID)
+		if err := s.platformService.DeleteSub2APIKey(upstreamSession, upstreamKeyID); err != nil {
+			log.Printf("[real-disconnect] sub2api 删除上游 key 失败 key_id=%s err=%v", upstreamKeyID, err)
+			return err
+		}
+		log.Printf("[real-disconnect] sub2api 上游 key 已删除 key_id=%s", upstreamKeyID)
+	default:
+		return requestError(ErrorRequest)
+	}
 	return nil
 }
 
