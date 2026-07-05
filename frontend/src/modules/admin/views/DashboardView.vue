@@ -1,11 +1,10 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref, watch, type Component } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { Landmark, Layers, Loader2, Lock, LogOut, PiggyBank, RefreshCw, ShieldCheck, ShoppingCart, TrendingUp, Wallet } from 'lucide-vue-next'
+import { Landmark, Layers, Loader2, Lock, PiggyBank, RefreshCw, ShieldCheck, ShoppingCart, TrendingUp, Wallet } from 'lucide-vue-next'
 import StatCard from '../components/dashboard/StatCard.vue'
 import MetricTrendCard from '../components/dashboard/MetricTrendCard.vue'
 import AdminLoginModal from '../components/dashboard/AdminLoginModal.vue'
-import AdminLogoutConfirm from '../components/dashboard/AdminLogoutConfirm.vue'
 import BalanceFilterModal from '../components/dashboard/BalanceFilterModal.vue'
 import GroupListModal from '../components/dashboard/GroupListModal.vue'
 import GroupUsageTodayModal from '../components/dashboard/GroupUsageTodayModal.vue'
@@ -18,6 +17,7 @@ import { useDashboardAdmin } from '../composables/useDashboardAdmin'
 import { getDashboardMetrics, getDashboardTrends } from '../api/dashboardAdmin'
 import { computeDelta, formatCny, formatDateTime } from '../utils/dashboard'
 import type { DashboardMetricKey, DashboardPeriod } from '../types/dashboard'
+import type { DashboardAdminPlatform, Sub2apiAuthMethod } from '../types/dashboardAdmin'
 
 const { t } = useI18n()
 const { metrics, loading: metricsLoading, error: metricsError, fetchMetrics, applyRawData } = useDashboardMetrics()
@@ -27,15 +27,24 @@ const {
   status: adminStatus,
   isModalOpen: adminModalOpen,
   isSubmitting: adminSubmitting,
+  isRefreshingCredentials: adminRefreshingCredentials,
   errorKey: adminErrorKey,
   checkStatus: checkAdminStatus,
   submitLogin: submitAdminLogin,
-  logout: adminLogout,
+  updateAdminCredentials,
   openModal: openAdminModal,
   closeModal: closeAdminModal,
 } = useDashboardAdmin()
 
 const adminIdentity = computed(() => adminStatus.value.identity || adminStatus.value.baseUrl || '')
+
+// 登录弹窗预填：来自当前已知的非敏感状态字段，仅在“更新凭证”校验失败自动弹窗时使用。
+const adminLoginInitialValue = computed(() => ({
+  platform: (adminStatus.value.platform as DashboardAdminPlatform) || 'sub2api',
+  siteUrl: adminStatus.value.baseUrl || '',
+  authMethod: (adminStatus.value.authMethod as Sub2apiAuthMethod) || 'password',
+  email: adminStatus.value.identity || '',
+}))
 
 const balanceFilterOpen = ref(false)
 const openBalanceFilter = () => { balanceFilterOpen.value = true }
@@ -160,19 +169,6 @@ const adminExpiry = computed(
   () => formatDateTime(adminStatus.value.expiresAt) ?? t('admin.dashboard.adminAuth.timeUnknown'),
 )
 
-// 退出 admin 账户的二次确认：点击退出先弹确认框，确认后才真正登出。
-const logoutConfirmOpen = ref(false)
-const requestLogout = () => {
-  logoutConfirmOpen.value = true
-}
-const cancelLogout = () => {
-  logoutConfirmOpen.value = false
-}
-const confirmLogout = async () => {
-  logoutConfirmOpen.value = false
-  await adminLogout()
-}
-
 onMounted(() => {
   void loadAllData()
 })
@@ -257,11 +253,12 @@ const charts = computed(() =>
       </div>
       <button
         type="button"
-        class="inline-flex items-center gap-1.5 rounded-lg border border-border/60 px-3 py-1.5 text-sm font-medium text-muted-foreground transition-colors hover:border-red-400/40 hover:text-red-500 dark:hover:text-red-400"
-        @click="requestLogout"
+        class="inline-flex items-center gap-1.5 rounded-lg border border-border/60 px-3 py-1.5 text-sm font-medium text-muted-foreground transition-colors hover:border-primary/40 hover:text-primary disabled:cursor-not-allowed disabled:opacity-60"
+        :disabled="adminRefreshingCredentials"
+        @click="updateAdminCredentials"
       >
-        <LogOut class="h-4 w-4" />
-        {{ t('admin.dashboard.adminAuth.logout') }}
+        <RefreshCw class="h-4 w-4" :class="{ 'animate-spin': adminRefreshingCredentials }" />
+        {{ adminRefreshingCredentials ? t('admin.dashboard.adminAuth.updatingCredentials') : t('admin.dashboard.adminAuth.updateCredentials') }}
       </button>
     </div>
     <div
@@ -397,20 +394,14 @@ const charts = computed(() =>
       </button>
     </div>
 
-    <!-- admin 登录弹窗：未登录时进入仪表盘自动打开 -->
+    <!-- admin 登录弹窗：未登录时进入仪表盘自动打开；更新凭证校验失败时也会自动打开并预填非敏感字段 -->
     <AdminLoginModal
       :open="adminModalOpen"
       :submitting="adminSubmitting"
       :error-key="adminErrorKey"
+      :initial-value="adminLoginInitialValue"
       @submit="submitAdminLogin"
       @close="closeAdminModal"
-    />
-
-    <!-- 退出 admin 账户二次确认弹窗 -->
-    <AdminLogoutConfirm
-      :open="logoutConfirmOpen"
-      @confirm="confirmLogout"
-      @cancel="cancelLogout"
     />
 
     <!-- 站点用户余额筛选配置弹窗 -->

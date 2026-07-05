@@ -364,6 +364,8 @@ export default {
         login: 'Sign in admin account',
         expiresAt: 'Expires',
         timeUnknown: 'Unknown',
+        updateCredentials: 'Update Admin Credentials',
+        updatingCredentials: 'Updating...',
         logoutConfirm: {
           title: 'Sign out current admin?',
           description: 'After signing out you must sign in and pass admin verification again to view dashboard data.',
@@ -411,7 +413,8 @@ export default {
           adminOnly: 'This account is not admin or verification failed. Check the credentials and retry.',
           network: 'Network or CORS request failed. Check the site URL.',
           platformUnsupported: 'Unsupported platform. Please choose Sub2API or New-API.',
-          unknown: 'An unknown error occurred during admin login.'
+          unknown: 'An unknown error occurred during admin login.',
+          reloginRequired: 'Admin verification failed. Please sign in again.'
         }
       }
     },
@@ -486,6 +489,8 @@ export default {
         availableGroups: 'Available Groups',
         viewAvailableGroups: 'View Available Groups',
         closeGroupsModal: 'Close',
+        dedicatedMultiplierBadge: 'Dedicated Rate',
+        dedicatedMultiplierTooltip: 'This user has a sub2api dedicated rate override. Business calculations use the rate on the right.',
         unknownPlatform: 'Unknown Platform',
         isConnected: 'Integration',
         connected: 'Connected',

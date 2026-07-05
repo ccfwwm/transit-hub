@@ -364,6 +364,8 @@ export default {
         login: '登录 admin 账户',
         expiresAt: '过期',
         timeUnknown: '未知',
+        updateCredentials: '更新管理员凭证',
+        updatingCredentials: '正在更新...',
         logoutConfirm: {
           title: '退出当前 admin 账户？',
           description: '退出后需要重新登录并校验 admin 身份才能查看仪表盘数据。',
@@ -411,7 +413,8 @@ export default {
           adminOnly: '该账户不是 admin 或鉴权失败，请确认凭证后重试。',
           network: '网络或跨域请求失败，请检查站点地址。',
           platformUnsupported: '不支持的平台类型，请选择 Sub2API 或 New-API。',
-          unknown: 'admin 登录时发生未知错误。'
+          unknown: 'admin 登录时发生未知错误。',
+          reloginRequired: '管理员身份校验失败，请重新登录。'
         }
       }
     },
@@ -486,6 +489,8 @@ export default {
         availableGroups: '可用分组',
         viewAvailableGroups: '查看可用分组',
         closeGroupsModal: '关闭',
+        dedicatedMultiplierBadge: '专属倍率',
+        dedicatedMultiplierTooltip: '该用户命中了 sub2api 专属倍率，业务计算使用右侧倍率。',
         unknownPlatform: '未知类型',
         isConnected: '是否对接',
         connected: '已对接',
