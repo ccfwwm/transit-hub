@@ -1,0 +1,65 @@
+name: Deploy TransitHub
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-transit-hub
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure SSH
+        env:
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_PORT: ${{ secrets.DEPLOY_PORT }}
+          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+        run: |
+          set -euo pipefail
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "$DEPLOY_SSH_KEY" > ~/.ssh/transit-hub-deploy
+          chmod 600 ~/.ssh/transit-hub-deploy
+          ssh-keyscan -p "$DEPLOY_PORT" "$DEPLOY_HOST" >> ~/.ssh/known_hosts
+
+      - name: Deploy on server
+        env:
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_PORT: ${{ secrets.DEPLOY_PORT }}
+          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+          DEPLOY_PATH: ${{ secrets.DEPLOY_PATH }}
+          REPOSITORY: ${{ github.repository }}
+          BRANCH: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          ssh -i ~/.ssh/transit-hub-deploy -p "$DEPLOY_PORT" "$DEPLOY_USER@$DEPLOY_HOST" \
+            "DEPLOY_PATH='$DEPLOY_PATH' REPOSITORY='$REPOSITORY' BRANCH='$BRANCH' bash -s" <<'REMOTE'
+          set -euo pipefail
+          REPO_URL="https://github.com/${REPOSITORY}.git"
+
+          if [ ! -d "$DEPLOY_PATH/.git" ]; then
+            mkdir -p "$DEPLOY_PATH"
+            git clone --branch "$BRANCH" "$REPO_URL" "$DEPLOY_PATH"
+          else
+            cd "$DEPLOY_PATH"
+            git remote set-url origin "$REPO_URL"
+            git fetch --prune origin "$BRANCH"
+            git reset --hard "origin/$BRANCH"
+          fi
+
+          cd "$DEPLOY_PATH"
+          test -f .env.production
+          docker compose --env-file .env.production -p transit-hub -f deploy/docker-compose.subcheck.yml config >/tmp/transit-hub-compose-config.yml
+          docker compose --env-file .env.production -p transit-hub -f deploy/docker-compose.subcheck.yml up -d --build
+          curl -fsS http://127.0.0.1:10621/api/health
+          curl -fsS https://subcheck.aicodeme.cn/api/health
+          REMOTE
