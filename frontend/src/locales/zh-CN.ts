@@ -197,6 +197,44 @@ export default {
         inDays: '{value} 天后',
         daysAgo: '{value} 天前'
       },
+      rateRule: {
+        title: '倍率调度规则',
+        subtitle: '上游实际倍率低于我的分组倍率才允许调度；等于或高于时自动停用，并可按低倍率优先写入优先级。',
+        enabled: '已启用',
+        disabled: '已停用',
+        priorityOn: '自动优先级',
+        allowed: '可调用',
+        blocked: '倍率停用',
+        dispatchChanges: '启/停变更',
+        priorityChanges: '优先级变更',
+        preview: '预览影响',
+        apply: '立即应用',
+        configure: '统一设置',
+        saveAndApply: '保存并应用',
+        configureTitle: '统一设置倍率调度规则',
+        configureDescription: '规则会根据每个已对接渠道的上游实际倍率和命中的自有分组倍率，自动决定是否允许调度。',
+        lastApplied: '上次应用 {time}：开启 {enabled}，停用 {disabled}，优先级 {priority}',
+        upstreamRate: '上游实际倍率',
+        ownRate: '分组倍率',
+        accountRate: '账号倍率',
+        priority: '优先级',
+        status: {
+          allowed: '倍率可用',
+          blocked: '倍率停用',
+          missing: '缺少倍率',
+          skipped: '已保护'
+        },
+        form: {
+          enabled: '启用倍率门控',
+          enabledHelp: '启用后，立即应用或检测后自动应用会接管分组调度开关。',
+          autoApplyOnCheck: '检测成功后自动应用',
+          autoApplyOnCheckHelp: '每次渠道检测恢复正常后，重新按倍率判断是否开启。',
+          updatePriority: '自动写入优先级',
+          updatePriorityHelp: '可调用渠道按上游实际倍率从低到高写入 1、2、3。',
+          stopWhenMissingRate: '缺少倍率时停用',
+          stopWhenMissingRateHelp: '拿不到上游或自有分组倍率时保守停用，避免误调用。'
+        }
+      },
       bulk: {
         selected: '已选 {count} 个',
         run: '检测选中',

@@ -197,6 +197,44 @@ export default {
         inDays: 'in {value}d',
         daysAgo: '{value}d ago'
       },
+      rateRule: {
+        title: 'Rate Dispatch Rule',
+        subtitle: 'Dispatch only when upstream effective rate is lower than the own-group rate; equal or higher rates are paused, and cheaper channels can get higher priority.',
+        enabled: 'Enabled',
+        disabled: 'Disabled',
+        priorityOn: 'Auto priority',
+        allowed: 'Allowed',
+        blocked: 'Rate paused',
+        dispatchChanges: 'On/off changes',
+        priorityChanges: 'Priority changes',
+        preview: 'Preview',
+        apply: 'Apply now',
+        configure: 'Configure',
+        saveAndApply: 'Save and apply',
+        configureTitle: 'Configure rate dispatch rule',
+        configureDescription: 'The rule compares each connected channel against the own-group multiplier it serves, then decides whether dispatch is allowed.',
+        lastApplied: 'Last applied {time}: enabled {enabled}, disabled {disabled}, priority {priority}',
+        upstreamRate: 'Upstream rate',
+        ownRate: 'Own rate',
+        accountRate: 'Account rate',
+        priority: 'Priority',
+        status: {
+          allowed: 'Rate OK',
+          blocked: 'Rate paused',
+          missing: 'Missing rate',
+          skipped: 'Protected'
+        },
+        form: {
+          enabled: 'Enable rate gate',
+          enabledHelp: 'When enabled, apply actions and successful checks can control group dispatch.',
+          autoApplyOnCheck: 'Apply after successful checks',
+          autoApplyOnCheckHelp: 'Re-evaluate dispatch when a channel check recovers.',
+          updatePriority: 'Write priorities automatically',
+          updatePriorityHelp: 'Allowed channels are prioritized from lowest effective rate upward.',
+          stopWhenMissingRate: 'Pause when rate is missing',
+          stopWhenMissingRateHelp: 'Use a conservative pause when upstream or own-group rate cannot be read.'
+        }
+      },
       bulk: {
         selected: '{count} selected',
         run: 'Check selected',

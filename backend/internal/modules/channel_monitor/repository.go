@@ -2,6 +2,7 @@ package channel_monitor
 
 import (
 	"context"
+	"encoding/json"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -78,9 +79,49 @@ func (r *Repository) EnsureSchema(ctx context.Context) error {
 	`); err != nil {
 		return err
 	}
-	_, err := r.db.Exec(ctx, `
+	if _, err := r.db.Exec(ctx, `
 		CREATE INDEX IF NOT EXISTS idx_channel_monitor_results_rule_created
 		ON channel_monitor_results (rule_id, created_at DESC)
+	`); err != nil {
+		return err
+	}
+	if _, err := r.db.Exec(ctx, `
+		CREATE TABLE IF NOT EXISTS channel_monitor_rate_rules (
+			user_id text NOT NULL,
+			admin_account_id text NOT NULL,
+			enabled boolean NOT NULL DEFAULT false,
+			auto_apply_on_check boolean NOT NULL DEFAULT true,
+			update_priority boolean NOT NULL DEFAULT true,
+			stop_when_missing_rate boolean NOT NULL DEFAULT true,
+			last_applied_at timestamptz NULL,
+			updated_at timestamptz NOT NULL DEFAULT now(),
+			PRIMARY KEY (user_id, admin_account_id)
+		)
+	`); err != nil {
+		return err
+	}
+	if _, err := r.db.Exec(ctx, `
+		CREATE TABLE IF NOT EXISTS channel_monitor_rate_results (
+			id text PRIMARY KEY,
+			user_id text NOT NULL,
+			admin_account_id text NOT NULL,
+			action text NOT NULL DEFAULT '',
+			success boolean NOT NULL,
+			message text NOT NULL DEFAULT '',
+			total integer NOT NULL DEFAULT 0,
+			enabled_count integer NOT NULL DEFAULT 0,
+			disabled_count integer NOT NULL DEFAULT 0,
+			priority_updated integer NOT NULL DEFAULT 0,
+			skipped_count integer NOT NULL DEFAULT 0,
+			rows_json jsonb NOT NULL DEFAULT '[]'::jsonb,
+			created_at timestamptz NOT NULL DEFAULT now()
+		)
+	`); err != nil {
+		return err
+	}
+	_, err := r.db.Exec(ctx, `
+		CREATE INDEX IF NOT EXISTS idx_channel_monitor_rate_results_workspace_created
+		ON channel_monitor_rate_results (user_id, admin_account_id, created_at DESC)
 	`)
 	return err
 }
@@ -226,6 +267,91 @@ func (r *Repository) ListDueRules(ctx context.Context, limit int) ([]Rule, error
 		return nil, err
 	}
 	return scanRules(rows)
+}
+
+func (r *Repository) GetRateRule(ctx context.Context, userID, adminAccountID string) (*RateRule, error) {
+	rows, err := r.db.Query(ctx, `
+		SELECT user_id, admin_account_id, enabled, auto_apply_on_check, update_priority,
+			stop_when_missing_rate, last_applied_at, updated_at
+		FROM channel_monitor_rate_rules
+		WHERE user_id = $1 AND admin_account_id = $2
+	`, userID, adminAccountID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	if !rows.Next() {
+		return nil, rows.Err()
+	}
+	var rule RateRule
+	if err := rows.Scan(&rule.UserID, &rule.AdminAccountID, &rule.Enabled, &rule.AutoApplyOnCheck,
+		&rule.UpdatePriority, &rule.StopWhenMissingRate, &rule.LastAppliedAt, &rule.UpdatedAt); err != nil {
+		return nil, err
+	}
+	return &rule, rows.Err()
+}
+
+func (r *Repository) SaveRateRule(ctx context.Context, rule RateRule) error {
+	_, err := r.db.Exec(ctx, `
+		INSERT INTO channel_monitor_rate_rules (
+			user_id, admin_account_id, enabled, auto_apply_on_check, update_priority,
+			stop_when_missing_rate, last_applied_at, updated_at
+		)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, now())
+		ON CONFLICT (user_id, admin_account_id) DO UPDATE SET
+			enabled = EXCLUDED.enabled,
+			auto_apply_on_check = EXCLUDED.auto_apply_on_check,
+			update_priority = EXCLUDED.update_priority,
+			stop_when_missing_rate = EXCLUDED.stop_when_missing_rate,
+			last_applied_at = EXCLUDED.last_applied_at,
+			updated_at = now()
+	`, rule.UserID, rule.AdminAccountID, rule.Enabled, rule.AutoApplyOnCheck, rule.UpdatePriority, rule.StopWhenMissingRate, rule.LastAppliedAt)
+	return err
+}
+
+func (r *Repository) AddRateApplyResult(ctx context.Context, result RateApplyResult) error {
+	rowsJSON, err := json.Marshal(result.Rows)
+	if err != nil {
+		return err
+	}
+	_, err = r.db.Exec(ctx, `
+		INSERT INTO channel_monitor_rate_results (
+			id, user_id, admin_account_id, action, success, message, total, enabled_count,
+			disabled_count, priority_updated, skipped_count, rows_json, created_at
+		)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+	`, result.ID, result.UserID, result.AdminAccountID, result.Action, result.Success, result.Message,
+		result.Total, result.EnabledCount, result.DisabledCount, result.PriorityUpdated, result.SkippedCount, string(rowsJSON), result.CreatedAt)
+	return err
+}
+
+func (r *Repository) GetLastRateApplyResult(ctx context.Context, userID, adminAccountID string) (*RateApplyResult, error) {
+	rows, err := r.db.Query(ctx, `
+		SELECT id, user_id, admin_account_id, action, success, message, total, enabled_count,
+			disabled_count, priority_updated, skipped_count, rows_json, created_at
+		FROM channel_monitor_rate_results
+		WHERE user_id = $1 AND admin_account_id = $2
+		ORDER BY created_at DESC
+		LIMIT 1
+	`, userID, adminAccountID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	if !rows.Next() {
+		return nil, rows.Err()
+	}
+	var result RateApplyResult
+	var rowsJSON []byte
+	if err := rows.Scan(&result.ID, &result.UserID, &result.AdminAccountID, &result.Action, &result.Success,
+		&result.Message, &result.Total, &result.EnabledCount, &result.DisabledCount, &result.PriorityUpdated,
+		&result.SkippedCount, &rowsJSON, &result.CreatedAt); err != nil {
+		return nil, err
+	}
+	if len(rowsJSON) > 0 {
+		_ = json.Unmarshal(rowsJSON, &result.Rows)
+	}
+	return &result, rows.Err()
 }
 
 func scanRules(rows pgx.Rows) ([]Rule, error) {

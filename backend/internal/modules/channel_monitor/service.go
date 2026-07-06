@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"log"
+	"math"
 	"sort"
 	"strings"
 	"time"
@@ -24,6 +25,10 @@ type Store interface {
 	AddResult(ctx context.Context, result Result) error
 	ListRecentResults(ctx context.Context, ruleID string, limit int) ([]Result, error)
 	ListDueRules(ctx context.Context, limit int) ([]Rule, error)
+	GetRateRule(ctx context.Context, userID, adminAccountID string) (*RateRule, error)
+	SaveRateRule(ctx context.Context, rule RateRule) error
+	AddRateApplyResult(ctx context.Context, result RateApplyResult) error
+	GetLastRateApplyResult(ctx context.Context, userID, adminAccountID string) (*RateApplyResult, error)
 }
 
 type ConnectionStore interface {
@@ -43,6 +48,7 @@ type MonitorPlatform interface {
 	TestSub2APIAdminAccount(session upstream.Session, accountID string, options AccountTestOptions) (AccountTestResult, error)
 	SetSub2APIAdminAccountSchedulable(session upstream.Session, accountID string, schedulable bool) error
 	ListSub2APIAdminAccounts(session upstream.Session) ([]AdminAccountStatus, error)
+	UpdateSub2APIAdminAccountPriority(session upstream.Session, accountID string, priority int) error
 }
 
 type AdminAccountResolver interface {
@@ -96,12 +102,29 @@ func (s *Service) Summary(ctx context.Context, userID string) (SummaryResponse, 
 	}
 	state, _ := s.states.Get(ctx, userID, adminAccountID)
 	accountsByID := s.adminAccountsByID(state)
+	rateRule, err := s.ensureRateRule(ctx, userID, adminAccountID)
+	if err != nil {
+		return SummaryResponse{}, err
+	}
+	rateRows, rateSummary := s.buildRatePlan(ctx, connections, rulesByConnection, state, accountsByID, rateRule)
+	rateRowsByConnection := make(map[string]RatePlanRow, len(rateRows))
+	for _, row := range rateRows {
+		rateRowsByConnection[row.ConnectionID] = row
+	}
+	lastRateResult, _ := s.store.GetLastRateApplyResult(ctx, userID, adminAccountID)
 
-	response := SummaryResponse{Channels: []ChannelStatus{}, Groups: []GroupSummary{}}
+	response := SummaryResponse{
+		Channels: []ChannelStatus{},
+		Groups:   []GroupSummary{},
+		RateRule: RateRuleView{Rule: rateRule, Summary: rateSummary, Rows: rateRows, LastResult: lastRateResult},
+	}
 	groupMap := map[string]*GroupSummary{}
 	for _, conn := range connections {
 		rule := rulesByConnection[conn.ID]
 		row := s.channelStatus(ctx, conn, rule, state, accountsByID)
+		if rateRow, ok := rateRowsByConnection[conn.ID]; ok {
+			applyRatePlanToChannel(&row, rateRow)
+		}
 		response.Channels = append(response.Channels, row)
 		applyStats(&response.Stats, row)
 		ownGroups := row.OwnGroups
@@ -363,6 +386,148 @@ func (s *Service) BulkRunRules(ctx context.Context, userID string, req BulkRunRe
 	return results, nil
 }
 
+func (s *Service) RateRuleView(ctx context.Context, userID string) (RateRuleView, error) {
+	adminAccountID, err := s.currentAdminAccountID(ctx, userID)
+	if err != nil {
+		return RateRuleView{}, err
+	}
+	rule, err := s.ensureRateRule(ctx, userID, adminAccountID)
+	if err != nil {
+		return RateRuleView{}, err
+	}
+	connections, rulesByConnection, state, accountsByID, err := s.rateRuleContext(ctx, userID, adminAccountID)
+	if err != nil {
+		return RateRuleView{}, err
+	}
+	rows, summary := s.buildRatePlan(ctx, connections, rulesByConnection, state, accountsByID, rule)
+	last, _ := s.store.GetLastRateApplyResult(ctx, userID, adminAccountID)
+	return RateRuleView{Rule: rule, Summary: summary, Rows: rows, LastResult: last}, nil
+}
+
+func (s *Service) UpdateRateRule(ctx context.Context, userID string, req UpdateRateRuleRequest) (RateRule, error) {
+	adminAccountID, err := s.currentAdminAccountID(ctx, userID)
+	if err != nil {
+		return RateRule{}, err
+	}
+	rule, err := s.ensureRateRule(ctx, userID, adminAccountID)
+	if err != nil {
+		return RateRule{}, err
+	}
+	if req.Enabled != nil {
+		rule.Enabled = *req.Enabled
+	}
+	if req.AutoApplyOnCheck != nil {
+		rule.AutoApplyOnCheck = *req.AutoApplyOnCheck
+	}
+	if req.UpdatePriority != nil {
+		rule.UpdatePriority = *req.UpdatePriority
+	}
+	if req.StopWhenMissingRate != nil {
+		rule.StopWhenMissingRate = *req.StopWhenMissingRate
+	}
+	rule.UpdatedAt = time.Now()
+	if err := s.store.SaveRateRule(ctx, rule); err != nil {
+		return RateRule{}, err
+	}
+	return rule, nil
+}
+
+func (s *Service) PreviewRateRule(ctx context.Context, userID string) (RateRuleView, error) {
+	return s.RateRuleView(ctx, userID)
+}
+
+func (s *Service) ApplyRateRule(ctx context.Context, userID string, action string) (RateApplyResult, error) {
+	adminAccountID, err := s.currentAdminAccountID(ctx, userID)
+	if err != nil {
+		return RateApplyResult{}, err
+	}
+	return s.applyRateRuleForWorkspace(ctx, userID, adminAccountID, action)
+}
+
+func (s *Service) applyRateRuleForWorkspace(ctx context.Context, userID, adminAccountID, action string) (RateApplyResult, error) {
+	rule, err := s.ensureRateRule(ctx, userID, adminAccountID)
+	if err != nil {
+		return RateApplyResult{}, err
+	}
+	connections, rulesByConnection, state, accountsByID, err := s.rateRuleContext(ctx, userID, adminAccountID)
+	if err != nil {
+		return RateApplyResult{}, err
+	}
+	rows, _ := s.buildRatePlan(ctx, connections, rulesByConnection, state, accountsByID, rule)
+	now := time.Now()
+	result := RateApplyResult{
+		ID:             newResultID(),
+		UserID:         userID,
+		AdminAccountID: adminAccountID,
+		Action:         strings.TrimSpace(action),
+		Success:        true,
+		Message:        "倍率规则已应用",
+		Total:          len(rows),
+		Rows:           rows,
+		CreatedAt:      now,
+	}
+	if result.Action == "" {
+		result.Action = "manual"
+	}
+	if !rule.Enabled {
+		result.Message = "倍率规则未启用"
+		for _, row := range rows {
+			if row.RateGateStatus == RateGateSkipped {
+				result.SkippedCount++
+			}
+		}
+		_ = s.store.AddRateApplyResult(ctx, result)
+		return result, nil
+	}
+	if state == nil || state.Session.Platform != upstream.PlatformSub2API {
+		return RateApplyResult{}, requestError("admin.channelMonitor.errors.unsupported")
+	}
+
+	for _, row := range rows {
+		if !row.Supported || row.RateGateStatus == RateGateSkipped {
+			result.SkippedCount++
+			continue
+		}
+		target := row.SuggestedSchedulable
+		current := row.CurrentSchedulable
+		if current == nil || *current != target {
+			if err := s.platform.SetSub2APIAdminAccountSchedulable(state.Session, row.AdminAccountID, target); err != nil {
+				result.Success = false
+				result.Message = err.Error()
+				continue
+			}
+			if target {
+				result.EnabledCount++
+			} else {
+				result.DisabledCount++
+			}
+			if monitorRule, ok := rulesByConnection[row.ConnectionID]; ok {
+				monitorRule.DesiredSchedulable = schedulablePtr(target)
+				monitorRule.LastMessage = row.RateGateMessage
+				monitorRule.UpdatedAt = now
+				_ = s.store.UpdateRule(ctx, monitorRule)
+			}
+		}
+		if rule.UpdatePriority && target && row.SuggestedPriority != nil {
+			if row.CurrentPriority == nil || *row.CurrentPriority != *row.SuggestedPriority {
+				if err := s.platform.UpdateSub2APIAdminAccountPriority(state.Session, row.AdminAccountID, *row.SuggestedPriority); err != nil {
+					result.Success = false
+					result.Message = err.Error()
+					continue
+				}
+				result.PriorityUpdated++
+			}
+		}
+	}
+	rule.LastAppliedAt = &now
+	rule.UpdatedAt = now
+	_ = s.store.SaveRateRule(ctx, rule)
+	if err := s.store.AddRateApplyResult(ctx, result); err != nil {
+		return RateApplyResult{}, err
+	}
+	return result, nil
+}
+
 func (s *Service) RunDue(ctx context.Context, limit int) int {
 	if limit <= 0 {
 		limit = 20
@@ -523,7 +688,21 @@ func (s *Service) runRule(ctx context.Context, rule Rule, reason string) (Result
 	if message == "" {
 		message = "账号测试通过"
 	}
-	return finish(StatusHealthy, true, message, &latency, testResult.Model)
+	result, err = finish(StatusHealthy, true, message, &latency, testResult.Model)
+	if err == nil {
+		s.applyRateRuleAfterCheck(ctx, rule.UserID, rule.AdminAccountID)
+	}
+	return result, err
+}
+
+func (s *Service) applyRateRuleAfterCheck(ctx context.Context, userID, adminAccountID string) {
+	rule, err := s.ensureRateRule(ctx, userID, adminAccountID)
+	if err != nil || !rule.Enabled || !rule.AutoApplyOnCheck {
+		return
+	}
+	if _, err := s.applyRateRuleForWorkspace(ctx, userID, adminAccountID, "check"); err != nil {
+		log.Printf("[channel-monitor] apply rate rule after check failed user_id=%s admin_account_id=%s err=%v", userID, adminAccountID, err)
+	}
 }
 
 func (s *Service) requireRule(ctx context.Context, id, userID, adminAccountID string) (Rule, error) {
@@ -621,6 +800,290 @@ func (s *Service) adminAccountsByID(state *my_sites.State) map[string]AdminAccou
 		accountsByID[id] = account
 	}
 	return accountsByID
+}
+
+func (s *Service) ensureRateRule(ctx context.Context, userID, adminAccountID string) (RateRule, error) {
+	rule, err := s.store.GetRateRule(ctx, userID, adminAccountID)
+	if err != nil {
+		return RateRule{}, err
+	}
+	if rule != nil {
+		return *rule, nil
+	}
+	defaultRule := DefaultRateRule(userID, adminAccountID)
+	if err := s.store.SaveRateRule(ctx, defaultRule); err != nil {
+		return RateRule{}, err
+	}
+	return defaultRule, nil
+}
+
+func (s *Service) rateRuleContext(ctx context.Context, userID, adminAccountID string) ([]my_sites.RealConnection, map[string]Rule, *my_sites.State, map[string]AdminAccountStatus, error) {
+	connections, err := s.conns.ListRealConnections(ctx, userID, adminAccountID)
+	if err != nil {
+		return nil, nil, nil, nil, err
+	}
+	rulesByConnection := make(map[string]Rule, len(connections))
+	for _, conn := range connections {
+		rule, err := s.store.EnsureRuleForConnection(ctx, userID, adminAccountID, conn)
+		if err != nil {
+			return nil, nil, nil, nil, err
+		}
+		rulesByConnection[conn.ID] = rule
+	}
+	state, _ := s.states.Get(ctx, userID, adminAccountID)
+	return connections, rulesByConnection, state, s.adminAccountsByID(state), nil
+}
+
+func (s *Service) buildRatePlan(ctx context.Context, connections []my_sites.RealConnection, rulesByConnection map[string]Rule, state *my_sites.State, accountsByID map[string]AdminAccountStatus, rateRule RateRule) ([]RatePlanRow, RateApplySummary) {
+	rows := make([]RatePlanRow, 0, len(connections))
+	for _, conn := range connections {
+		monitorRule := rulesByConnection[conn.ID]
+		account := accountsByID[strings.TrimSpace(conn.AdminAccountID)]
+		row := s.buildRatePlanRow(ctx, conn, monitorRule, state, account, rateRule)
+		rows = append(rows, row)
+	}
+	assignRecommendedPriorities(rows)
+	summary := summarizeRatePlan(rows)
+	return rows, summary
+}
+
+func (s *Service) buildRatePlanRow(ctx context.Context, conn my_sites.RealConnection, rule Rule, state *my_sites.State, account AdminAccountStatus, rateRule RateRule) RatePlanRow {
+	ownGroups := ownGroupsForConnection(state, conn)
+	row := RatePlanRow{
+		RuleID:                rule.ID,
+		ConnectionID:          conn.ID,
+		AdminAccountID:        conn.AdminAccountID,
+		AdminAccountName:      firstNonBlank(conn.AdminAccountName, account.Name),
+		UpstreamGroupName:     conn.UpstreamGroupName,
+		OwnGroups:             ownGroups,
+		AccountRateMultiplier: account.RateMultiplier,
+		AccountPriority:       account.Priority,
+		CurrentPriority:       account.Priority,
+		CurrentSchedulable:    account.Schedulable,
+		Supported:             state != nil && state.Session.Platform == upstream.PlatformSub2API && strings.TrimSpace(conn.AdminAccountID) != "",
+		SuggestedSchedulable:  true,
+	}
+	if rule.DesiredSchedulable != nil {
+		row.CurrentSchedulable = rule.DesiredSchedulable
+	}
+	site, err := s.upstreams.GetSite(ctx, conn.UpstreamSiteID)
+	if err == nil && site != nil {
+		row.SiteName = site.Name
+		row.UpstreamMultiplier = upstreamGroupMultiplier(site, conn)
+		row.UpstreamEffectiveMultiplier = effectiveMultiplier(row.UpstreamMultiplier, site.RechargeRate)
+	}
+	if row.UpstreamEffectiveMultiplier == nil && account.RateMultiplier != nil {
+		row.UpstreamEffectiveMultiplier = account.RateMultiplier
+	}
+	if row.UpstreamMultiplier == nil && account.RateMultiplier != nil {
+		row.UpstreamMultiplier = account.RateMultiplier
+	}
+	if !row.Supported {
+		row.RateGateStatus = RateGateSkipped
+		row.SuggestedSchedulable = false
+		row.RateGateMessage = "当前平台暂不支持倍率规则"
+		return row
+	}
+	if shouldProtectPausedRule(rule) {
+		row.RateGateStatus = RateGateSkipped
+		row.SuggestedSchedulable = false
+		row.RateGateMessage = "当前渠道处于故障、余额或手动停用状态，倍率规则不自动开启"
+		return row
+	}
+	if len(ownGroups) == 0 {
+		row.RateGateStatus = RateGateMissing
+		row.SuggestedSchedulable = !rateRule.StopWhenMissingRate
+		row.RateGateMessage = "缺少自有分组"
+		return row
+	}
+	if row.UpstreamEffectiveMultiplier == nil {
+		row.RateGateStatus = RateGateMissing
+		row.SuggestedSchedulable = !rateRule.StopWhenMissingRate
+		row.RateGateMessage = "缺少上游实际倍率"
+		return row
+	}
+
+	ownRateByName := ownGroupRateByName(state)
+	blocked := false
+	missingOwnRate := false
+	var minOwn *float64
+	for _, groupName := range ownGroups {
+		ownRate := ownRateByName[groupName]
+		decision := RateGroupDecision{GroupName: groupName, OwnMultiplier: ownRate}
+		if ownRate == nil {
+			missingOwnRate = true
+			decision.Message = "缺少自有分组倍率"
+		} else {
+			if minOwn == nil || *ownRate < *minOwn {
+				value := *ownRate
+				minOwn = &value
+			}
+			decision.Allowed = *row.UpstreamEffectiveMultiplier < *ownRate
+			if decision.Allowed {
+				decision.Message = "上游倍率低于自有分组倍率"
+			} else {
+				blocked = true
+				decision.Message = "上游倍率大于或等于自有分组倍率"
+			}
+		}
+		row.GroupDecisions = append(row.GroupDecisions, decision)
+	}
+	row.OwnGroupMultiplier = minOwn
+	if blocked {
+		row.RateGateStatus = RateGateBlocked
+		row.SuggestedSchedulable = false
+		row.RateGateMessage = "上游实际倍率大于或等于命中分组倍率，建议停用"
+		return row
+	}
+	if missingOwnRate {
+		row.RateGateStatus = RateGateMissing
+		row.SuggestedSchedulable = !rateRule.StopWhenMissingRate
+		row.RateGateMessage = "缺少部分自有分组倍率"
+		return row
+	}
+	row.RateGateStatus = RateGateAllowed
+	row.SuggestedSchedulable = true
+	row.RateGateMessage = "上游实际倍率低于自有分组倍率，允许调用"
+	return row
+}
+
+func assignRecommendedPriorities(rows []RatePlanRow) {
+	sort.SliceStable(rows, func(i, j int) bool {
+		left, right := rows[i], rows[j]
+		leftOK := left.RateGateStatus == RateGateAllowed && left.UpstreamEffectiveMultiplier != nil
+		rightOK := right.RateGateStatus == RateGateAllowed && right.UpstreamEffectiveMultiplier != nil
+		if leftOK != rightOK {
+			return leftOK
+		}
+		if leftOK && rightOK && !ratesEqual(*left.UpstreamEffectiveMultiplier, *right.UpstreamEffectiveMultiplier) {
+			return *left.UpstreamEffectiveMultiplier < *right.UpstreamEffectiveMultiplier
+		}
+		return left.AdminAccountName < right.AdminAccountName
+	})
+	priority := 0
+	var lastRate *float64
+	for i := range rows {
+		if rows[i].RateGateStatus != RateGateAllowed || rows[i].UpstreamEffectiveMultiplier == nil {
+			continue
+		}
+		if lastRate == nil || !ratesEqual(*rows[i].UpstreamEffectiveMultiplier, *lastRate) {
+			priority++
+			value := *rows[i].UpstreamEffectiveMultiplier
+			lastRate = &value
+		}
+		priorityValue := priority
+		rows[i].SuggestedPriority = &priorityValue
+	}
+}
+
+func summarizeRatePlan(rows []RatePlanRow) RateApplySummary {
+	var summary RateApplySummary
+	for _, row := range rows {
+		summary.Total++
+		switch row.RateGateStatus {
+		case RateGateAllowed:
+			summary.Allowed++
+		case RateGateBlocked:
+			summary.Blocked++
+		case RateGateMissing:
+			summary.Missing++
+		case RateGateSkipped:
+			summary.Skipped++
+		}
+		if row.CurrentSchedulable == nil || *row.CurrentSchedulable != row.SuggestedSchedulable {
+			if row.SuggestedSchedulable {
+				summary.WouldEnable++
+			} else {
+				summary.WouldDisable++
+			}
+		}
+		if row.SuggestedPriority != nil && (row.CurrentPriority == nil || *row.CurrentPriority != *row.SuggestedPriority) {
+			summary.PriorityChanges++
+		}
+	}
+	return summary
+}
+
+func applyRatePlanToChannel(channel *ChannelStatus, row RatePlanRow) {
+	channel.AccountRateMultiplier = row.AccountRateMultiplier
+	channel.AccountPriority = row.AccountPriority
+	channel.UpstreamMultiplier = row.UpstreamMultiplier
+	channel.UpstreamEffectiveMultiplier = row.UpstreamEffectiveMultiplier
+	channel.OwnGroupMultiplier = row.OwnGroupMultiplier
+	channel.RecommendedPriority = row.SuggestedPriority
+	channel.RateGateStatus = row.RateGateStatus
+	channel.RateGateMessage = row.RateGateMessage
+}
+
+func ownGroupRateByName(state *my_sites.State) map[string]*float64 {
+	rates := map[string]*float64{}
+	if state == nil {
+		return rates
+	}
+	for _, group := range state.OwnGroups {
+		name := strings.TrimSpace(group.Name)
+		if name == "" {
+			continue
+		}
+		value := group.Multiplier
+		rates[name] = &value
+	}
+	return rates
+}
+
+func upstreamGroupMultiplier(site *upstream.Site, conn my_sites.RealConnection) *float64 {
+	if site == nil {
+		return nil
+	}
+	for _, group := range site.Metrics.Groups {
+		if strings.TrimSpace(group.ID) == strings.TrimSpace(conn.UpstreamGroupID) || strings.TrimSpace(group.Name) == strings.TrimSpace(conn.UpstreamGroupName) {
+			if group.Multiplier == nil {
+				return nil
+			}
+			value := *group.Multiplier
+			return &value
+		}
+	}
+	return nil
+}
+
+func effectiveMultiplier(multiplier *float64, rechargeRate float64) *float64 {
+	if multiplier == nil {
+		return nil
+	}
+	value := *multiplier
+	if rechargeRate > 0 {
+		value *= rechargeRate
+	}
+	if math.IsNaN(value) || math.IsInf(value, 0) {
+		return nil
+	}
+	return &value
+}
+
+func shouldProtectPausedRule(rule Rule) bool {
+	if rule.ManualPaused {
+		return true
+	}
+	switch rule.LastStatus {
+	case StatusFailed, StatusAutoPaused, StatusBalancePaused, StatusManualPaused, StatusUnsupported:
+		return true
+	default:
+		return false
+	}
+}
+
+func ratesEqual(left, right float64) bool {
+	return math.Abs(left-right) < 1e-9
+}
+
+func firstNonBlank(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return value
+		}
+	}
+	return ""
 }
 
 func convertedBalance(site *upstream.Site) *float64 {

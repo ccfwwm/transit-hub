@@ -1,7 +1,11 @@
 import type {
   BulkUpdateChannelMonitorRuleRequest,
+  ChannelMonitorRateApplyResult,
+  ChannelMonitorRateRule,
+  ChannelMonitorRateRuleView,
   ChannelMonitorResult,
   ChannelMonitorSummary,
+  UpdateChannelMonitorRateRuleRequest,
   UpdateChannelMonitorRuleRequest,
 } from '../types/channelMonitor'
 import {
@@ -98,3 +102,18 @@ export const bulkRunChannelMonitorRules = async (ruleIds: string[]): Promise<Cha
     method: 'POST',
     body: JSON.stringify({ ruleIds }),
   })
+
+export const getChannelMonitorRateRule = async (): Promise<ChannelMonitorRateRuleView> =>
+  requestJson<ChannelMonitorRateRuleView>('/channel-monitor/rate-rule')
+
+export const updateChannelMonitorRateRule = async (request: UpdateChannelMonitorRateRuleRequest): Promise<ChannelMonitorRateRule> =>
+  requestJson<ChannelMonitorRateRule>('/channel-monitor/rate-rule', {
+    method: 'PATCH',
+    body: JSON.stringify(request),
+  })
+
+export const previewChannelMonitorRateRule = async (): Promise<ChannelMonitorRateRuleView> =>
+  requestJson<ChannelMonitorRateRuleView>('/channel-monitor/rate-rule/preview', { method: 'POST' })
+
+export const applyChannelMonitorRateRule = async (): Promise<ChannelMonitorRateApplyResult> =>
+  requestJson<ChannelMonitorRateApplyResult>('/channel-monitor/rate-rule/apply', { method: 'POST' })

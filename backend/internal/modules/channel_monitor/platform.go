@@ -38,10 +38,16 @@ func (a PlatformAdapter) ListSub2APIAdminAccounts(session upstream.Session) ([]A
 	statuses := make([]AdminAccountStatus, 0, len(accounts))
 	for _, account := range accounts {
 		statuses = append(statuses, AdminAccountStatus{
-			ID:          account.ID,
-			Name:        account.Name,
-			Schedulable: account.Schedulable,
+			ID:             account.ID,
+			Name:           account.Name,
+			Schedulable:    account.Schedulable,
+			RateMultiplier: account.RateMultiplier,
+			Priority:       account.Priority,
 		})
 	}
 	return statuses, nil
+}
+
+func (a PlatformAdapter) UpdateSub2APIAdminAccountPriority(session upstream.Session, accountID string, priority int) error {
+	return a.platform.UpdateSub2APIAdminAccountPriority(session, accountID, priority)
 }

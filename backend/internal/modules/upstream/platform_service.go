@@ -1354,9 +1354,11 @@ func (s *PlatformService) ListSub2APIAdminAccounts(session Session) ([]Sub2APIAd
 			name = *value
 		}
 		accounts = append(accounts, Sub2APIAdminAccountStatus{
-			ID:          id,
-			Name:        name,
-			Schedulable: firstBool(record, []string{"schedulable", "is_schedulable", "isSchedulable"}),
+			ID:             id,
+			Name:           name,
+			Schedulable:    firstBool(record, []string{"schedulable", "is_schedulable", "isSchedulable"}),
+			RateMultiplier: firstNumber(record, []string{"rate_multiplier", "rateMultiplier", "multiplier", "rate"}),
+			Priority:       firstInt(record, []string{"priority"}),
 		})
 	}
 	return accounts, nil
@@ -1398,6 +1400,21 @@ func (s *PlatformService) SetSub2APIAdminAccountSchedulable(session Session, acc
 		Method:      http.MethodPost,
 		Body: map[string]any{
 			"schedulable": schedulable,
+		},
+	})
+	return err
+}
+
+func (s *PlatformService) UpdateSub2APIAdminAccountPriority(session Session, accountID string, priority int) error {
+	if session.Platform != PlatformSub2API || strings.TrimSpace(session.AccessToken) == "" {
+		return newRequestError(ErrorAuth, PlatformSub2API)
+	}
+	_, err := s.httpClient.requestJSON(session.BaseURL+"/api/v1/admin/accounts/"+accountID, requestOptions{
+		AccessToken: session.AccessToken,
+		TokenType:   session.TokenType,
+		Method:      http.MethodPut,
+		Body: map[string]any{
+			"priority": priority,
 		},
 	})
 	return err

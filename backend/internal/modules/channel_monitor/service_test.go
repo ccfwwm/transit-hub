@@ -350,9 +350,133 @@ func TestSummaryIncludesRemoteSchedulableAndRecentResults(t *testing.T) {
 	}
 }
 
+func TestApplyRateRuleDisablesChannelsAtOrAboveOwnGroupMultiplier(t *testing.T) {
+	ctx := context.Background()
+	repo := newFakeRepository()
+	service := newTestService(repo)
+	service.state().OwnGroups = []my_sites.GroupOption{{Name: "PLUS", Multiplier: 1.2}}
+	service.upstreams.site.Metrics.Groups = []upstream.GroupInfo{{ID: "g-upstream", Name: "GPT-4o", Multiplier: floatPtr(1.2)}}
+	service.platform.accounts = []AdminAccountStatus{{ID: "123", Name: "A-【site】-GPT-4o", Schedulable: boolPtr(true), Priority: intPtr(9)}}
+
+	rule, err := service.UpdateRateRule(ctx, "user-1", UpdateRateRuleRequest{
+		Enabled:          boolPtr(true),
+		AutoApplyOnCheck: boolPtr(true),
+		UpdatePriority:   boolPtr(true),
+	})
+	if err != nil {
+		t.Fatalf("UpdateRateRule returned error: %v", err)
+	}
+	if !rule.Enabled {
+		t.Fatalf("expected saved rate rule enabled, got %+v", rule)
+	}
+
+	result, err := service.ApplyRateRule(ctx, "user-1", "manual")
+	if err != nil {
+		t.Fatalf("ApplyRateRule returned error: %v", err)
+	}
+
+	if result.DisabledCount != 1 || result.EnabledCount != 0 {
+		t.Fatalf("expected one disabled channel, got %+v", result)
+	}
+	if got := service.platform.schedulableCalls; len(got) != 1 || got[0].AccountID != "123" || got[0].Schedulable {
+		t.Fatalf("expected one disable call for account 123, got %+v", got)
+	}
+	updated := repo.mustRule("conn-1")
+	if updated.DesiredSchedulable == nil || *updated.DesiredSchedulable {
+		t.Fatalf("expected desired schedulable false, got %+v", updated.DesiredSchedulable)
+	}
+	row := result.Rows[0]
+	if row.RateGateStatus != RateGateBlocked || row.OwnGroupMultiplier == nil || row.UpstreamEffectiveMultiplier == nil {
+		t.Fatalf("expected blocked row with multipliers, got %+v", row)
+	}
+}
+
+func TestApplyRateRuleEnablesCheapChannelsAndWritesPriority(t *testing.T) {
+	ctx := context.Background()
+	repo := newFakeRepository()
+	service := newTestService(repo)
+	service.state().OwnGroups = []my_sites.GroupOption{{Name: "PLUS", Multiplier: 1.2}, {Name: "PRO", Multiplier: 1.5}}
+	service.upstreams.site.Metrics.Groups = []upstream.GroupInfo{
+		{ID: "g-upstream", Name: "GPT-4o", Multiplier: floatPtr(0.7)},
+		{ID: "g-upstream-2", Name: "GPT-4.1", Multiplier: floatPtr(0.9)},
+	}
+	second := DefaultRule("user-1", "admin-1", "conn-2")
+	second.DesiredSchedulable = boolPtr(false)
+	repo.rules[second.ID] = second
+	service.conns.connections = append(service.conns.connections, my_sites.RealConnection{
+		ID:                "conn-2",
+		UpstreamSiteID:    "site-1",
+		UpstreamGroupID:   "g-upstream-2",
+		UpstreamGroupName: "GPT-4.1",
+		AdminAccountID:    "456",
+		AdminAccountName:  "A-【site】-GPT-4.1",
+		OwnGroupIDs:       []string{"2"},
+		GroupType:         "openai",
+	})
+	service.state().Mappings = []my_sites.GroupMapping{
+		{OwnGroup: "PLUS", UpstreamTargets: []my_sites.UpstreamGroupRef{{SiteID: "site-1", GroupName: "GPT-4o"}}},
+		{OwnGroup: "PRO", UpstreamTargets: []my_sites.UpstreamGroupRef{{SiteID: "site-1", GroupName: "GPT-4.1"}}},
+	}
+	service.platform.accounts = []AdminAccountStatus{
+		{ID: "123", Name: "A-【site】-GPT-4o", Schedulable: boolPtr(false), Priority: intPtr(9)},
+		{ID: "456", Name: "A-【site】-GPT-4.1", Schedulable: boolPtr(false), Priority: intPtr(9)},
+	}
+	if _, err := service.UpdateRateRule(ctx, "user-1", UpdateRateRuleRequest{Enabled: boolPtr(true), UpdatePriority: boolPtr(true)}); err != nil {
+		t.Fatalf("UpdateRateRule returned error: %v", err)
+	}
+
+	result, err := service.ApplyRateRule(ctx, "user-1", "manual")
+	if err != nil {
+		t.Fatalf("ApplyRateRule returned error: %v", err)
+	}
+
+	if result.EnabledCount != 2 || result.PriorityUpdated != 2 {
+		t.Fatalf("expected two enabled and prioritized channels, got %+v", result)
+	}
+	if got := service.platform.schedulableCalls; len(got) != 2 || !got[0].Schedulable || !got[1].Schedulable {
+		t.Fatalf("expected two enable calls, got %+v", got)
+	}
+	if got := service.platform.priorityCalls; len(got) != 2 || got[0].AccountID != "123" || got[0].Priority != 1 || got[1].AccountID != "456" || got[1].Priority != 2 {
+		t.Fatalf("expected priority updates by ascending multiplier, got %+v", got)
+	}
+}
+
+func TestRateRuleDoesNotReEnableBalancePausedChannel(t *testing.T) {
+	ctx := context.Background()
+	repo := newFakeRepository()
+	service := newTestService(repo)
+	service.state().OwnGroups = []my_sites.GroupOption{{Name: "PLUS", Multiplier: 1.2}}
+	service.upstreams.site.Metrics.Groups = []upstream.GroupInfo{{ID: "g-upstream", Name: "GPT-4o", Multiplier: floatPtr(0.5)}}
+	service.platform.accounts = []AdminAccountStatus{{ID: "123", Name: "A-【site】-GPT-4o", Schedulable: boolPtr(false), Priority: intPtr(9)}}
+	rule := repo.mustRule("conn-1")
+	rule.LastStatus = StatusBalancePaused
+	rule.DesiredSchedulable = boolPtr(false)
+	repo.rules[rule.ID] = rule
+	if _, err := service.UpdateRateRule(ctx, "user-1", UpdateRateRuleRequest{Enabled: boolPtr(true), UpdatePriority: boolPtr(true)}); err != nil {
+		t.Fatalf("UpdateRateRule returned error: %v", err)
+	}
+
+	result, err := service.ApplyRateRule(ctx, "user-1", "manual")
+	if err != nil {
+		t.Fatalf("ApplyRateRule returned error: %v", err)
+	}
+
+	if result.EnabledCount != 0 || result.SkippedCount != 1 {
+		t.Fatalf("expected balance-paused channel skipped, got %+v", result)
+	}
+	if len(service.platform.schedulableCalls) != 0 {
+		t.Fatalf("balance paused channel must not be re-enabled, got %+v", service.platform.schedulableCalls)
+	}
+	if result.Rows[0].RateGateStatus != RateGateSkipped {
+		t.Fatalf("expected skipped gate status, got %+v", result.Rows[0])
+	}
+}
+
 type fakeRepository struct {
-	rules   map[string]Rule
-	results []Result
+	rules       map[string]Rule
+	results     []Result
+	rateRule    *RateRule
+	rateResults []RateApplyResult
 }
 
 func newFakeRepository() *fakeRepository {
@@ -413,6 +537,28 @@ func (r *fakeRepository) ListRecentResults(context.Context, string, int) ([]Resu
 	return results, nil
 }
 func (r *fakeRepository) ListDueRules(context.Context, int) ([]Rule, error) { return nil, nil }
+func (r *fakeRepository) GetRateRule(context.Context, string, string) (*RateRule, error) {
+	if r.rateRule == nil {
+		return nil, nil
+	}
+	next := *r.rateRule
+	return &next, nil
+}
+func (r *fakeRepository) SaveRateRule(_ context.Context, rule RateRule) error {
+	r.rateRule = &rule
+	return nil
+}
+func (r *fakeRepository) AddRateApplyResult(_ context.Context, result RateApplyResult) error {
+	r.rateResults = append(r.rateResults, result)
+	return nil
+}
+func (r *fakeRepository) GetLastRateApplyResult(context.Context, string, string) (*RateApplyResult, error) {
+	if len(r.rateResults) == 0 {
+		return nil, nil
+	}
+	next := r.rateResults[len(r.rateResults)-1]
+	return &next, nil
+}
 
 type fakeConnections struct {
 	connections []my_sites.RealConnection
@@ -457,11 +603,17 @@ type fakeMonitorPlatform struct {
 	testErr          error
 	accounts         []AdminAccountStatus
 	schedulableCalls []schedulableCall
+	priorityCalls    []priorityCall
 }
 
 type schedulableCall struct {
 	AccountID   string
 	Schedulable bool
+}
+
+type priorityCall struct {
+	AccountID string
+	Priority  int
 }
 
 func (f *fakeMonitorPlatform) TestSub2APIAdminAccount(upstream.Session, string, AccountTestOptions) (AccountTestResult, error) {
@@ -478,6 +630,11 @@ func (f *fakeMonitorPlatform) SetSub2APIAdminAccountSchedulable(_ upstream.Sessi
 
 func (f *fakeMonitorPlatform) ListSub2APIAdminAccounts(upstream.Session) ([]AdminAccountStatus, error) {
 	return append([]AdminAccountStatus(nil), f.accounts...), nil
+}
+
+func (f *fakeMonitorPlatform) UpdateSub2APIAdminAccountPriority(_ upstream.Session, accountID string, priority int) error {
+	f.priorityCalls = append(f.priorityCalls, priorityCall{AccountID: accountID, Priority: priority})
+	return nil
 }
 
 type testService struct {
@@ -524,6 +681,11 @@ func newTestService(repo *fakeRepository) *testService {
 	conns := &fakeConnections{connections: []my_sites.RealConnection{conn}}
 	service := NewService(repo, conns, fakeStateStore{state: state}, upstreams, platform, fakeAccounts{})
 	return &testService{Service: service, platform: platform, upstreams: upstreams, conns: conns}
+}
+
+func (s *testService) state() *my_sites.State {
+	store := s.Service.states.(fakeStateStore)
+	return store.state
 }
 
 func boolPtr(value bool) *bool        { return &value }

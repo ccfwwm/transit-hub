@@ -272,9 +272,11 @@ type Sub2APIAccountTestResult struct {
 }
 
 type Sub2APIAdminAccountStatus struct {
-	ID          string
-	Name        string
-	Schedulable *bool
+	ID             string
+	Name           string
+	Schedulable    *bool
+	RateMultiplier *float64
+	Priority       *int
 }
 
 // BalanceBreakdownItem 是仪表盘「上游总余额」下钻明细中单个站点的余额展示数据。

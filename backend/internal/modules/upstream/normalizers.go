@@ -142,6 +142,15 @@ func firstNumber(value any, keys []string) *float64 {
 	return nil
 }
 
+func firstInt(value any, keys []string) *int {
+	number := firstNumber(value, keys)
+	if number == nil {
+		return nil
+	}
+	result := int(*number)
+	return &result
+}
+
 func groupID(value any) string {
 	if number := firstNumber(value, []string{"id", "group_id", "groupId"}); number != nil {
 		return strconv.FormatInt(int64(*number), 10)

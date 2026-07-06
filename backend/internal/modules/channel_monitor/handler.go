@@ -24,6 +24,10 @@ func RegisterRoutes(mux *http.ServeMux, service *Service) {
 	mux.HandleFunc("PATCH /api/channel-monitor/rules/bulk", handler.bulkUpdateRules)
 	mux.HandleFunc("POST /api/channel-monitor/rules/bulk/run", handler.bulkRunRules)
 	mux.HandleFunc("POST /api/channel-monitor/rules/bulk/schedulable", handler.bulkSetSchedulable)
+	mux.HandleFunc("GET /api/channel-monitor/rate-rule", handler.rateRule)
+	mux.HandleFunc("PATCH /api/channel-monitor/rate-rule", handler.updateRateRule)
+	mux.HandleFunc("POST /api/channel-monitor/rate-rule/preview", handler.previewRateRule)
+	mux.HandleFunc("POST /api/channel-monitor/rate-rule/apply", handler.applyRateRule)
 }
 
 func (h *Handler) summary(w http.ResponseWriter, r *http.Request) {
@@ -173,6 +177,67 @@ func (h *Handler) bulkSetSchedulable(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	httpjson.Write(w, http.StatusOK, map[string]bool{"success": true})
+}
+
+func (h *Handler) rateRule(w http.ResponseWriter, r *http.Request) {
+	userID, ok := authctx.UserID(r.Context())
+	if !ok {
+		httpjson.WriteError(w, http.StatusUnauthorized, "auth.errors.unauthorized")
+		return
+	}
+	response, err := h.service.RateRuleView(r.Context(), userID)
+	if err != nil {
+		writeMonitorError(w, err)
+		return
+	}
+	httpjson.Write(w, http.StatusOK, response)
+}
+
+func (h *Handler) updateRateRule(w http.ResponseWriter, r *http.Request) {
+	userID, ok := authctx.UserID(r.Context())
+	if !ok {
+		httpjson.WriteError(w, http.StatusUnauthorized, "auth.errors.unauthorized")
+		return
+	}
+	var req UpdateRateRuleRequest
+	if err := httpjson.Decode(r, &req); err != nil {
+		httpjson.WriteError(w, http.StatusBadRequest, "admin.channelMonitor.errors.request")
+		return
+	}
+	rule, err := h.service.UpdateRateRule(r.Context(), userID, req)
+	if err != nil {
+		writeMonitorError(w, err)
+		return
+	}
+	httpjson.Write(w, http.StatusOK, rule)
+}
+
+func (h *Handler) previewRateRule(w http.ResponseWriter, r *http.Request) {
+	userID, ok := authctx.UserID(r.Context())
+	if !ok {
+		httpjson.WriteError(w, http.StatusUnauthorized, "auth.errors.unauthorized")
+		return
+	}
+	response, err := h.service.PreviewRateRule(r.Context(), userID)
+	if err != nil {
+		writeMonitorError(w, err)
+		return
+	}
+	httpjson.Write(w, http.StatusOK, response)
+}
+
+func (h *Handler) applyRateRule(w http.ResponseWriter, r *http.Request) {
+	userID, ok := authctx.UserID(r.Context())
+	if !ok {
+		httpjson.WriteError(w, http.StatusUnauthorized, "auth.errors.unauthorized")
+		return
+	}
+	result, err := h.service.ApplyRateRule(r.Context(), userID, "manual")
+	if err != nil {
+		writeMonitorError(w, err)
+		return
+	}
+	httpjson.Write(w, http.StatusOK, result)
 }
 
 func writeMonitorError(w http.ResponseWriter, err error) {

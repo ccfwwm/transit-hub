@@ -18,6 +18,13 @@ const (
 	StatusUnsupported   = "unsupported"
 )
 
+const (
+	RateGateAllowed = "allowed"
+	RateGateBlocked = "blocked"
+	RateGateMissing = "missing"
+	RateGateSkipped = "skipped"
+)
+
 type Rule struct {
 	ID                   string     `json:"id"`
 	UserID               string     `json:"-"`
@@ -67,15 +74,18 @@ type AccountTestResult struct {
 }
 
 type AdminAccountStatus struct {
-	ID          string `json:"id"`
-	Name        string `json:"name"`
-	Schedulable *bool  `json:"schedulable"`
+	ID             string   `json:"id"`
+	Name           string   `json:"name"`
+	Schedulable    *bool    `json:"schedulable"`
+	RateMultiplier *float64 `json:"rateMultiplier"`
+	Priority       *int     `json:"priority"`
 }
 
 type SummaryResponse struct {
 	Stats    SummaryStats    `json:"stats"`
 	Groups   []GroupSummary  `json:"groups"`
 	Channels []ChannelStatus `json:"channels"`
+	RateRule RateRuleView    `json:"rateRule"`
 }
 
 type SummaryStats struct {
@@ -103,35 +113,43 @@ type GroupSummary struct {
 }
 
 type ChannelStatus struct {
-	RuleID               string     `json:"ruleId"`
-	ConnectionID         string     `json:"connectionId"`
-	Enabled              bool       `json:"enabled"`
-	Supported            bool       `json:"supported"`
-	ManualPaused         bool       `json:"manualPaused"`
-	Schedulable          *bool      `json:"schedulable"`
-	Status               string     `json:"status"`
-	SiteID               string     `json:"siteId"`
-	SiteName             string     `json:"siteName"`
-	SitePlatform         string     `json:"sitePlatform"`
-	UpstreamGroupID      string     `json:"upstreamGroupId"`
-	UpstreamGroupName    string     `json:"upstreamGroupName"`
-	GroupType            string     `json:"groupType"`
-	AdminAccountID       string     `json:"adminAccountId"`
-	AdminAccountName     string     `json:"adminAccountName"`
-	OwnGroups            []string   `json:"ownGroups"`
-	Balance              *float64   `json:"balance"`
-	CheckIntervalMinutes int        `json:"checkIntervalMinutes"`
-	FailureThreshold     int        `json:"failureThreshold"`
-	BalanceThreshold     float64    `json:"balanceThreshold"`
-	ConsecutiveFailures  int        `json:"consecutiveFailures"`
-	LastMessage          string     `json:"lastMessage"`
-	LastLatencyMS        *int       `json:"lastLatencyMs"`
-	LastCheckedAt        *time.Time `json:"lastCheckedAt"`
-	NextCheckAt          *time.Time `json:"nextCheckAt"`
-	RecentResults        []Result   `json:"recentResults"`
-	RecentTotal          int        `json:"recentTotal"`
-	RecentSuccess        int        `json:"recentSuccess"`
-	UptimePercent        float64    `json:"uptimePercent"`
+	RuleID                      string     `json:"ruleId"`
+	ConnectionID                string     `json:"connectionId"`
+	Enabled                     bool       `json:"enabled"`
+	Supported                   bool       `json:"supported"`
+	ManualPaused                bool       `json:"manualPaused"`
+	Schedulable                 *bool      `json:"schedulable"`
+	Status                      string     `json:"status"`
+	SiteID                      string     `json:"siteId"`
+	SiteName                    string     `json:"siteName"`
+	SitePlatform                string     `json:"sitePlatform"`
+	UpstreamGroupID             string     `json:"upstreamGroupId"`
+	UpstreamGroupName           string     `json:"upstreamGroupName"`
+	GroupType                   string     `json:"groupType"`
+	AdminAccountID              string     `json:"adminAccountId"`
+	AdminAccountName            string     `json:"adminAccountName"`
+	OwnGroups                   []string   `json:"ownGroups"`
+	Balance                     *float64   `json:"balance"`
+	AccountRateMultiplier       *float64   `json:"accountRateMultiplier"`
+	AccountPriority             *int       `json:"accountPriority"`
+	UpstreamMultiplier          *float64   `json:"upstreamMultiplier"`
+	UpstreamEffectiveMultiplier *float64   `json:"upstreamEffectiveMultiplier"`
+	OwnGroupMultiplier          *float64   `json:"ownGroupMultiplier"`
+	RecommendedPriority         *int       `json:"recommendedPriority"`
+	RateGateStatus              string     `json:"rateGateStatus"`
+	RateGateMessage             string     `json:"rateGateMessage"`
+	CheckIntervalMinutes        int        `json:"checkIntervalMinutes"`
+	FailureThreshold            int        `json:"failureThreshold"`
+	BalanceThreshold            float64    `json:"balanceThreshold"`
+	ConsecutiveFailures         int        `json:"consecutiveFailures"`
+	LastMessage                 string     `json:"lastMessage"`
+	LastLatencyMS               *int       `json:"lastLatencyMs"`
+	LastCheckedAt               *time.Time `json:"lastCheckedAt"`
+	NextCheckAt                 *time.Time `json:"nextCheckAt"`
+	RecentResults               []Result   `json:"recentResults"`
+	RecentTotal                 int        `json:"recentTotal"`
+	RecentSuccess               int        `json:"recentSuccess"`
+	UptimePercent               float64    `json:"uptimePercent"`
 }
 
 type UpdateRuleRequest struct {
@@ -160,6 +178,101 @@ type BulkSchedulableRequest struct {
 
 type BulkRunRequest struct {
 	RuleIDs []string `json:"ruleIds"`
+}
+
+type RateRule struct {
+	UserID              string     `json:"-"`
+	AdminAccountID      string     `json:"-"`
+	Enabled             bool       `json:"enabled"`
+	AutoApplyOnCheck    bool       `json:"autoApplyOnCheck"`
+	UpdatePriority      bool       `json:"updatePriority"`
+	StopWhenMissingRate bool       `json:"stopWhenMissingRate"`
+	LastAppliedAt       *time.Time `json:"lastAppliedAt"`
+	UpdatedAt           time.Time  `json:"updatedAt"`
+}
+
+type RateRuleView struct {
+	Rule       RateRule         `json:"rule"`
+	Summary    RateApplySummary `json:"summary"`
+	Rows       []RatePlanRow    `json:"rows"`
+	LastResult *RateApplyResult `json:"lastResult"`
+}
+
+type UpdateRateRuleRequest struct {
+	Enabled             *bool `json:"enabled"`
+	AutoApplyOnCheck    *bool `json:"autoApplyOnCheck"`
+	UpdatePriority      *bool `json:"updatePriority"`
+	StopWhenMissingRate *bool `json:"stopWhenMissingRate"`
+}
+
+type RateApplySummary struct {
+	Total           int `json:"total"`
+	Allowed         int `json:"allowed"`
+	Blocked         int `json:"blocked"`
+	Missing         int `json:"missing"`
+	Skipped         int `json:"skipped"`
+	WouldEnable     int `json:"wouldEnable"`
+	WouldDisable    int `json:"wouldDisable"`
+	PriorityChanges int `json:"priorityChanges"`
+}
+
+type RatePlanRow struct {
+	RuleID                      string              `json:"ruleId"`
+	ConnectionID                string              `json:"connectionId"`
+	AdminAccountID              string              `json:"adminAccountId"`
+	AdminAccountName            string              `json:"adminAccountName"`
+	SiteName                    string              `json:"siteName"`
+	UpstreamGroupName           string              `json:"upstreamGroupName"`
+	OwnGroups                   []string            `json:"ownGroups"`
+	GroupDecisions              []RateGroupDecision `json:"groupDecisions"`
+	AccountRateMultiplier       *float64            `json:"accountRateMultiplier"`
+	AccountPriority             *int                `json:"accountPriority"`
+	UpstreamMultiplier          *float64            `json:"upstreamMultiplier"`
+	UpstreamEffectiveMultiplier *float64            `json:"upstreamEffectiveMultiplier"`
+	OwnGroupMultiplier          *float64            `json:"ownGroupMultiplier"`
+	CurrentSchedulable          *bool               `json:"currentSchedulable"`
+	SuggestedSchedulable        bool                `json:"suggestedSchedulable"`
+	CurrentPriority             *int                `json:"currentPriority"`
+	SuggestedPriority           *int                `json:"suggestedPriority"`
+	RateGateStatus              string              `json:"rateGateStatus"`
+	RateGateMessage             string              `json:"rateGateMessage"`
+	Supported                   bool                `json:"supported"`
+}
+
+type RateGroupDecision struct {
+	GroupName     string   `json:"groupName"`
+	OwnMultiplier *float64 `json:"ownMultiplier"`
+	Allowed       bool     `json:"allowed"`
+	Message       string   `json:"message"`
+}
+
+type RateApplyResult struct {
+	ID              string        `json:"id"`
+	UserID          string        `json:"-"`
+	AdminAccountID  string        `json:"-"`
+	Action          string        `json:"action"`
+	Success         bool          `json:"success"`
+	Message         string        `json:"message"`
+	Total           int           `json:"total"`
+	EnabledCount    int           `json:"enabledCount"`
+	DisabledCount   int           `json:"disabledCount"`
+	PriorityUpdated int           `json:"priorityUpdated"`
+	SkippedCount    int           `json:"skippedCount"`
+	Rows            []RatePlanRow `json:"rows"`
+	CreatedAt       time.Time     `json:"createdAt"`
+}
+
+func DefaultRateRule(userID, adminAccountID string) RateRule {
+	now := time.Now()
+	return RateRule{
+		UserID:              userID,
+		AdminAccountID:      adminAccountID,
+		Enabled:             false,
+		AutoApplyOnCheck:    true,
+		UpdatePriority:      true,
+		StopWhenMissingRate: true,
+		UpdatedAt:           now,
+	}
 }
 
 func DefaultRule(userID, adminAccountID, connectionID string) Rule {

@@ -23,15 +23,18 @@ import {
 } from 'lucide-vue-next'
 import { Button } from '@/components/ui/button'
 import {
+  applyChannelMonitorRateRule,
   bulkRunChannelMonitorRules,
   bulkSetChannelMonitorRulesSchedulable,
   bulkUpdateChannelMonitorRules,
   getChannelMonitorSummary,
+  previewChannelMonitorRateRule,
   runChannelMonitorRule,
   setChannelMonitorRuleSchedulable,
+  updateChannelMonitorRateRule,
   updateChannelMonitorRule,
 } from '../api/channelMonitor'
-import type { ChannelMonitorChannel, ChannelMonitorResult, ChannelMonitorStatus, UpdateChannelMonitorRuleRequest } from '../types/channelMonitor'
+import type { ChannelMonitorChannel, ChannelMonitorRateRule, ChannelMonitorResult, ChannelMonitorStatus, RateGateStatus, UpdateChannelMonitorRuleRequest } from '../types/channelMonitor'
 
 type StatusFilter = 'all' | 'monitor_paused' | 'dispatch_paused' | ChannelMonitorStatus
 
@@ -44,14 +47,30 @@ const searchQuery = ref('')
 const statusFilter = ref<StatusFilter>('all')
 const selectedGroup = ref('all')
 const selectedRuleIds = ref<string[]>([])
+const defaultRateRule = (): ChannelMonitorRateRule => ({
+  enabled: false,
+  autoApplyOnCheck: true,
+  updatePriority: true,
+  stopWhenMissingRate: true,
+  lastAppliedAt: null,
+  updatedAt: '',
+})
 const summary = ref({
   stats: { total: 0, available: 0, failed: 0, balancePaused: 0, manualPaused: 0, monitorPaused: 0, dispatchPaused: 0, unsupported: 0 },
   groups: [],
   channels: [],
+  rateRule: {
+    rule: defaultRateRule(),
+    summary: { total: 0, allowed: 0, blocked: 0, missing: 0, skipped: 0, wouldEnable: 0, wouldDisable: 0, priorityChanges: 0 },
+    rows: [],
+    lastResult: null,
+  },
 } as Awaited<ReturnType<typeof getChannelMonitorSummary>>)
 const editingChannel = ref<ChannelMonitorChannel | null>(null)
 const isBulkEditorOpen = ref(false)
+const isRateRuleEditorOpen = ref(false)
 const editForm = ref({ enabled: true, checkIntervalMinutes: 10, failureThreshold: 3, balanceThreshold: 1 })
+const rateRuleForm = ref({ enabled: false, autoApplyOnCheck: true, updatePriority: true, stopWhenMissingRate: true })
 
 const loadSummary = async () => {
   isLoading.value = true
@@ -171,6 +190,26 @@ const formatLatency = (value: number | null): string => {
   return `${value} ms`
 }
 
+const formatMultiplier = (value: number | null): string => {
+  if (value === null || !Number.isFinite(value)) return t('admin.channelMonitor.common.unknown')
+  return `${value.toFixed(4).replace(/0+$/, '').replace(/\.$/, '')}x`
+}
+
+const rateGateLabel = (status: RateGateStatus): string => t(`admin.channelMonitor.rateRule.status.${status || 'missing'}`)
+
+const rateGateClass = (status: RateGateStatus): string => {
+  switch (status) {
+    case 'allowed':
+      return 'border-emerald-500/20 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300'
+    case 'blocked':
+      return 'border-red-500/20 bg-red-500/10 text-red-700 dark:text-red-300'
+    case 'missing':
+      return 'border-amber-500/20 bg-amber-500/10 text-amber-700 dark:text-amber-300'
+    default:
+      return 'border-border/60 bg-surface-elevated text-muted-foreground'
+  }
+}
+
 const runAction = async (action: () => Promise<unknown>, clearSelection = false) => {
   isActionLoading.value = true
   errorKey.value = ''
@@ -230,6 +269,29 @@ const closeEditor = () => {
   isBulkEditorOpen.value = false
 }
 
+const openRateRuleEditor = () => {
+  const rule = summary.value.rateRule.rule
+  rateRuleForm.value = {
+    enabled: rule.enabled,
+    autoApplyOnCheck: rule.autoApplyOnCheck,
+    updatePriority: rule.updatePriority,
+    stopWhenMissingRate: rule.stopWhenMissingRate,
+  }
+  isRateRuleEditorOpen.value = true
+}
+
+const closeRateRuleEditor = () => {
+  isRateRuleEditorOpen.value = false
+}
+
+const saveRateRule = async (applyAfterSave = false) => {
+  await runAction(async () => {
+    await updateChannelMonitorRateRule({ ...rateRuleForm.value })
+    if (applyAfterSave) await applyChannelMonitorRateRule()
+  })
+  closeRateRuleEditor()
+}
+
 const saveEditor = async () => {
   const payload: UpdateChannelMonitorRuleRequest = {
     enabled: editForm.value.enabled,
@@ -253,6 +315,15 @@ const setSelectedSchedulable = (schedulable: boolean) =>
 
 const runSelected = () =>
   runAction(() => bulkRunChannelMonitorRules(selectedRuleIds.value), false)
+
+const previewRateRule = () =>
+  runAction(async () => {
+    const view = await previewChannelMonitorRateRule()
+    summary.value.rateRule = view
+  })
+
+const applyRateRule = () =>
+  runAction(() => applyChannelMonitorRateRule())
 
 const toggleChannelMonitoring = (channel: ChannelMonitorChannel) =>
   runAction(() => updateChannelMonitorRule(channel.ruleId, { enabled: !channel.enabled }))
@@ -381,6 +452,58 @@ const dispatchButtonClass = (channel: ChannelMonitorChannel): string => (
       {{ t(errorKey) }}
     </div>
 
+    <section class="rounded-lg border border-border/50 bg-surface px-5 py-4">
+      <div class="flex flex-col gap-4 xl:flex-row xl:items-center xl:justify-between">
+        <div>
+          <div class="flex flex-wrap items-center gap-2">
+            <h2 class="text-sm font-semibold text-foreground">{{ t('admin.channelMonitor.rateRule.title') }}</h2>
+            <span :class="['rounded-md border px-2 py-0.5 text-[11px] font-medium', summary.rateRule.rule.enabled ? 'border-emerald-500/20 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300' : 'border-zinc-500/20 bg-zinc-500/10 text-zinc-600']">
+              {{ summary.rateRule.rule.enabled ? t('admin.channelMonitor.rateRule.enabled') : t('admin.channelMonitor.rateRule.disabled') }}
+            </span>
+            <span v-if="summary.rateRule.rule.updatePriority" class="rounded-md border border-blue-500/20 bg-blue-500/10 px-2 py-0.5 text-[11px] font-medium text-blue-700 dark:text-blue-300">
+              {{ t('admin.channelMonitor.rateRule.priorityOn') }}
+            </span>
+          </div>
+          <p class="mt-1 text-xs text-muted-foreground">{{ t('admin.channelMonitor.rateRule.subtitle') }}</p>
+        </div>
+        <div class="grid grid-cols-2 gap-2 text-xs sm:grid-cols-4 xl:min-w-[420px]">
+          <div class="rounded-md bg-surface-elevated px-3 py-2">
+            <div class="text-muted-foreground">{{ t('admin.channelMonitor.rateRule.allowed') }}</div>
+            <div class="mt-1 font-mono text-foreground">{{ summary.rateRule.summary.allowed }}</div>
+          </div>
+          <div class="rounded-md bg-surface-elevated px-3 py-2">
+            <div class="text-muted-foreground">{{ t('admin.channelMonitor.rateRule.blocked') }}</div>
+            <div class="mt-1 font-mono text-red-600 dark:text-red-300">{{ summary.rateRule.summary.blocked }}</div>
+          </div>
+          <div class="rounded-md bg-surface-elevated px-3 py-2">
+            <div class="text-muted-foreground">{{ t('admin.channelMonitor.rateRule.dispatchChanges') }}</div>
+            <div class="mt-1 font-mono text-foreground">{{ summary.rateRule.summary.wouldEnable }}/{{ summary.rateRule.summary.wouldDisable }}</div>
+          </div>
+          <div class="rounded-md bg-surface-elevated px-3 py-2">
+            <div class="text-muted-foreground">{{ t('admin.channelMonitor.rateRule.priorityChanges') }}</div>
+            <div class="mt-1 font-mono text-foreground">{{ summary.rateRule.summary.priorityChanges }}</div>
+          </div>
+        </div>
+        <div class="flex flex-wrap justify-end gap-2">
+          <Button variant="secondary" size="sm" class="gap-1.5" :disabled="isActionLoading" @click="previewRateRule">
+            <RefreshCw class="h-3.5 w-3.5" />
+            {{ t('admin.channelMonitor.rateRule.preview') }}
+          </Button>
+          <Button variant="secondary" size="sm" class="gap-1.5 border-emerald-500/30 bg-emerald-500/10 text-emerald-700 hover:bg-emerald-500/15 dark:text-emerald-300" :disabled="isActionLoading || !summary.rateRule.rule.enabled" @click="applyRateRule">
+            <Play class="h-3.5 w-3.5" />
+            {{ t('admin.channelMonitor.rateRule.apply') }}
+          </Button>
+          <Button variant="secondary" size="sm" class="gap-1.5" :disabled="isActionLoading" @click="openRateRuleEditor">
+            <Settings2 class="h-3.5 w-3.5" />
+            {{ t('admin.channelMonitor.rateRule.configure') }}
+          </Button>
+        </div>
+      </div>
+      <div v-if="summary.rateRule.lastResult" class="mt-3 text-xs text-muted-foreground">
+        {{ t('admin.channelMonitor.rateRule.lastApplied', { time: formatDateTime(summary.rateRule.lastResult.createdAt), enabled: summary.rateRule.lastResult.enabledCount, disabled: summary.rateRule.lastResult.disabledCount, priority: summary.rateRule.lastResult.priorityUpdated }) }}
+      </div>
+    </section>
+
     <div class="grid min-h-0 flex-1 grid-cols-1 gap-5 xl:grid-cols-[minmax(320px,420px)_1fr]">
       <section class="min-h-0 overflow-hidden rounded-lg border border-border/50 bg-surface">
         <div class="border-b border-border/50 px-5 py-4">
@@ -464,6 +587,30 @@ const dispatchButtonClass = (channel: ChannelMonitorChannel): string => (
                     <span :class="['rounded-md border px-2 py-0.5 text-[11px] font-medium', channel.schedulable === false ? 'border-zinc-500/20 bg-zinc-500/10 text-zinc-600' : 'border-emerald-500/20 bg-emerald-500/10 text-emerald-600']">
                       {{ channel.schedulable === false ? t('admin.channelMonitor.flags.dispatchOff') : t('admin.channelMonitor.flags.dispatchOn') }}
                     </span>
+                    <span :class="['rounded-md border px-2 py-0.5 text-[11px] font-medium', rateGateClass(channel.rateGateStatus)]">
+                      {{ rateGateLabel(channel.rateGateStatus) }}
+                    </span>
+                  </div>
+                  <div class="mt-2 grid max-w-[560px] grid-cols-2 gap-2 text-xs text-muted-foreground sm:grid-cols-4">
+                    <div>
+                      <div>{{ t('admin.channelMonitor.rateRule.upstreamRate') }}</div>
+                      <div class="font-mono text-foreground">{{ formatMultiplier(channel.upstreamEffectiveMultiplier) }}</div>
+                    </div>
+                    <div>
+                      <div>{{ t('admin.channelMonitor.rateRule.ownRate') }}</div>
+                      <div class="font-mono text-foreground">{{ formatMultiplier(channel.ownGroupMultiplier) }}</div>
+                    </div>
+                    <div>
+                      <div>{{ t('admin.channelMonitor.rateRule.priority') }}</div>
+                      <div class="font-mono text-foreground">{{ channel.accountPriority ?? '-' }} → {{ channel.recommendedPriority ?? '-' }}</div>
+                    </div>
+                    <div>
+                      <div>{{ t('admin.channelMonitor.rateRule.accountRate') }}</div>
+                      <div class="font-mono text-foreground">{{ formatMultiplier(channel.accountRateMultiplier) }}</div>
+                    </div>
+                  </div>
+                  <div v-if="channel.rateGateMessage" class="mt-1 max-w-[520px] truncate text-xs" :class="channel.rateGateStatus === 'blocked' ? 'text-red-600 dark:text-red-300' : 'text-muted-foreground'" :title="channel.rateGateMessage">
+                    {{ channel.rateGateMessage }}
                   </div>
                   <div class="mt-3 max-w-[560px] rounded-lg border border-border/50 bg-background/60 p-3 shadow-sm">
                     <div class="flex items-center justify-between gap-3 text-xs font-medium text-muted-foreground">
@@ -584,6 +731,54 @@ const dispatchButtonClass = (channel: ChannelMonitorChannel): string => (
           <Button class="gap-2" :disabled="isActionLoading" @click="saveEditor">
             <Loader2 v-if="isActionLoading" class="h-4 w-4 animate-spin" />
             {{ t('admin.channelMonitor.actions.save') }}
+          </Button>
+        </div>
+      </div>
+    </div>
+
+    <div v-if="isRateRuleEditorOpen" class="fixed inset-0 z-50 flex items-center justify-center bg-background/80 p-4 backdrop-blur-sm">
+      <div class="w-full max-w-lg rounded-xl border border-border/50 bg-card p-6 shadow-xl">
+        <h2 class="text-lg font-semibold text-foreground">{{ t('admin.channelMonitor.rateRule.configureTitle') }}</h2>
+        <p class="mt-1 text-sm text-muted-foreground">{{ t('admin.channelMonitor.rateRule.configureDescription') }}</p>
+        <div class="mt-5 space-y-4">
+          <label class="flex items-center justify-between gap-4 rounded-lg border border-border/50 bg-surface px-4 py-3">
+            <span>
+              <span class="block text-sm font-medium text-foreground">{{ t('admin.channelMonitor.rateRule.form.enabled') }}</span>
+              <span class="block text-xs text-muted-foreground">{{ t('admin.channelMonitor.rateRule.form.enabledHelp') }}</span>
+            </span>
+            <input v-model="rateRuleForm.enabled" type="checkbox" class="h-4 w-4 rounded border-border text-primary focus:ring-primary" />
+          </label>
+          <label class="flex items-center justify-between gap-4 rounded-lg border border-border/50 bg-surface px-4 py-3">
+            <span>
+              <span class="block text-sm font-medium text-foreground">{{ t('admin.channelMonitor.rateRule.form.autoApplyOnCheck') }}</span>
+              <span class="block text-xs text-muted-foreground">{{ t('admin.channelMonitor.rateRule.form.autoApplyOnCheckHelp') }}</span>
+            </span>
+            <input v-model="rateRuleForm.autoApplyOnCheck" type="checkbox" class="h-4 w-4 rounded border-border text-primary focus:ring-primary" />
+          </label>
+          <label class="flex items-center justify-between gap-4 rounded-lg border border-border/50 bg-surface px-4 py-3">
+            <span>
+              <span class="block text-sm font-medium text-foreground">{{ t('admin.channelMonitor.rateRule.form.updatePriority') }}</span>
+              <span class="block text-xs text-muted-foreground">{{ t('admin.channelMonitor.rateRule.form.updatePriorityHelp') }}</span>
+            </span>
+            <input v-model="rateRuleForm.updatePriority" type="checkbox" class="h-4 w-4 rounded border-border text-primary focus:ring-primary" />
+          </label>
+          <label class="flex items-center justify-between gap-4 rounded-lg border border-border/50 bg-surface px-4 py-3">
+            <span>
+              <span class="block text-sm font-medium text-foreground">{{ t('admin.channelMonitor.rateRule.form.stopWhenMissingRate') }}</span>
+              <span class="block text-xs text-muted-foreground">{{ t('admin.channelMonitor.rateRule.form.stopWhenMissingRateHelp') }}</span>
+            </span>
+            <input v-model="rateRuleForm.stopWhenMissingRate" type="checkbox" class="h-4 w-4 rounded border-border text-primary focus:ring-primary" />
+          </label>
+        </div>
+        <div class="mt-6 flex flex-wrap justify-end gap-2">
+          <Button variant="secondary" :disabled="isActionLoading" @click="closeRateRuleEditor">{{ t('admin.channelMonitor.actions.cancel') }}</Button>
+          <Button variant="secondary" class="gap-2" :disabled="isActionLoading" @click="saveRateRule(false)">
+            <Loader2 v-if="isActionLoading" class="h-4 w-4 animate-spin" />
+            {{ t('admin.channelMonitor.actions.save') }}
+          </Button>
+          <Button class="gap-2" :disabled="isActionLoading" @click="saveRateRule(true)">
+            <Loader2 v-if="isActionLoading" class="h-4 w-4 animate-spin" />
+            {{ t('admin.channelMonitor.rateRule.saveAndApply') }}
           </Button>
         </div>
       </div>
