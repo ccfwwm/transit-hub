@@ -146,6 +146,21 @@ const formatDateTime = (value: string | null): string => {
   }).format(date)
 }
 
+const formatRelativeShort = (value: string | null): string => {
+  if (!value) return t('admin.channelMonitor.common.never')
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return t('admin.channelMonitor.common.never')
+  const diffMs = date.getTime() - Date.now()
+  const absSeconds = Math.max(0, Math.round(Math.abs(diffMs) / 1000))
+  if (absSeconds < 60) return diffMs >= 0 ? t('admin.channelMonitor.timeline.inSeconds', { value: absSeconds }) : t('admin.channelMonitor.timeline.secondsAgo', { value: absSeconds })
+  const minutes = Math.round(absSeconds / 60)
+  if (minutes < 60) return diffMs >= 0 ? t('admin.channelMonitor.timeline.inMinutes', { value: minutes }) : t('admin.channelMonitor.timeline.minutesAgo', { value: minutes })
+  const hours = Math.round(minutes / 60)
+  if (hours < 24) return diffMs >= 0 ? t('admin.channelMonitor.timeline.inHours', { value: hours }) : t('admin.channelMonitor.timeline.hoursAgo', { value: hours })
+  const days = Math.round(hours / 24)
+  return diffMs >= 0 ? t('admin.channelMonitor.timeline.inDays', { value: days }) : t('admin.channelMonitor.timeline.daysAgo', { value: days })
+}
+
 const formatMoney = (value: number | null): string => {
   if (value === null || !Number.isFinite(value)) return t('admin.channelMonitor.common.unknown')
   return value.toFixed(2)
@@ -262,6 +277,28 @@ const timelineTitle = (result: ChannelMonitorResult | null): string => {
   if (!result) return t('admin.channelMonitor.timeline.empty')
   return `${formatDateTime(result.createdAt)} · ${statusLabel(result.status)} · ${formatLatency(result.latencyMs)} · ${result.message || '-'}`
 }
+
+const timelineNextLabel = (channel: ChannelMonitorChannel): string => {
+  if (!channel.enabled) return t('admin.channelMonitor.timeline.monitorOff')
+  if (!channel.supported) return t('admin.channelMonitor.status.unsupported')
+  return t('admin.channelMonitor.timeline.nextRefresh', { value: formatRelativeShort(channel.nextCheckAt) })
+}
+
+const latestStatusLine = (channel: ChannelMonitorChannel): string => (
+  `${formatDateTime(channel.lastCheckedAt)} / ${formatLatency(channel.lastLatencyMs)}`
+)
+
+const monitorButtonClass = (channel: ChannelMonitorChannel): string => (
+  channel.enabled
+    ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-700 hover:bg-emerald-500/15 dark:text-emerald-300'
+    : 'border-sky-500/30 bg-sky-500/10 text-sky-700 hover:bg-sky-500/15 dark:text-sky-300'
+)
+
+const dispatchButtonClass = (channel: ChannelMonitorChannel): string => (
+  channel.schedulable === false
+    ? 'border-red-500/30 bg-red-500/10 text-red-700 hover:bg-red-500/15 dark:text-red-300'
+    : 'border-emerald-500/30 bg-emerald-500/10 text-emerald-700 hover:bg-emerald-500/15 dark:text-emerald-300'
+)
 </script>
 
 <template>
@@ -397,7 +434,7 @@ const timelineTitle = (result: ChannelMonitorResult | null): string => {
         </div>
 
         <div v-else class="max-h-full overflow-auto">
-          <table class="w-full min-w-[1320px] text-left text-sm">
+          <table class="w-full min-w-[1180px] text-left text-sm">
             <thead class="sticky top-0 bg-surface-elevated text-xs text-muted-foreground">
               <tr>
                 <th class="w-10 px-4 py-3 font-medium"></th>
@@ -405,7 +442,6 @@ const timelineTitle = (result: ChannelMonitorResult | null): string => {
                 <th class="px-5 py-3 font-medium">{{ t('admin.channelMonitor.channels.columns.group') }}</th>
                 <th class="px-5 py-3 font-medium">{{ t('admin.channelMonitor.channels.columns.status') }}</th>
                 <th class="px-5 py-3 font-medium">{{ t('admin.channelMonitor.channels.columns.balance') }}</th>
-                <th class="px-5 py-3 font-medium">{{ t('admin.channelMonitor.channels.columns.timeline') }}</th>
                 <th class="px-5 py-3 font-medium">{{ t('admin.channelMonitor.channels.columns.last') }}</th>
                 <th class="px-5 py-3 text-right font-medium">{{ t('admin.channelMonitor.channels.columns.actions') }}</th>
               </tr>
@@ -428,6 +464,32 @@ const timelineTitle = (result: ChannelMonitorResult | null): string => {
                     <span :class="['rounded-md border px-2 py-0.5 text-[11px] font-medium', channel.schedulable === false ? 'border-zinc-500/20 bg-zinc-500/10 text-zinc-600' : 'border-emerald-500/20 bg-emerald-500/10 text-emerald-600']">
                       {{ channel.schedulable === false ? t('admin.channelMonitor.flags.dispatchOff') : t('admin.channelMonitor.flags.dispatchOn') }}
                     </span>
+                  </div>
+                  <div class="mt-3 max-w-[560px] rounded-lg border border-border/50 bg-background/60 p-3 shadow-sm">
+                    <div class="flex items-center justify-between gap-3 text-xs font-medium text-muted-foreground">
+                      <span>{{ t('admin.channelMonitor.timeline.window') }}</span>
+                      <span class="truncate">{{ timelineNextLabel(channel) }}</span>
+                    </div>
+                    <div class="mt-2 grid h-7 grid-cols-[repeat(60,minmax(3px,1fr))] gap-0.5">
+                      <span
+                        v-for="(result, index) in timelineItems(channel)"
+                        :key="`${channel.ruleId}-${index}-${result?.id ?? 'empty'}`"
+                        :class="['h-7 rounded-[3px]', timelineClass(result)]"
+                        :title="timelineTitle(result)"
+                      />
+                    </div>
+                    <div class="mt-1 flex justify-between text-[10px] font-medium uppercase text-muted-foreground/70">
+                      <span>{{ t('admin.channelMonitor.timeline.past') }}</span>
+                      <span>{{ t('admin.channelMonitor.timeline.now') }}</span>
+                    </div>
+                    <div class="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
+                      <span class="font-mono text-foreground">{{ channel.recentTotal ? `${channel.uptimePercent.toFixed(0)}%` : '-' }}</span>
+                      <span>{{ t('admin.channelMonitor.timeline.successCount', { success: channel.recentSuccess, total: channel.recentTotal }) }}</span>
+                      <span>{{ latestStatusLine(channel) }}</span>
+                    </div>
+                    <div v-if="channel.lastMessage" class="mt-1 max-w-[520px] truncate text-xs" :class="channel.status === 'healthy' ? 'text-muted-foreground' : 'text-red-600 dark:text-red-300'" :title="channel.lastMessage">
+                      {{ channel.lastMessage }}
+                    </div>
                   </div>
                 </td>
                 <td class="px-5 py-4 align-top">
@@ -452,24 +514,6 @@ const timelineTitle = (result: ChannelMonitorResult | null): string => {
                   <div class="text-xs text-muted-foreground">{{ t('admin.channelMonitor.channels.threshold', { value: channel.balanceThreshold }) }}</div>
                 </td>
                 <td class="px-5 py-4 align-top">
-                  <div class="flex items-center justify-between gap-3 text-xs text-muted-foreground">
-                    <span>{{ t('admin.channelMonitor.timeline.window') }}</span>
-                    <span>{{ channel.recentTotal ? `${channel.uptimePercent.toFixed(0)}%` : '-' }}</span>
-                  </div>
-                  <div class="mt-2 grid h-8 grid-cols-[repeat(60,minmax(3px,1fr))] gap-0.5">
-                    <span
-                      v-for="(result, index) in timelineItems(channel)"
-                      :key="`${channel.ruleId}-${index}-${result?.id ?? 'empty'}`"
-                      :class="['h-8 rounded-sm', timelineClass(result)]"
-                      :title="timelineTitle(result)"
-                    />
-                  </div>
-                  <div class="mt-1 flex justify-between text-[10px] uppercase text-muted-foreground">
-                    <span>{{ t('admin.channelMonitor.timeline.past') }}</span>
-                    <span>{{ t('admin.channelMonitor.timeline.now') }}</span>
-                  </div>
-                </td>
-                <td class="px-5 py-4 align-top">
                   <div class="flex items-center gap-1.5 text-xs text-muted-foreground">
                     <Clock3 class="h-3.5 w-3.5" />
                     {{ formatDateTime(channel.lastCheckedAt) }}
@@ -478,21 +522,21 @@ const timelineTitle = (result: ChannelMonitorResult | null): string => {
                     <Gauge class="h-3.5 w-3.5" />
                     {{ formatLatency(channel.lastLatencyMs) }}
                   </div>
-                  <div class="mt-1 text-xs text-muted-foreground">{{ t('admin.channelMonitor.channels.next', { value: formatDateTime(channel.nextCheckAt) }) }}</div>
-                  <div class="mt-1 max-w-[240px] truncate text-xs text-muted-foreground" :title="channel.lastMessage">{{ channel.lastMessage || '-' }}</div>
+                  <div class="mt-1 text-xs text-muted-foreground">{{ t('admin.channelMonitor.channels.next', { value: timelineNextLabel(channel) }) }}</div>
+                  <div class="mt-1 max-w-[240px] truncate text-xs" :class="channel.status === 'healthy' ? 'text-muted-foreground' : 'text-red-600 dark:text-red-300'" :title="channel.lastMessage">{{ channel.lastMessage || '-' }}</div>
                 </td>
                 <td class="px-5 py-4 align-top">
                   <div class="flex justify-end gap-1.5">
-                    <Button variant="secondary" size="sm" class="gap-1.5" :disabled="isActionLoading || !channel.supported" @click="runAction(() => runChannelMonitorRule(channel.ruleId))">
+                    <Button variant="secondary" size="sm" class="gap-1.5 border-blue-500/30 bg-blue-500/10 text-blue-700 hover:bg-blue-500/15 dark:text-blue-300" :disabled="isActionLoading || !channel.supported" @click="runAction(() => runChannelMonitorRule(channel.ruleId))">
                       <RefreshCw class="h-3.5 w-3.5" />
                       {{ t('admin.channelMonitor.actions.run') }}
                     </Button>
-                    <Button variant="secondary" size="sm" class="gap-1.5" :disabled="isActionLoading" @click="toggleChannelMonitoring(channel)">
+                    <Button variant="secondary" size="sm" :class="['gap-1.5', monitorButtonClass(channel)]" :disabled="isActionLoading" @click="toggleChannelMonitoring(channel)">
                       <Play v-if="!channel.enabled" class="h-3.5 w-3.5" />
                       <PauseCircle v-else class="h-3.5 w-3.5" />
                       {{ channel.enabled ? t('admin.channelMonitor.actions.disableMonitor') : t('admin.channelMonitor.actions.enableMonitor') }}
                     </Button>
-                    <Button variant="secondary" size="sm" class="gap-1.5" :disabled="isActionLoading || !channel.supported" @click="toggleChannelSchedulable(channel)">
+                    <Button variant="secondary" size="sm" :class="['gap-1.5', dispatchButtonClass(channel)]" :disabled="isActionLoading || !channel.supported" @click="toggleChannelSchedulable(channel)">
                       <Power v-if="channel.schedulable === false" class="h-3.5 w-3.5" />
                       <PowerOff v-else class="h-3.5 w-3.5" />
                       {{ channel.schedulable === false ? t('admin.channelMonitor.actions.enableDispatch') : t('admin.channelMonitor.actions.disableDispatch') }}
@@ -504,7 +548,7 @@ const timelineTitle = (result: ChannelMonitorResult | null): string => {
                 </td>
               </tr>
               <tr v-if="filteredChannels.length === 0">
-                <td colspan="8" class="px-5 py-16 text-center text-sm text-muted-foreground">{{ t('admin.channelMonitor.empty') }}</td>
+                <td colspan="7" class="px-5 py-16 text-center text-sm text-muted-foreground">{{ t('admin.channelMonitor.empty') }}</td>
               </tr>
             </tbody>
           </table>

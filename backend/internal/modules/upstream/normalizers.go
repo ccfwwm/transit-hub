@@ -68,7 +68,7 @@ func dataArray(value any) []any {
 		return items
 	}
 	if data, ok := record["data"].(map[string]any); ok {
-		for _, key := range []string{"items", "list", "records", "orders", "groups", "platform_quotas"} {
+		for _, key := range []string{"items", "list", "records", "orders", "groups", "accounts", "platform_quotas"} {
 			if items, ok := data[key].([]any); ok {
 				return items
 			}
@@ -108,6 +108,21 @@ func firstString(value any, keys []string) *string {
 func firstBool(record map[string]any, keys []string) *bool {
 	for _, key := range keys {
 		if value, ok := record[key].(bool); ok {
+			return &value
+		}
+		if text, ok := record[key].(string); ok {
+			normalized := strings.ToLower(strings.TrimSpace(text))
+			if normalized == "true" || normalized == "1" || normalized == "yes" {
+				value := true
+				return &value
+			}
+			if normalized == "false" || normalized == "0" || normalized == "no" {
+				value := false
+				return &value
+			}
+		}
+		if number := readNumber(record[key]); number != nil {
+			value := *number != 0
 			return &value
 		}
 	}

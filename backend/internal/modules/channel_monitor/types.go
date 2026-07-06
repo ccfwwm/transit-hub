@@ -27,6 +27,7 @@ type Rule struct {
 	CheckIntervalMinutes int        `json:"checkIntervalMinutes"`
 	FailureThreshold     int        `json:"failureThreshold"`
 	BalanceThreshold     float64    `json:"balanceThreshold"`
+	DesiredSchedulable   *bool      `json:"desiredSchedulable"`
 	ManualPaused         bool       `json:"manualPaused"`
 	ConsecutiveFailures  int        `json:"consecutiveFailures"`
 	LastStatus           string     `json:"lastStatus"`

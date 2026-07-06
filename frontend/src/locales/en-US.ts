@@ -184,7 +184,18 @@ export default {
         window: 'Recent 60 checks',
         past: 'PAST',
         now: 'NOW',
-        empty: 'No record'
+        empty: 'No record',
+        monitorOff: 'Monitor disabled',
+        nextRefresh: 'Refresh {value}',
+        successCount: '{success}/{total} passed',
+        inSeconds: 'in {value}s',
+        secondsAgo: '{value}s ago',
+        inMinutes: 'in {value}m',
+        minutesAgo: '{value}m ago',
+        inHours: 'in {value}h',
+        hoursAgo: '{value}h ago',
+        inDays: 'in {value}d',
+        daysAgo: '{value}d ago'
       },
       bulk: {
         selected: '{count} selected',

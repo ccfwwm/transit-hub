@@ -164,6 +164,35 @@ func TestManualPausedRuleDoesNotAutoRestore(t *testing.T) {
 	}
 }
 
+func TestResumeRuleRestoresManualPausedDispatch(t *testing.T) {
+	ctx := context.Background()
+	repo := newFakeRepository()
+	service := newTestService(repo)
+	rule := repo.mustRule("conn-1")
+	rule.ManualPaused = true
+	rule.LastStatus = StatusManualPaused
+	repo.rules[rule.ID] = rule
+
+	result, err := service.ResumeRule(ctx, "user-1", rule.ID)
+	if err != nil {
+		t.Fatalf("ResumeRule returned error: %v", err)
+	}
+
+	if result.Status != StatusHealthy {
+		t.Fatalf("expected healthy result, got %+v", result)
+	}
+	if got := service.platform.schedulableCalls; len(got) != 1 || !got[0].Schedulable {
+		t.Fatalf("expected one enable call, got %+v", got)
+	}
+	updated := repo.mustRule("conn-1")
+	if updated.ManualPaused {
+		t.Fatalf("expected manual pause cleared, got %+v", updated)
+	}
+	if updated.DesiredSchedulable == nil || !*updated.DesiredSchedulable {
+		t.Fatalf("expected desired schedulable true, got %+v", updated.DesiredSchedulable)
+	}
+}
+
 func TestSetRuleEnabledOnlyControlsDetection(t *testing.T) {
 	ctx := context.Background()
 	repo := newFakeRepository()
@@ -215,8 +244,36 @@ func TestSetRuleSchedulableOnlyControlsRemoteDispatch(t *testing.T) {
 	if !updated.Enabled {
 		t.Fatalf("dispatch toggle must not disable monitoring, got %+v", updated)
 	}
+	if updated.DesiredSchedulable == nil || *updated.DesiredSchedulable {
+		t.Fatalf("expected desired schedulable false to be stored, got %+v", updated.DesiredSchedulable)
+	}
 	if got := service.platform.schedulableCalls; len(got) != 1 || got[0].AccountID != "123" || got[0].Schedulable {
 		t.Fatalf("expected one remote disable call for account 123, got %+v", got)
+	}
+}
+
+func TestSetRuleSchedulableSummaryReflectsRequestedState(t *testing.T) {
+	ctx := context.Background()
+	repo := newFakeRepository()
+	service := newTestService(repo)
+	remoteDisabled := false
+	service.platform.accounts = []AdminAccountStatus{{ID: "123", Name: "A-【site】-GPT-4o", Schedulable: &remoteDisabled}}
+	rule := repo.mustRule("conn-1")
+
+	if err := service.SetRuleSchedulable(ctx, "user-1", rule.ID, true); err != nil {
+		t.Fatalf("SetRuleSchedulable returned error: %v", err)
+	}
+	summary, err := service.Summary(ctx, "user-1")
+	if err != nil {
+		t.Fatalf("Summary returned error: %v", err)
+	}
+
+	channel := summary.Channels[0]
+	if channel.Schedulable == nil || !*channel.Schedulable {
+		t.Fatalf("expected summary to reflect requested schedulable=true, got %+v", channel.Schedulable)
+	}
+	if summary.Stats.DispatchPaused != 0 || summary.Stats.Available != 1 {
+		t.Fatalf("expected enabled dispatch to be available, got %+v", summary.Stats)
 	}
 }
 

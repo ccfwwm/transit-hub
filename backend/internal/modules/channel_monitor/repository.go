@@ -29,6 +29,7 @@ func (r *Repository) EnsureSchema(ctx context.Context) error {
 			check_interval_minutes integer NOT NULL DEFAULT 10,
 			failure_threshold integer NOT NULL DEFAULT 3,
 			balance_threshold double precision NOT NULL DEFAULT 1,
+			desired_schedulable boolean NULL,
 			manual_paused boolean NOT NULL DEFAULT false,
 			consecutive_failures integer NOT NULL DEFAULT 0,
 			last_status text NOT NULL DEFAULT 'unknown',
@@ -39,6 +40,11 @@ func (r *Repository) EnsureSchema(ctx context.Context) error {
 			created_at timestamptz NOT NULL DEFAULT now(),
 			updated_at timestamptz NOT NULL DEFAULT now()
 		)
+	`); err != nil {
+		return err
+	}
+	if _, err := r.db.Exec(ctx, `
+		ALTER TABLE channel_monitor_rules ADD COLUMN IF NOT EXISTS desired_schedulable boolean NULL
 	`); err != nil {
 		return err
 	}
@@ -123,7 +129,7 @@ func (r *Repository) EnsureRuleForConnection(ctx context.Context, userID, adminA
 func (r *Repository) ListRulesForWorkspace(ctx context.Context, userID, adminAccountID string) ([]Rule, error) {
 	rows, err := r.db.Query(ctx, `
 		SELECT id, user_id, admin_account_id, connection_id, enabled, check_interval_minutes,
-			failure_threshold, balance_threshold, manual_paused, consecutive_failures,
+			failure_threshold, balance_threshold, desired_schedulable, manual_paused, consecutive_failures,
 			last_status, last_message, last_latency_ms, last_checked_at, next_check_at, created_at, updated_at
 		FROM channel_monitor_rules
 		WHERE user_id = $1 AND admin_account_id = $2
@@ -138,7 +144,7 @@ func (r *Repository) ListRulesForWorkspace(ctx context.Context, userID, adminAcc
 func (r *Repository) GetRule(ctx context.Context, id string) (*Rule, error) {
 	rows, err := r.db.Query(ctx, `
 		SELECT id, user_id, admin_account_id, connection_id, enabled, check_interval_minutes,
-			failure_threshold, balance_threshold, manual_paused, consecutive_failures,
+			failure_threshold, balance_threshold, desired_schedulable, manual_paused, consecutive_failures,
 			last_status, last_message, last_latency_ms, last_checked_at, next_check_at, created_at, updated_at
 		FROM channel_monitor_rules
 		WHERE id = $1
@@ -163,17 +169,18 @@ func (r *Repository) UpdateRule(ctx context.Context, rule Rule) error {
 			check_interval_minutes = $3,
 			failure_threshold = $4,
 			balance_threshold = $5,
-			manual_paused = $6,
-			consecutive_failures = $7,
-			last_status = $8,
-			last_message = $9,
-			last_latency_ms = $10,
-			last_checked_at = $11,
-			next_check_at = $12,
+			desired_schedulable = $6,
+			manual_paused = $7,
+			consecutive_failures = $8,
+			last_status = $9,
+			last_message = $10,
+			last_latency_ms = $11,
+			last_checked_at = $12,
+			next_check_at = $13,
 			updated_at = now()
 		WHERE id = $1
 	`, rule.ID, rule.Enabled, rule.CheckIntervalMinutes, rule.FailureThreshold, rule.BalanceThreshold,
-		rule.ManualPaused, rule.ConsecutiveFailures, rule.LastStatus, rule.LastMessage, rule.LastLatencyMS,
+		rule.DesiredSchedulable, rule.ManualPaused, rule.ConsecutiveFailures, rule.LastStatus, rule.LastMessage, rule.LastLatencyMS,
 		rule.LastCheckedAt, rule.NextCheckAt)
 	return err
 }
@@ -208,7 +215,7 @@ func (r *Repository) ListRecentResults(ctx context.Context, ruleID string, limit
 func (r *Repository) ListDueRules(ctx context.Context, limit int) ([]Rule, error) {
 	rows, err := r.db.Query(ctx, `
 		SELECT id, user_id, admin_account_id, connection_id, enabled, check_interval_minutes,
-			failure_threshold, balance_threshold, manual_paused, consecutive_failures,
+			failure_threshold, balance_threshold, desired_schedulable, manual_paused, consecutive_failures,
 			last_status, last_message, last_latency_ms, last_checked_at, next_check_at, created_at, updated_at
 		FROM channel_monitor_rules
 		WHERE enabled = true AND (next_check_at IS NULL OR next_check_at <= now())
@@ -228,7 +235,7 @@ func scanRules(rows pgx.Rows) ([]Rule, error) {
 		var rule Rule
 		if err := rows.Scan(
 			&rule.ID, &rule.UserID, &rule.AdminAccountID, &rule.ConnectionID, &rule.Enabled,
-			&rule.CheckIntervalMinutes, &rule.FailureThreshold, &rule.BalanceThreshold,
+			&rule.CheckIntervalMinutes, &rule.FailureThreshold, &rule.BalanceThreshold, &rule.DesiredSchedulable,
 			&rule.ManualPaused, &rule.ConsecutiveFailures, &rule.LastStatus, &rule.LastMessage,
 			&rule.LastLatencyMS, &rule.LastCheckedAt, &rule.NextCheckAt, &rule.CreatedAt, &rule.UpdatedAt,
 		); err != nil {

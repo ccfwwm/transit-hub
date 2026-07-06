@@ -184,7 +184,18 @@ export default {
         window: '近 60 次记录',
         past: 'PAST',
         now: 'NOW',
-        empty: '暂无记录'
+        empty: '暂无记录',
+        monitorOff: '检测已停用',
+        nextRefresh: '{value} 刷新',
+        successCount: '{success}/{total} 通过',
+        inSeconds: '{value} 秒后',
+        secondsAgo: '{value} 秒前',
+        inMinutes: '{value} 分钟后',
+        minutesAgo: '{value} 分钟前',
+        inHours: '{value} 小时后',
+        hoursAgo: '{value} 小时前',
+        inDays: '{value} 天后',
+        daysAgo: '{value} 天前'
       },
       bulk: {
         selected: '已选 {count} 个',

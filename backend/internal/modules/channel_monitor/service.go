@@ -200,6 +200,7 @@ func (s *Service) PauseRule(ctx context.Context, userID, ruleID string) (Rule, e
 		if err := s.platform.SetSub2APIAdminAccountSchedulable(state.Session, conn.AdminAccountID, false); err != nil {
 			return Rule{}, err
 		}
+		rule.DesiredSchedulable = schedulablePtr(false)
 	}
 	now := time.Now()
 	next := now.Add(time.Duration(rule.CheckIntervalMinutes) * time.Minute)
@@ -223,6 +224,20 @@ func (s *Service) ResumeRule(ctx context.Context, userID, ruleID string) (Result
 	rule, err := s.requireRule(ctx, ruleID, userID, adminAccountID)
 	if err != nil {
 		return Result{}, err
+	}
+	state, err := s.states.Get(ctx, userID, adminAccountID)
+	if err != nil {
+		return Result{}, err
+	}
+	conn, err := s.conns.GetRealConnection(ctx, rule.ConnectionID, userID, adminAccountID)
+	if err != nil {
+		return Result{}, err
+	}
+	if state != nil && conn != nil && state.Session.Platform == upstream.PlatformSub2API && strings.TrimSpace(conn.AdminAccountID) != "" {
+		if err := s.platform.SetSub2APIAdminAccountSchedulable(state.Session, conn.AdminAccountID, true); err != nil {
+			return Result{}, err
+		}
+		rule.DesiredSchedulable = schedulablePtr(true)
 	}
 	rule.ManualPaused = false
 	rule.LastStatus = StatusManualPaused
@@ -310,6 +325,7 @@ func (s *Service) SetRuleSchedulable(ctx context.Context, userID, ruleID string,
 		return err
 	}
 	now := time.Now()
+	rule.DesiredSchedulable = schedulablePtr(schedulable)
 	rule.LastMessage = "手动停用分组调度"
 	if schedulable {
 		rule.LastMessage = "手动开启分组调度"
@@ -466,6 +482,7 @@ func (s *Service) runRule(ctx context.Context, rule Rule, reason string) (Result
 			if err := s.platform.SetSub2APIAdminAccountSchedulable(state.Session, conn.AdminAccountID, false); err != nil {
 				return finish(StatusBalancePaused, false, fmt.Sprintf("余额 %.2f 低于阈值 %.2f，停用失败：%v", *balance, rule.BalanceThreshold, err), nil, "")
 			}
+			rule.DesiredSchedulable = schedulablePtr(false)
 		}
 		return finish(StatusBalancePaused, false, fmt.Sprintf("余额 %.2f 低于阈值 %.2f，已自动停止", *balance, rule.BalanceThreshold), nil, "")
 	}
@@ -484,6 +501,7 @@ func (s *Service) runRule(ctx context.Context, rule Rule, reason string) (Result
 				if err := s.platform.SetSub2APIAdminAccountSchedulable(state.Session, conn.AdminAccountID, false); err != nil {
 					return finish(StatusFailed, false, message+"；自动停止失败："+err.Error(), nil, testResult.Model)
 				}
+				rule.DesiredSchedulable = schedulablePtr(false)
 			}
 			rule.ConsecutiveFailures = 0
 			return finish(StatusAutoPaused, false, fmt.Sprintf("%s；连续失败达到 %d 次，已自动停止", message, rule.FailureThreshold), nil, testResult.Model)
@@ -497,6 +515,7 @@ func (s *Service) runRule(ctx context.Context, rule Rule, reason string) (Result
 			if err := s.platform.SetSub2APIAdminAccountSchedulable(state.Session, conn.AdminAccountID, true); err != nil {
 				return finish(StatusFailed, false, "检测已恢复，但自动启用失败："+err.Error(), &latency, testResult.Model)
 			}
+			rule.DesiredSchedulable = schedulablePtr(true)
 		}
 	}
 	rule.ConsecutiveFailures = 0
@@ -554,6 +573,9 @@ func (s *Service) channelStatus(ctx context.Context, conn my_sites.RealConnectio
 		if strings.TrimSpace(row.AdminAccountName) == "" {
 			row.AdminAccountName = account.Name
 		}
+	}
+	if rule.DesiredSchedulable != nil {
+		row.Schedulable = rule.DesiredSchedulable
 	}
 	if !row.Supported {
 		row.Status = StatusUnsupported
@@ -683,6 +705,8 @@ func uniqueRuleIDs(ruleIDs []string) []string {
 	}
 	return unique
 }
+
+func schedulablePtr(value bool) *bool { return &value }
 
 func normalizedStatus(status string) string {
 	if strings.TrimSpace(status) == "" {
