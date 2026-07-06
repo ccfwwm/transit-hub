@@ -241,6 +241,7 @@ func (r *Repository) List(ctx context.Context, userID string, adminAccountID str
 			SELECT
 				snapshots.id,
 				snapshots.user_id,
+				snapshots.admin_account_id,
 				snapshots.site_id,
 				snapshots.site_name,
 				snapshots.group_id,
@@ -250,6 +251,11 @@ func (r *Repository) List(ctx context.Context, userID string, adminAccountID str
 				snapshots.multiplier,
 				snapshots.deleted,
 				COALESCE(sites.recharge_rate, 1) AS recharge_rate,
+				CASE
+					WHEN COALESCE(sites.recharge_rate, 1) > 0 AND NULLIF(sites.metrics #>> '{balance,value}', '') IS NOT NULL
+					THEN (NULLIF(sites.metrics #>> '{balance,value}', '')::double precision * COALESCE(sites.recharge_rate, 1))
+					ELSE NULL
+				END AS balance,
 				snapshots.created_at,
 				COALESCE(sites.base_url, snapshots.site_id) AS site_key,
 				COALESCE(NULLIF(snapshots.group_id, ''), snapshots.group_name) AS group_key
@@ -262,6 +268,7 @@ func (r *Repository) List(ctx context.Context, userID string, adminAccountID str
 			SELECT
 				id,
 				user_id,
+				admin_account_id,
 				site_id,
 				site_name,
 				group_id,
@@ -271,6 +278,7 @@ func (r *Repository) List(ctx context.Context, userID string, adminAccountID str
 				multiplier,
 				deleted,
 				recharge_rate,
+				balance,
 				created_at,
 				ROW_NUMBER() OVER (
 					PARTITION BY user_id, site_key, group_key
@@ -282,20 +290,51 @@ func (r *Repository) List(ctx context.Context, userID string, adminAccountID str
 				) AS previous_multiplier
 			FROM enriched
 		), latest AS (
-			SELECT id, user_id, site_id, site_name, group_id, group_name, platform, type, multiplier, deleted, recharge_rate, created_at, previous_multiplier
+			SELECT id, user_id, admin_account_id, site_id, site_name, group_id, group_name, platform, type, multiplier, deleted, recharge_rate, balance, created_at, previous_multiplier
 			FROM ranked
 			WHERE row_number = 1
 		), mapped AS (
-			SELECT latest.*, EXISTS (
-				SELECT 1
-				FROM my_site_states AS states
-				CROSS JOIN LATERAL jsonb_array_elements(states.mappings) AS mapping
-				CROSS JOIN LATERAL jsonb_array_elements(mapping->'upstreamTargets') AS target
-				WHERE states.user_id = latest.user_id
-					AND target->>'siteId' = latest.site_id
-					AND target->>'groupName' = latest.group_name
-			) AS mapped
+			SELECT
+				latest.*,
+				COALESCE(mapped_groups.own_groups, ARRAY[]::text[]) AS mapped_own_groups,
+				COALESCE(array_length(mapped_groups.own_groups, 1), 0) > 0 AS mapped
 			FROM latest
+			LEFT JOIN LATERAL (
+				SELECT COALESCE(array_agg(DISTINCT own_group ORDER BY own_group), ARRAY[]::text[]) AS own_groups
+				FROM (
+					SELECT mapping->>'ownGroup' AS own_group
+					FROM my_site_states AS states
+					CROSS JOIN LATERAL jsonb_array_elements(states.mappings) AS mapping
+					CROSS JOIN LATERAL jsonb_array_elements(mapping->'upstreamTargets') AS target
+					WHERE states.user_id = latest.user_id
+						AND states.admin_account_id = latest.admin_account_id
+						AND target->>'siteId' = latest.site_id
+						AND target->>'groupName' = latest.group_name
+					UNION
+					SELECT COALESCE(own_group_lookup.group_name, own_group_id.value) AS own_group
+					FROM real_connections AS connections
+					CROSS JOIN LATERAL jsonb_array_elements_text(connections.own_group_ids) AS own_group_id(value)
+					LEFT JOIN my_site_states AS state_lookup
+						ON state_lookup.user_id = connections.user_id
+						AND state_lookup.admin_account_id = connections.workspace_admin_account_id
+					LEFT JOIN LATERAL (
+						SELECT COALESCE(group_item->>'name', group_item->>'groupName', group_item->>'id') AS group_name
+						FROM jsonb_array_elements(state_lookup.own_groups) AS group_item
+						WHERE group_item->>'id' = own_group_id.value
+							OR group_item->>'name' = own_group_id.value
+							OR group_item->>'groupName' = own_group_id.value
+						LIMIT 1
+					) AS own_group_lookup ON true
+					WHERE connections.user_id = latest.user_id
+						AND connections.workspace_admin_account_id = latest.admin_account_id
+						AND connections.upstream_site_id = latest.site_id
+						AND (
+							(NULLIF(latest.group_id, '') IS NOT NULL AND connections.upstream_group_id = latest.group_id)
+							OR connections.upstream_group_name = latest.group_name
+						)
+				) AS own_group_candidates
+				WHERE own_group <> ''
+			) AS mapped_groups ON true
 		), filtered AS (
 			SELECT *
 			FROM mapped
@@ -310,7 +349,7 @@ func (r *Repository) List(ctx context.Context, userID string, adminAccountID str
 		), counted AS (
 			SELECT count(*)::int AS total FROM filtered
 		)
-		SELECT filtered.id, filtered.user_id, filtered.site_id, filtered.site_name, filtered.group_id, filtered.group_name, filtered.platform, filtered.type, filtered.mapped, filtered.deleted,
+		SELECT filtered.id, filtered.user_id, filtered.site_id, filtered.site_name, filtered.balance, filtered.group_id, filtered.group_name, filtered.platform, filtered.type, filtered.mapped, filtered.mapped_own_groups, filtered.deleted,
 			filtered.multiplier, filtered.recharge_rate, filtered.created_at, filtered.previous_multiplier, counted.total, facets.types, facets.platforms
 		FROM filtered
 		CROSS JOIN counted
@@ -443,11 +482,13 @@ func scanListSnapshots(rows pgxRows) (listRecords, error) {
 			&record.UserID,
 			&record.SiteID,
 			&record.SiteName,
+			&record.Balance,
 			&record.GroupID,
 			&record.GroupName,
 			&record.Platform,
 			&record.Type,
 			&record.Mapped,
+			&record.MappedOwnGroups,
 			&record.Deleted,
 			&record.Multiplier,
 			&record.RechargeRate,

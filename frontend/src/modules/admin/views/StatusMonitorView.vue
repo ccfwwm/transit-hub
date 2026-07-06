@@ -31,6 +31,7 @@ import {
   previewChannelMonitorRateRule,
   runChannelMonitorRule,
   setChannelMonitorRuleSchedulable,
+  setChannelMonitorRulePriority,
   updateChannelMonitorRateRule,
   updateChannelMonitorRule,
 } from '../api/channelMonitor'
@@ -71,6 +72,7 @@ const isBulkEditorOpen = ref(false)
 const isRateRuleEditorOpen = ref(false)
 const editForm = ref({ enabled: true, checkIntervalMinutes: 10, failureThreshold: 3, balanceThreshold: 1 })
 const rateRuleForm = ref({ enabled: false, autoApplyOnCheck: true, updatePriority: true, stopWhenMissingRate: true })
+const priorityDrafts = ref<Record<string, number | null>>({})
 
 const loadSummary = async () => {
   isLoading.value = true
@@ -78,6 +80,10 @@ const loadSummary = async () => {
   try {
     summary.value = await getChannelMonitorSummary()
     selectedRuleIds.value = selectedRuleIds.value.filter(id => summary.value.channels.some(channel => channel.ruleId === id))
+    priorityDrafts.value = Object.fromEntries(summary.value.channels.map(channel => [
+      channel.ruleId,
+      channel.accountPriority ?? channel.recommendedPriority ?? 0,
+    ]))
   } catch (error: any) {
     errorKey.value = error?.message ?? 'admin.channelMonitor.errors.request'
   } finally {
@@ -331,6 +337,16 @@ const toggleChannelMonitoring = (channel: ChannelMonitorChannel) =>
 const toggleChannelSchedulable = (channel: ChannelMonitorChannel) =>
   runAction(() => setChannelMonitorRuleSchedulable(channel.ruleId, channel.schedulable === false))
 
+const setChannelPriority = (channel: ChannelMonitorChannel) => {
+  const priority = Number(priorityDrafts.value[channel.ruleId])
+  if (!Number.isFinite(priority)) return
+  return runAction(() => setChannelMonitorRulePriority(channel.ruleId, Math.round(priority)))
+}
+
+const selectGroup = (groupName: string) => {
+  selectedGroup.value = selectedGroup.value === groupName ? 'all' : groupName
+}
+
 const timelineItems = (channel: ChannelMonitorChannel): Array<ChannelMonitorResult | null> => {
   const ordered = [...channel.recentResults].reverse().slice(-60)
   return [...Array(Math.max(0, 60 - ordered.length)).fill(null), ...ordered]
@@ -521,7 +537,15 @@ const dispatchButtonClass = (channel: ChannelMonitorChannel): string => (
               </tr>
             </thead>
             <tbody class="divide-y divide-border/40">
-              <tr v-for="group in summary.groups" :key="`${group.groupName}-${group.platform}`" class="hover:bg-surface-elevated/60">
+              <tr
+                v-for="group in summary.groups"
+                :key="`${group.groupName}-${group.platform}`"
+                :class="[
+                  'cursor-pointer transition-colors hover:bg-surface-elevated/60',
+                  selectedGroup === group.groupName ? 'bg-primary/5 ring-1 ring-inset ring-primary/20' : ''
+                ]"
+                @click="selectGroup(group.groupName)"
+              >
                 <td class="px-4 py-3">
                   <div class="font-medium text-foreground">{{ group.groupName }}</div>
                   <div class="text-xs text-muted-foreground">{{ group.platform || t('admin.channelMonitor.common.unknown') }}</div>
@@ -603,6 +627,26 @@ const dispatchButtonClass = (channel: ChannelMonitorChannel): string => (
                     <div>
                       <div>{{ t('admin.channelMonitor.rateRule.priority') }}</div>
                       <div class="font-mono text-foreground">{{ channel.accountPriority ?? '-' }} → {{ channel.recommendedPriority ?? '-' }}</div>
+                      <div class="mt-1 flex items-center gap-1">
+                        <input
+                          v-model.number="priorityDrafts[channel.ruleId]"
+                          type="number"
+                          min="0"
+                          max="999"
+                          class="h-7 w-16 rounded-md border border-border/50 bg-surface px-2 text-xs font-mono text-foreground outline-none focus:border-primary focus:ring-1 focus:ring-primary"
+                          :disabled="isActionLoading || !channel.supported"
+                          :aria-label="t('admin.channelMonitor.rateRule.manualPriority')"
+                        />
+                        <Button
+                          variant="secondary"
+                          size="sm"
+                          class="h-7 px-2 text-xs border-amber-500/30 bg-amber-500/10 text-amber-700 hover:bg-amber-500/15 dark:text-amber-300"
+                          :disabled="isActionLoading || !channel.supported"
+                          @click="setChannelPriority(channel)"
+                        >
+                          {{ t('admin.channelMonitor.rateRule.setPriority') }}
+                        </Button>
+                      </div>
                     </div>
                     <div>
                       <div>{{ t('admin.channelMonitor.rateRule.accountRate') }}</div>

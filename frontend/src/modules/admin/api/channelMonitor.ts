@@ -83,6 +83,13 @@ export const setChannelMonitorRuleSchedulable = async (ruleId: string, schedulab
   })
 }
 
+export const setChannelMonitorRulePriority = async (ruleId: string, priority: number): Promise<void> => {
+  await requestJson(`/channel-monitor/rules/${encodeURIComponent(ruleId)}/priority`, {
+    method: 'POST',
+    body: JSON.stringify({ priority }),
+  })
+}
+
 export const bulkUpdateChannelMonitorRules = async (request: BulkUpdateChannelMonitorRuleRequest): Promise<void> => {
   await requestJson('/channel-monitor/rules/bulk', {
     method: 'PATCH',

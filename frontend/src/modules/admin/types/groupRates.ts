@@ -1,11 +1,13 @@
 export interface GroupRate {
   siteId: string
   siteName: string
+  balance: number | null
   groupId: string
   groupName: string
   type: string | null
   platform: string | null
   mapped: boolean
+  mappedOwnGroups: string[]
   deleted: boolean
   currentMultiplier: number | null
   delta: number | null

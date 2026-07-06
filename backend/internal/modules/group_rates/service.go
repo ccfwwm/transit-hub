@@ -139,26 +139,8 @@ func (s *Service) List(ctx context.Context, userID string, adminAccountID string
 		return ListResult{}, err
 	}
 
-	rows := make([]RateRow, 0, len(records.Items))
-	for _, record := range records.Items {
-		delta, deltaPercent := change(record.Multiplier, record.PreviousMultiplier)
-		rows = append(rows, RateRow{
-			SiteID:            record.SiteID,
-			SiteName:          record.SiteName,
-			GroupID:           record.GroupID,
-			GroupName:         record.GroupName,
-			Platform:          record.Platform,
-			Type:              record.Type,
-			Mapped:            record.Mapped,
-			Deleted:           record.Deleted,
-			CurrentMultiplier: record.Multiplier * record.RechargeRate,
-			Delta:             delta,
-			DeltaPercent:      deltaPercent,
-			UpdatedAt:         record.CreatedAt,
-		})
-	}
 	return ListResult{
-		Items:      rows,
+		Items:      rateRowsFromRecords(records.Items),
 		Total:      records.Total,
 		Page:       query.Page,
 		PageSize:   query.PageSize,
@@ -166,6 +148,30 @@ func (s *Service) List(ctx context.Context, userID string, adminAccountID string
 		Types:      records.Types,
 		Platforms:  records.Platforms,
 	}, nil
+}
+
+func rateRowsFromRecords(records []snapshotRecord) []RateRow {
+	rows := make([]RateRow, 0, len(records))
+	for _, record := range records {
+		delta, deltaPercent := change(record.Multiplier, record.PreviousMultiplier)
+		rows = append(rows, RateRow{
+			SiteID:            record.SiteID,
+			SiteName:          record.SiteName,
+			Balance:           record.Balance,
+			GroupID:           record.GroupID,
+			GroupName:         record.GroupName,
+			Platform:          record.Platform,
+			Type:              record.Type,
+			Mapped:            record.Mapped,
+			MappedOwnGroups:   append([]string(nil), record.MappedOwnGroups...),
+			Deleted:           record.Deleted,
+			CurrentMultiplier: record.Multiplier * record.RechargeRate,
+			Delta:             delta,
+			DeltaPercent:      deltaPercent,
+			UpdatedAt:         record.CreatedAt,
+		})
+	}
+	return rows
 }
 
 func (s *Service) UpdateType(ctx context.Context, userID string, adminAccountID string, ref GroupRef, groupType string) error {

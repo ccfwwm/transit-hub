@@ -218,6 +218,8 @@ export default {
         ownRate: 'Own rate',
         accountRate: 'Account rate',
         priority: 'Priority',
+        manualPriority: 'Manual priority',
+        setPriority: 'Set',
         status: {
           allowed: 'Rate OK',
           blocked: 'Rate paused',
@@ -734,11 +736,13 @@ export default {
       },
       fields: {
         siteName: 'Site Name',
+        balance: 'Upstream Balance',
         groupName: 'Group Name',
         type: 'Group Type',
         platform: 'Site Platform',
         currentMultiplier: 'Current Multiplier',
         delta: 'Rise/Fall',
+        mappedOwnGroups: 'Connected Groups',
         updatedAt: 'Updated Time',
         actions: 'Actions'
       },

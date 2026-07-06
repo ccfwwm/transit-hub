@@ -17,11 +17,13 @@ type SnapshotGroup struct {
 type RateRow struct {
 	SiteID            string    `json:"siteId"`
 	SiteName          string    `json:"siteName"`
+	Balance           *float64  `json:"balance"`
 	GroupID           string    `json:"groupId"`
 	GroupName         string    `json:"groupName"`
 	Platform          string    `json:"platform"`
 	Type              string    `json:"type"`
 	Mapped            bool      `json:"mapped"`
+	MappedOwnGroups   []string  `json:"mappedOwnGroups"`
 	Deleted           bool      `json:"deleted"`
 	CurrentMultiplier float64   `json:"currentMultiplier"`
 	Delta             *float64  `json:"delta"`
@@ -86,11 +88,13 @@ type snapshotRecord struct {
 	AdminAccountID     string
 	SiteID             string
 	SiteName           string
+	Balance            *float64
 	GroupID            string
 	GroupName          string
 	Platform           string
 	Type               string
 	Mapped             bool
+	MappedOwnGroups    []string
 	Deleted            bool
 	Multiplier         float64
 	RechargeRate       float64

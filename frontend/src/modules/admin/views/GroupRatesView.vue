@@ -69,11 +69,12 @@ const editTypeOptions = computed(() => {
   if (editingRate.value?.type) options.add(editingRate.value.type)
   return Array.from(options).sort((first, second) => first.localeCompare(second))
 })
-const mappedOwnGroupsForRate = (rate: GroupRate): string[] => (
-  mySiteMappings.value
+const mappedOwnGroupsForRate = (rate: GroupRate): string[] => {
+  if (rate.mappedOwnGroups?.length) return rate.mappedOwnGroups
+  return mySiteMappings.value
     .filter((mapping) => mapping.upstreamTargets.some((target) => target.siteId === rate.siteId && target.groupName === rate.groupName))
     .map((mapping) => mapping.ownGroup)
-)
+}
 
 const firstMappedOwnGroupForRate = (rate: GroupRate): string => mappedOwnGroupsForRate(rate)[0] ?? ''
 
@@ -191,6 +192,11 @@ const handleTypeChange = async (event: Event) => {
 const formatMultiplier = (value: number | null): string => {
   if (value === null || !Number.isFinite(value)) return t('admin.groupRates.common.placeholder')
   return t('admin.groupRates.format.multiplier', { value: Number(value.toFixed(4)).toString() })
+}
+
+const formatMoney = (value: number | null): string => {
+  if (value === null || !Number.isFinite(value)) return t('admin.groupRates.common.placeholder')
+  return value.toFixed(2)
 }
 
 const formatDelta = (delta: number | null): string => {
@@ -560,15 +566,17 @@ const historyRowKey = (row: GroupRateHistoryRow, index: number): string => (
       </div>
 
       <div v-else class="flex-1 overflow-auto">
-        <table class="w-full min-w-[980px] text-left text-sm relative">
+        <table class="w-full min-w-[1180px] text-left text-sm relative">
           <thead class="sticky top-0 z-10 border-b border-border/50 bg-surface-elevated/90 backdrop-blur-sm">
             <tr>
               <th class="px-6 py-3 font-medium text-muted-foreground">{{ t('admin.groupRates.fields.siteName') }}</th>
+              <th class="px-6 py-3 font-medium text-muted-foreground">{{ t('admin.groupRates.fields.balance') }}</th>
               <th class="px-6 py-3 font-medium text-muted-foreground">{{ t('admin.groupRates.fields.groupName') }}</th>
               <th class="px-6 py-3 font-medium text-muted-foreground">{{ t('admin.groupRates.fields.type') }}</th>
               <th class="px-6 py-3 font-medium text-muted-foreground">{{ t('admin.groupRates.fields.platform') }}</th>
               <th class="px-6 py-3 font-medium text-muted-foreground">{{ t('admin.groupRates.fields.currentMultiplier') }}</th>
               <th class="px-6 py-3 font-medium text-muted-foreground">{{ t('admin.groupRates.fields.delta') }}</th>
+              <th class="px-6 py-3 font-medium text-muted-foreground">{{ t('admin.groupRates.fields.mappedOwnGroups') }}</th>
               <th class="px-6 py-3 font-medium text-muted-foreground">{{ t('admin.groupRates.fields.updatedAt') }}</th>
               <th class="px-6 py-3 text-right font-medium text-muted-foreground">{{ t('admin.groupRates.fields.actions') }}</th>
             </tr>
@@ -578,6 +586,7 @@ const historyRowKey = (row: GroupRateHistoryRow, index: number): string => (
               <td class="px-4 py-2.5">
                 <div class="font-medium text-foreground">{{ rate.siteName }}</div>
               </td>
+              <td class="px-4 py-2.5 font-mono text-foreground">{{ formatMoney(rate.balance) }}</td>
               <td class="px-4 py-2.5">
                 <div class="flex items-center gap-1.5">
                   <span class="font-medium text-foreground">{{ rate.groupName }}</span>
@@ -608,6 +617,14 @@ const historyRowKey = (row: GroupRateHistoryRow, index: number): string => (
                 >
                   {{ formatDelta(rate.delta) }}
                 </button>
+              </td>
+              <td class="px-4 py-2.5">
+                <div v-if="mappedOwnGroupsForRate(rate).length" class="flex max-w-[260px] flex-wrap gap-1.5">
+                  <span v-for="group in mappedOwnGroupsForRate(rate)" :key="group" class="rounded-md border border-emerald-500/20 bg-emerald-500/10 px-2 py-0.5 text-xs font-medium text-emerald-700 dark:text-emerald-300">
+                    {{ group }}
+                  </span>
+                </div>
+                <span v-else class="text-xs text-muted-foreground">{{ t('admin.groupRates.status.unmapped') }}</span>
               </td>
               <td class="px-4 py-2.5 text-muted-foreground">{{ formatDateTime(rate.updatedAt) }}</td>
               <td class="px-4 py-2.5 text-right">

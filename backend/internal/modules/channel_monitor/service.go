@@ -357,6 +357,36 @@ func (s *Service) SetRuleSchedulable(ctx context.Context, userID, ruleID string,
 	return s.store.UpdateRule(ctx, rule)
 }
 
+func (s *Service) SetRulePriority(ctx context.Context, userID, ruleID string, priority int) error {
+	adminAccountID, err := s.currentAdminAccountID(ctx, userID)
+	if err != nil {
+		return err
+	}
+	rule, err := s.requireRule(ctx, ruleID, userID, adminAccountID)
+	if err != nil {
+		return err
+	}
+	state, err := s.states.Get(ctx, userID, adminAccountID)
+	if err != nil {
+		return err
+	}
+	conn, err := s.conns.GetRealConnection(ctx, rule.ConnectionID, userID, adminAccountID)
+	if err != nil {
+		return err
+	}
+	if state == nil || state.Session.Platform != upstream.PlatformSub2API || conn == nil || strings.TrimSpace(conn.AdminAccountID) == "" {
+		return requestError("admin.channelMonitor.errors.unsupported")
+	}
+	priority = clampInt(priority, 0, 999)
+	if err := s.platform.UpdateSub2APIAdminAccountPriority(state.Session, conn.AdminAccountID, priority); err != nil {
+		return err
+	}
+	now := time.Now()
+	rule.LastMessage = fmt.Sprintf("手动设置优先级为 %d", priority)
+	rule.UpdatedAt = now
+	return s.store.UpdateRule(ctx, rule)
+}
+
 func (s *Service) BulkSetSchedulable(ctx context.Context, userID string, req BulkSchedulableRequest) error {
 	ruleIDs := uniqueRuleIDs(req.RuleIDs)
 	if len(ruleIDs) == 0 {

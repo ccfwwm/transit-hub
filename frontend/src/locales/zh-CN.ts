@@ -218,6 +218,8 @@ export default {
         ownRate: '分组倍率',
         accountRate: '账号倍率',
         priority: '优先级',
+        manualPriority: '手动优先级',
+        setPriority: '设置',
         status: {
           allowed: '倍率可用',
           blocked: '倍率停用',
@@ -734,11 +736,13 @@ export default {
       },
       fields: {
         siteName: '站点名称',
+        balance: '上游余额',
         groupName: '分组名称',
         type: '分组类型',
         platform: '站点平台',
         currentMultiplier: '当前倍率',
         delta: '涨跌幅',
+        mappedOwnGroups: '已对接分组',
         updatedAt: '更新时间',
         actions: '操作'
       },

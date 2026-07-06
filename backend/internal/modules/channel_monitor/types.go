@@ -171,6 +171,10 @@ type SetSchedulableRequest struct {
 	Schedulable bool `json:"schedulable"`
 }
 
+type SetPriorityRequest struct {
+	Priority int `json:"priority"`
+}
+
 type BulkSchedulableRequest struct {
 	RuleIDs     []string `json:"ruleIds"`
 	Schedulable bool     `json:"schedulable"`

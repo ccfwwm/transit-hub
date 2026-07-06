@@ -20,6 +20,7 @@ func RegisterRoutes(mux *http.ServeMux, service *Service) {
 	mux.HandleFunc("POST /api/channel-monitor/rules/{id}/pause", handler.pauseRule)
 	mux.HandleFunc("POST /api/channel-monitor/rules/{id}/resume", handler.resumeRule)
 	mux.HandleFunc("POST /api/channel-monitor/rules/{id}/schedulable", handler.setSchedulable)
+	mux.HandleFunc("POST /api/channel-monitor/rules/{id}/priority", handler.setPriority)
 	mux.HandleFunc("PATCH /api/channel-monitor/rules/{id}", handler.updateRule)
 	mux.HandleFunc("PATCH /api/channel-monitor/rules/bulk", handler.bulkUpdateRules)
 	mux.HandleFunc("POST /api/channel-monitor/rules/bulk/run", handler.bulkRunRules)
@@ -117,6 +118,24 @@ func (h *Handler) setSchedulable(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := h.service.SetRuleSchedulable(r.Context(), userID, r.PathValue("id"), req.Schedulable); err != nil {
+		writeMonitorError(w, err)
+		return
+	}
+	httpjson.Write(w, http.StatusOK, map[string]bool{"success": true})
+}
+
+func (h *Handler) setPriority(w http.ResponseWriter, r *http.Request) {
+	userID, ok := authctx.UserID(r.Context())
+	if !ok {
+		httpjson.WriteError(w, http.StatusUnauthorized, "auth.errors.unauthorized")
+		return
+	}
+	var req SetPriorityRequest
+	if err := httpjson.Decode(r, &req); err != nil {
+		httpjson.WriteError(w, http.StatusBadRequest, "admin.channelMonitor.errors.request")
+		return
+	}
+	if err := h.service.SetRulePriority(r.Context(), userID, r.PathValue("id"), req.Priority); err != nil {
 		writeMonitorError(w, err)
 		return
 	}

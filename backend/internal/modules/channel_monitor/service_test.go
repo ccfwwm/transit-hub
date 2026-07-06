@@ -277,6 +277,25 @@ func TestSetRuleSchedulableSummaryReflectsRequestedState(t *testing.T) {
 	}
 }
 
+func TestSetRulePriorityUpdatesSub2APIAccountPriority(t *testing.T) {
+	ctx := context.Background()
+	repo := newFakeRepository()
+	service := newTestService(repo)
+	rule := repo.mustRule("conn-1")
+
+	if err := service.SetRulePriority(ctx, "user-1", rule.ID, 3); err != nil {
+		t.Fatalf("SetRulePriority returned error: %v", err)
+	}
+
+	if got := service.platform.priorityCalls; len(got) != 1 || got[0].AccountID != "123" || got[0].Priority != 3 {
+		t.Fatalf("expected one priority update for account 123, got %+v", got)
+	}
+	updated := repo.mustRule("conn-1")
+	if updated.LastMessage != "手动设置优先级为 3" {
+		t.Fatalf("expected priority message stored, got %q", updated.LastMessage)
+	}
+}
+
 func TestBulkUpdateRulesAppliesSelectedRules(t *testing.T) {
 	ctx := context.Background()
 	repo := newFakeRepository()
