@@ -42,6 +42,7 @@ type UpstreamLookup interface {
 type MonitorPlatform interface {
 	TestSub2APIAdminAccount(session upstream.Session, accountID string, options AccountTestOptions) (AccountTestResult, error)
 	SetSub2APIAdminAccountSchedulable(session upstream.Session, accountID string, schedulable bool) error
+	ListSub2APIAdminAccounts(session upstream.Session) ([]AdminAccountStatus, error)
 }
 
 type AdminAccountResolver interface {
@@ -94,12 +95,13 @@ func (s *Service) Summary(ctx context.Context, userID string) (SummaryResponse, 
 		rulesByConnection[conn.ID] = rule
 	}
 	state, _ := s.states.Get(ctx, userID, adminAccountID)
+	accountsByID := s.adminAccountsByID(state)
 
 	response := SummaryResponse{Channels: []ChannelStatus{}, Groups: []GroupSummary{}}
 	groupMap := map[string]*GroupSummary{}
 	for _, conn := range connections {
 		rule := rulesByConnection[conn.ID]
-		row := s.channelStatus(ctx, conn, rule, state)
+		row := s.channelStatus(ctx, conn, rule, state, accountsByID)
 		response.Channels = append(response.Channels, row)
 		applyStats(&response.Stats, row)
 		ownGroups := row.OwnGroups
@@ -124,6 +126,12 @@ func (s *Service) Summary(ctx context.Context, userID string) (SummaryResponse, 
 				group.BalancePaused++
 			case StatusManualPaused:
 				group.ManualPaused++
+			}
+			if !row.Enabled {
+				group.MonitorPaused++
+			}
+			if row.Schedulable != nil && !*row.Schedulable {
+				group.DispatchPaused++
 			}
 			if row.LastCheckedAt != nil && (group.LastCheckedAt == nil || row.LastCheckedAt.After(*group.LastCheckedAt)) {
 				group.LastCheckedAt = row.LastCheckedAt
@@ -257,6 +265,88 @@ func (s *Service) UpdateRule(ctx context.Context, userID, ruleID string, req Upd
 	return rule, s.store.UpdateRule(ctx, rule)
 }
 
+func (s *Service) BulkUpdateRules(ctx context.Context, userID string, req BulkUpdateRuleRequest) ([]Rule, error) {
+	ruleIDs := uniqueRuleIDs(req.RuleIDs)
+	if len(ruleIDs) == 0 {
+		return nil, requestError("admin.channelMonitor.errors.request")
+	}
+	updated := make([]Rule, 0, len(ruleIDs))
+	for _, ruleID := range ruleIDs {
+		rule, err := s.UpdateRule(ctx, userID, ruleID, UpdateRuleRequest{
+			Enabled:              req.Enabled,
+			CheckIntervalMinutes: req.CheckIntervalMinutes,
+			FailureThreshold:     req.FailureThreshold,
+			BalanceThreshold:     req.BalanceThreshold,
+		})
+		if err != nil {
+			return nil, err
+		}
+		updated = append(updated, rule)
+	}
+	return updated, nil
+}
+
+func (s *Service) SetRuleSchedulable(ctx context.Context, userID, ruleID string, schedulable bool) error {
+	adminAccountID, err := s.currentAdminAccountID(ctx, userID)
+	if err != nil {
+		return err
+	}
+	rule, err := s.requireRule(ctx, ruleID, userID, adminAccountID)
+	if err != nil {
+		return err
+	}
+	state, err := s.states.Get(ctx, userID, adminAccountID)
+	if err != nil {
+		return err
+	}
+	conn, err := s.conns.GetRealConnection(ctx, rule.ConnectionID, userID, adminAccountID)
+	if err != nil {
+		return err
+	}
+	if state == nil || state.Session.Platform != upstream.PlatformSub2API || conn == nil || strings.TrimSpace(conn.AdminAccountID) == "" {
+		return requestError("admin.channelMonitor.errors.unsupported")
+	}
+	if err := s.platform.SetSub2APIAdminAccountSchedulable(state.Session, conn.AdminAccountID, schedulable); err != nil {
+		return err
+	}
+	now := time.Now()
+	rule.LastMessage = "手动停用分组调度"
+	if schedulable {
+		rule.LastMessage = "手动开启分组调度"
+	}
+	rule.UpdatedAt = now
+	return s.store.UpdateRule(ctx, rule)
+}
+
+func (s *Service) BulkSetSchedulable(ctx context.Context, userID string, req BulkSchedulableRequest) error {
+	ruleIDs := uniqueRuleIDs(req.RuleIDs)
+	if len(ruleIDs) == 0 {
+		return requestError("admin.channelMonitor.errors.request")
+	}
+	for _, ruleID := range ruleIDs {
+		if err := s.SetRuleSchedulable(ctx, userID, ruleID, req.Schedulable); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (s *Service) BulkRunRules(ctx context.Context, userID string, req BulkRunRequest) ([]Result, error) {
+	ruleIDs := uniqueRuleIDs(req.RuleIDs)
+	if len(ruleIDs) == 0 {
+		return nil, requestError("admin.channelMonitor.errors.request")
+	}
+	results := make([]Result, 0, len(ruleIDs))
+	for _, ruleID := range ruleIDs {
+		result, err := s.RunRuleForUser(ctx, userID, ruleID, "manual")
+		if err != nil {
+			return nil, err
+		}
+		results = append(results, result)
+	}
+	return results, nil
+}
+
 func (s *Service) RunDue(ctx context.Context, limit int) int {
 	if limit <= 0 {
 		limit = 20
@@ -342,7 +432,7 @@ func (s *Service) runRule(ctx context.Context, rule Rule, reason string) (Result
 		return result, nil
 	}
 
-	if !rule.Enabled {
+	if !rule.Enabled && reason != "manual" {
 		return finish(StatusUnknown, true, "监控规则已停用", nil, "")
 	}
 	if rule.ManualPaused {
@@ -402,7 +492,7 @@ func (s *Service) runRule(ctx context.Context, rule Rule, reason string) (Result
 	}
 
 	latency := testResult.LatencyMS
-	if rule.LastStatus == StatusAutoPaused || rule.LastStatus == StatusBalancePaused || rule.LastStatus == StatusManualPaused {
+	if rule.LastStatus == StatusAutoPaused || rule.LastStatus == StatusBalancePaused {
 		if strings.TrimSpace(conn.AdminAccountID) != "" {
 			if err := s.platform.SetSub2APIAdminAccountSchedulable(state.Session, conn.AdminAccountID, true); err != nil {
 				return finish(StatusFailed, false, "检测已恢复，但自动启用失败："+err.Error(), &latency, testResult.Model)
@@ -435,7 +525,7 @@ func (s *Service) currentAdminAccountID(ctx context.Context, userID string) (str
 	return s.accounts.RequireCurrentID(ctx, userID)
 }
 
-func (s *Service) channelStatus(ctx context.Context, conn my_sites.RealConnection, rule Rule, state *my_sites.State) ChannelStatus {
+func (s *Service) channelStatus(ctx context.Context, conn my_sites.RealConnection, rule Rule, state *my_sites.State, accountsByID map[string]AdminAccountStatus) ChannelStatus {
 	row := ChannelStatus{
 		RuleID:               rule.ID,
 		ConnectionID:         conn.ID,
@@ -457,6 +547,13 @@ func (s *Service) channelStatus(ctx context.Context, conn my_sites.RealConnectio
 		LastCheckedAt:        rule.LastCheckedAt,
 		NextCheckAt:          rule.NextCheckAt,
 		Supported:            state != nil && state.Session.Platform == upstream.PlatformSub2API,
+		RecentResults:        []Result{},
+	}
+	if account, ok := accountsByID[strings.TrimSpace(conn.AdminAccountID)]; ok {
+		row.Schedulable = account.Schedulable
+		if strings.TrimSpace(row.AdminAccountName) == "" {
+			row.AdminAccountName = account.Name
+		}
 	}
 	if !row.Supported {
 		row.Status = StatusUnsupported
@@ -468,7 +565,40 @@ func (s *Service) channelStatus(ctx context.Context, conn my_sites.RealConnectio
 		row.SitePlatform = string(site.Platform)
 		row.Balance = convertedBalance(site)
 	}
+	results, err := s.store.ListRecentResults(ctx, rule.ID, 60)
+	if err == nil {
+		row.RecentResults = results
+		row.RecentTotal = len(results)
+		for _, result := range results {
+			if result.Success {
+				row.RecentSuccess++
+			}
+		}
+		if row.RecentTotal > 0 {
+			row.UptimePercent = float64(row.RecentSuccess) / float64(row.RecentTotal) * 100
+		}
+	}
 	return row
+}
+
+func (s *Service) adminAccountsByID(state *my_sites.State) map[string]AdminAccountStatus {
+	accountsByID := map[string]AdminAccountStatus{}
+	if state == nil || state.Session.Platform != upstream.PlatformSub2API {
+		return accountsByID
+	}
+	accounts, err := s.platform.ListSub2APIAdminAccounts(state.Session)
+	if err != nil {
+		log.Printf("[channel-monitor] list admin accounts failed: %v", err)
+		return accountsByID
+	}
+	for _, account := range accounts {
+		id := strings.TrimSpace(account.ID)
+		if id == "" {
+			continue
+		}
+		accountsByID[id] = account
+	}
+	return accountsByID
 }
 
 func convertedBalance(site *upstream.Site) *float64 {
@@ -504,6 +634,12 @@ func applyStats(stats *SummaryStats, row ChannelStatus) {
 	if isAvailable(row) {
 		stats.Available++
 	}
+	if !row.Enabled {
+		stats.MonitorPaused++
+	}
+	if row.Schedulable != nil && !*row.Schedulable {
+		stats.DispatchPaused++
+	}
 	switch row.Status {
 	case StatusFailed, StatusAutoPaused:
 		stats.Failed++
@@ -520,12 +656,32 @@ func isAvailable(row ChannelStatus) bool {
 	if !row.Enabled || !row.Supported {
 		return false
 	}
+	if row.Schedulable != nil && !*row.Schedulable {
+		return false
+	}
 	switch row.Status {
 	case StatusFailed, StatusAutoPaused, StatusBalancePaused, StatusManualPaused, StatusUnsupported:
 		return false
 	default:
 		return true
 	}
+}
+
+func uniqueRuleIDs(ruleIDs []string) []string {
+	seen := map[string]struct{}{}
+	unique := make([]string, 0, len(ruleIDs))
+	for _, ruleID := range ruleIDs {
+		id := strings.TrimSpace(ruleID)
+		if id == "" {
+			continue
+		}
+		if _, ok := seen[id]; ok {
+			continue
+		}
+		seen[id] = struct{}{}
+		unique = append(unique, id)
+	}
+	return unique
 }
 
 func normalizedStatus(status string) string {

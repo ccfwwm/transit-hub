@@ -65,6 +65,12 @@ type AccountTestResult struct {
 	Model     string
 }
 
+type AdminAccountStatus struct {
+	ID          string `json:"id"`
+	Name        string `json:"name"`
+	Schedulable *bool  `json:"schedulable"`
+}
+
 type SummaryResponse struct {
 	Stats    SummaryStats    `json:"stats"`
 	Groups   []GroupSummary  `json:"groups"`
@@ -72,23 +78,27 @@ type SummaryResponse struct {
 }
 
 type SummaryStats struct {
-	Total         int `json:"total"`
-	Available     int `json:"available"`
-	Failed        int `json:"failed"`
-	BalancePaused int `json:"balancePaused"`
-	ManualPaused  int `json:"manualPaused"`
-	Unsupported   int `json:"unsupported"`
+	Total          int `json:"total"`
+	Available      int `json:"available"`
+	Failed         int `json:"failed"`
+	BalancePaused  int `json:"balancePaused"`
+	ManualPaused   int `json:"manualPaused"`
+	MonitorPaused  int `json:"monitorPaused"`
+	DispatchPaused int `json:"dispatchPaused"`
+	Unsupported    int `json:"unsupported"`
 }
 
 type GroupSummary struct {
-	GroupName     string     `json:"groupName"`
-	Platform      string     `json:"platform"`
-	Total         int        `json:"total"`
-	Available     int        `json:"available"`
-	Failed        int        `json:"failed"`
-	BalancePaused int        `json:"balancePaused"`
-	ManualPaused  int        `json:"manualPaused"`
-	LastCheckedAt *time.Time `json:"lastCheckedAt"`
+	GroupName      string     `json:"groupName"`
+	Platform       string     `json:"platform"`
+	Total          int        `json:"total"`
+	Available      int        `json:"available"`
+	Failed         int        `json:"failed"`
+	BalancePaused  int        `json:"balancePaused"`
+	ManualPaused   int        `json:"manualPaused"`
+	MonitorPaused  int        `json:"monitorPaused"`
+	DispatchPaused int        `json:"dispatchPaused"`
+	LastCheckedAt  *time.Time `json:"lastCheckedAt"`
 }
 
 type ChannelStatus struct {
@@ -97,6 +107,7 @@ type ChannelStatus struct {
 	Enabled              bool       `json:"enabled"`
 	Supported            bool       `json:"supported"`
 	ManualPaused         bool       `json:"manualPaused"`
+	Schedulable          *bool      `json:"schedulable"`
 	Status               string     `json:"status"`
 	SiteID               string     `json:"siteId"`
 	SiteName             string     `json:"siteName"`
@@ -116,6 +127,10 @@ type ChannelStatus struct {
 	LastLatencyMS        *int       `json:"lastLatencyMs"`
 	LastCheckedAt        *time.Time `json:"lastCheckedAt"`
 	NextCheckAt          *time.Time `json:"nextCheckAt"`
+	RecentResults        []Result   `json:"recentResults"`
+	RecentTotal          int        `json:"recentTotal"`
+	RecentSuccess        int        `json:"recentSuccess"`
+	UptimePercent        float64    `json:"uptimePercent"`
 }
 
 type UpdateRuleRequest struct {
@@ -123,6 +138,27 @@ type UpdateRuleRequest struct {
 	CheckIntervalMinutes *int     `json:"checkIntervalMinutes"`
 	FailureThreshold     *int     `json:"failureThreshold"`
 	BalanceThreshold     *float64 `json:"balanceThreshold"`
+}
+
+type BulkUpdateRuleRequest struct {
+	RuleIDs              []string `json:"ruleIds"`
+	Enabled              *bool    `json:"enabled"`
+	CheckIntervalMinutes *int     `json:"checkIntervalMinutes"`
+	FailureThreshold     *int     `json:"failureThreshold"`
+	BalanceThreshold     *float64 `json:"balanceThreshold"`
+}
+
+type SetSchedulableRequest struct {
+	Schedulable bool `json:"schedulable"`
+}
+
+type BulkSchedulableRequest struct {
+	RuleIDs     []string `json:"ruleIds"`
+	Schedulable bool     `json:"schedulable"`
+}
+
+type BulkRunRequest struct {
+	RuleIDs []string `json:"ruleIds"`
 }
 
 func DefaultRule(userID, adminAccountID, connectionID string) Rule {

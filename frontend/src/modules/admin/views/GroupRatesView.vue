@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRouter } from 'vue-router'
 import { AlertCircle, ArrowUpDown, Edit3, History, Link2, Loader2, Megaphone, RefreshCw, Search, X } from 'lucide-vue-next'
@@ -31,6 +31,7 @@ const {
   loadRates,
   loadHistory,
   saveType,
+  setSearch,
   setTypeFilter,
   goToPage,
 } = useGroupRates()
@@ -46,6 +47,7 @@ const ownGroups = ref<MySiteMappingOwnGroupOption[]>([])
 const mySiteMappings = ref<MySiteMapping[]>([])
 const hasLoadedMappingOptions = ref(false)
 const searchQuery = ref('')
+let searchDebounceTimer: ReturnType<typeof setTimeout> | null = null
 const mappedFilter = ref<'all' | 'mapped' | 'unmapped' | 'deleted'>('all')
 const sortMode = ref<'multiplierAsc' | 'multiplierDesc' | 'siteNameAsc' | 'groupNameAsc'>('multiplierAsc')
 const realConnectionsData = ref<RealConnection[]>([])
@@ -112,14 +114,10 @@ void loadAdminPlatform()
 
 const filteredRates = computed(() => {
   const filtered = rates.value.filter(rate => {
-    const searchMatch = !searchQuery.value ||
-      rate.siteName.toLowerCase().includes(searchQuery.value.toLowerCase()) ||
-      rate.groupName.toLowerCase().includes(searchQuery.value.toLowerCase())
-
     const typeMatch = !typeFilter.value || rate.type === typeFilter.value
 
     if (mappedFilter.value === 'deleted') {
-      return searchMatch && typeMatch && rate.deleted
+      return typeMatch && rate.deleted
     }
 
     if (rate.deleted) return false
@@ -128,7 +126,7 @@ const filteredRates = computed(() => {
       (mappedFilter.value === 'mapped' && rate.mapped) ||
       (mappedFilter.value === 'unmapped' && !rate.mapped)
 
-    return searchMatch && typeMatch && mappedMatch
+    return typeMatch && mappedMatch
   })
 
   return [...filtered].sort((a, b) => {
@@ -150,6 +148,13 @@ const canGoNext = computed(() => page.value < totalPages.value && !isLoading.val
 const isAdminNewAPI = computed(() => adminPlatform.value === 'newapi')
 const needsGroupTypeSelection = computed(() => !connectingRate.value?.type && !isAdminNewAPI.value)
 const needsChannelTypeSelection = computed(() => isAdminNewAPI.value)
+
+watch(searchQuery, (value) => {
+  if (searchDebounceTimer) clearTimeout(searchDebounceTimer)
+  searchDebounceTimer = setTimeout(() => {
+    void setSearch(value)
+  }, 300)
+})
 
 // new-api admin：根据自有分组类型过滤可选的渠道类型
 // 分组类型已知时只显示对应渠道，未知时显示全部

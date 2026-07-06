@@ -128,7 +128,9 @@ export default {
         available: 'Available',
         failed: 'Failed',
         balancePaused: 'Balance paused',
-        manualPaused: 'Manual paused'
+        manualPaused: 'Manual paused',
+        monitorPaused: 'Monitor paused',
+        dispatchPaused: 'Dispatch paused'
       },
       filters: {
         search: 'Search sites, channels, or groups...',
@@ -142,7 +144,15 @@ export default {
         auto_paused: 'Auto paused',
         balance_paused: 'Low balance',
         manual_paused: 'Manual paused',
+        monitor_paused: 'Monitor paused',
+        dispatch_paused: 'Dispatch paused',
         unsupported: 'Unsupported'
+      },
+      flags: {
+        monitorOn: 'Monitor on',
+        monitorOff: 'Monitor off',
+        dispatchOn: 'Dispatch on',
+        dispatchOff: 'Dispatch off'
       },
       groups: {
         title: 'Group Overview',
@@ -150,6 +160,7 @@ export default {
         columns: {
           group: 'Group',
           available: 'Available',
+          paused: 'Monitor/dispatch paused',
           last: 'Last check'
         }
       },
@@ -161,14 +172,32 @@ export default {
           group: 'Own groups',
           status: 'Status',
           balance: 'Balance',
+          timeline: 'Timeline',
           last: 'Last check',
           actions: 'Actions'
         },
         failures: '{count} consecutive failures',
-        threshold: 'Threshold {value}'
+        threshold: 'Threshold {value}',
+        next: 'Next {value}'
+      },
+      timeline: {
+        window: 'Recent 60 checks',
+        past: 'PAST',
+        now: 'NOW',
+        empty: 'No record'
+      },
+      bulk: {
+        selected: '{count} selected',
+        run: 'Check selected',
+        enableMonitor: 'Enable monitor',
+        disableMonitor: 'Disable monitor',
+        enableDispatch: 'Enable group dispatch',
+        disableDispatch: 'Disable group dispatch',
+        editRules: 'Bulk edit rules'
       },
       editor: {
         title: 'Monitor Rule',
+        bulkTitle: 'Bulk edit {count} rules',
         enabled: 'Enable monitor',
         interval: 'Check interval (minutes)',
         failureThreshold: 'Failure threshold',
@@ -179,6 +208,11 @@ export default {
         run: 'Check',
         pause: 'Stop',
         resume: 'Start',
+        selectAll: 'Select filtered',
+        enableMonitor: 'Enable monitor',
+        disableMonitor: 'Disable monitor',
+        enableDispatch: 'Enable group dispatch',
+        disableDispatch: 'Disable group dispatch',
         cancel: 'Cancel',
         save: 'Save'
       },
@@ -186,6 +220,7 @@ export default {
         network: 'Network error. Please retry.',
         request: 'Status monitor request failed.',
         notFound: 'Monitor rule not found.',
+        unsupported: 'This channel does not support the operation.',
         unknown: 'Status monitor service error.'
       }
     },

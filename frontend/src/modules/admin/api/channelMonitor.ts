@@ -1,4 +1,5 @@
 import type {
+  BulkUpdateChannelMonitorRuleRequest,
   ChannelMonitorResult,
   ChannelMonitorSummary,
   UpdateChannelMonitorRuleRequest,
@@ -70,3 +71,30 @@ export const updateChannelMonitorRule = async (ruleId: string, request: UpdateCh
     body: JSON.stringify(request),
   })
 }
+
+export const setChannelMonitorRuleSchedulable = async (ruleId: string, schedulable: boolean): Promise<void> => {
+  await requestJson(`/channel-monitor/rules/${encodeURIComponent(ruleId)}/schedulable`, {
+    method: 'POST',
+    body: JSON.stringify({ schedulable }),
+  })
+}
+
+export const bulkUpdateChannelMonitorRules = async (request: BulkUpdateChannelMonitorRuleRequest): Promise<void> => {
+  await requestJson('/channel-monitor/rules/bulk', {
+    method: 'PATCH',
+    body: JSON.stringify(request),
+  })
+}
+
+export const bulkSetChannelMonitorRulesSchedulable = async (ruleIds: string[], schedulable: boolean): Promise<void> => {
+  await requestJson('/channel-monitor/rules/bulk/schedulable', {
+    method: 'POST',
+    body: JSON.stringify({ ruleIds, schedulable }),
+  })
+}
+
+export const bulkRunChannelMonitorRules = async (ruleIds: string[]): Promise<ChannelMonitorResult[]> =>
+  requestJson<ChannelMonitorResult[]>('/channel-monitor/rules/bulk/run', {
+    method: 'POST',
+    body: JSON.stringify({ ruleIds }),
+  })

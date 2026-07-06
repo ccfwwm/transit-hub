@@ -1,16 +1,39 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { Activity, AlertTriangle, CheckCircle2, CircleSlash, Loader2, PauseCircle, Play, RefreshCw, Search, Settings2, ShieldAlert, WalletCards } from 'lucide-vue-next'
+import {
+  Activity,
+  AlertTriangle,
+  CheckCircle2,
+  CheckSquare2,
+  CircleSlash,
+  Clock3,
+  Gauge,
+  Loader2,
+  PauseCircle,
+  Play,
+  Power,
+  PowerOff,
+  RefreshCw,
+  Search,
+  Settings2,
+  ShieldAlert,
+  Square,
+  WalletCards,
+} from 'lucide-vue-next'
 import { Button } from '@/components/ui/button'
 import {
+  bulkRunChannelMonitorRules,
+  bulkSetChannelMonitorRulesSchedulable,
+  bulkUpdateChannelMonitorRules,
   getChannelMonitorSummary,
-  pauseChannelMonitorRule,
-  resumeChannelMonitorRule,
   runChannelMonitorRule,
+  setChannelMonitorRuleSchedulable,
   updateChannelMonitorRule,
 } from '../api/channelMonitor'
-import type { ChannelMonitorChannel, ChannelMonitorStatus, UpdateChannelMonitorRuleRequest } from '../types/channelMonitor'
+import type { ChannelMonitorChannel, ChannelMonitorResult, ChannelMonitorStatus, UpdateChannelMonitorRuleRequest } from '../types/channelMonitor'
+
+type StatusFilter = 'all' | 'monitor_paused' | 'dispatch_paused' | ChannelMonitorStatus
 
 const { t, locale } = useI18n()
 
@@ -18,14 +41,16 @@ const isLoading = ref(false)
 const isActionLoading = ref(false)
 const errorKey = ref('')
 const searchQuery = ref('')
-const statusFilter = ref<'all' | ChannelMonitorStatus>('all')
+const statusFilter = ref<StatusFilter>('all')
 const selectedGroup = ref('all')
+const selectedRuleIds = ref<string[]>([])
 const summary = ref({
-  stats: { total: 0, available: 0, failed: 0, balancePaused: 0, manualPaused: 0, unsupported: 0 },
+  stats: { total: 0, available: 0, failed: 0, balancePaused: 0, manualPaused: 0, monitorPaused: 0, dispatchPaused: 0, unsupported: 0 },
   groups: [],
   channels: [],
 } as Awaited<ReturnType<typeof getChannelMonitorSummary>>)
 const editingChannel = ref<ChannelMonitorChannel | null>(null)
+const isBulkEditorOpen = ref(false)
 const editForm = ref({ enabled: true, checkIntervalMinutes: 10, failureThreshold: 3, balanceThreshold: 1 })
 
 const loadSummary = async () => {
@@ -33,6 +58,7 @@ const loadSummary = async () => {
   errorKey.value = ''
   try {
     summary.value = await getChannelMonitorSummary()
+    selectedRuleIds.value = selectedRuleIds.value.filter(id => summary.value.channels.some(channel => channel.ruleId === id))
   } catch (error: any) {
     errorKey.value = error?.message ?? 'admin.channelMonitor.errors.request'
   } finally {
@@ -49,26 +75,37 @@ const statCards = computed(() => [
   { key: 'available', value: summary.value.stats.available, icon: CheckCircle2, tone: 'text-emerald-600 bg-emerald-500/10 border-emerald-500/20' },
   { key: 'failed', value: summary.value.stats.failed, icon: AlertTriangle, tone: 'text-red-600 bg-red-500/10 border-red-500/20' },
   { key: 'balancePaused', value: summary.value.stats.balancePaused, icon: WalletCards, tone: 'text-amber-600 bg-amber-500/10 border-amber-500/20' },
-  { key: 'manualPaused', value: summary.value.stats.manualPaused, icon: PauseCircle, tone: 'text-sky-600 bg-sky-500/10 border-sky-500/20' },
+  { key: 'monitorPaused', value: summary.value.stats.monitorPaused, icon: PauseCircle, tone: 'text-sky-600 bg-sky-500/10 border-sky-500/20' },
+  { key: 'dispatchPaused', value: summary.value.stats.dispatchPaused, icon: PowerOff, tone: 'text-zinc-600 bg-zinc-500/10 border-zinc-500/20' },
 ])
 
-const groupOptions = computed(() => ['all', ...summary.value.groups.map(group => group.groupName)])
+const groupOptions = computed(() => ['all', ...Array.from(new Set(summary.value.groups.map(group => group.groupName)))])
 
 const filteredChannels = computed(() => {
   const query = searchQuery.value.trim().toLowerCase()
   return summary.value.channels.filter(channel => {
-    const statusMatch = statusFilter.value === 'all' || channel.status === statusFilter.value
+    const statusMatch =
+      statusFilter.value === 'all' ||
+      (statusFilter.value === 'monitor_paused' && !channel.enabled) ||
+      (statusFilter.value === 'dispatch_paused' && channel.schedulable === false) ||
+      channel.status === statusFilter.value
     const groupMatch = selectedGroup.value === 'all' || channel.ownGroups.includes(selectedGroup.value)
     const searchMatch = !query ||
       channel.siteName.toLowerCase().includes(query) ||
       channel.upstreamGroupName.toLowerCase().includes(query) ||
       channel.adminAccountName.toLowerCase().includes(query) ||
+      channel.adminAccountId.toLowerCase().includes(query) ||
       channel.ownGroups.some(group => group.toLowerCase().includes(query))
     return statusMatch && groupMatch && searchMatch
   })
 })
 
-const statusLabel = (status: ChannelMonitorStatus): string => t(`admin.channelMonitor.status.${status}`)
+const visibleRuleIds = computed(() => filteredChannels.value.map(channel => channel.ruleId))
+const selectedCount = computed(() => selectedRuleIds.value.length)
+const allVisibleSelected = computed(() => visibleRuleIds.value.length > 0 && visibleRuleIds.value.every(id => selectedRuleIds.value.includes(id)))
+const selectedChannels = computed(() => summary.value.channels.filter(channel => selectedRuleIds.value.includes(channel.ruleId)))
+
+const statusLabel = (status: StatusFilter): string => t(`admin.channelMonitor.status.${status}`)
 
 const statusClass = (status: ChannelMonitorStatus): string => {
   switch (status) {
@@ -114,11 +151,17 @@ const formatMoney = (value: number | null): string => {
   return value.toFixed(2)
 }
 
-const runAction = async (action: () => Promise<unknown>) => {
+const formatLatency = (value: number | null): string => {
+  if (value === null || !Number.isFinite(value)) return t('admin.channelMonitor.common.unknown')
+  return `${value} ms`
+}
+
+const runAction = async (action: () => Promise<unknown>, clearSelection = false) => {
   isActionLoading.value = true
   errorKey.value = ''
   try {
     await action()
+    if (clearSelection) selectedRuleIds.value = []
     await loadSummary()
   } catch (error: any) {
     errorKey.value = error?.message ?? 'admin.channelMonitor.errors.request'
@@ -127,8 +170,26 @@ const runAction = async (action: () => Promise<unknown>) => {
   }
 }
 
+const toggleSelect = (ruleId: string) => {
+  if (selectedRuleIds.value.includes(ruleId)) {
+    selectedRuleIds.value = selectedRuleIds.value.filter(id => id !== ruleId)
+  } else {
+    selectedRuleIds.value = [...selectedRuleIds.value, ruleId]
+  }
+}
+
+const toggleSelectAllVisible = () => {
+  if (allVisibleSelected.value) {
+    const visible = new Set(visibleRuleIds.value)
+    selectedRuleIds.value = selectedRuleIds.value.filter(id => !visible.has(id))
+  } else {
+    selectedRuleIds.value = Array.from(new Set([...selectedRuleIds.value, ...visibleRuleIds.value]))
+  }
+}
+
 const openEditor = (channel: ChannelMonitorChannel) => {
   editingChannel.value = channel
+  isBulkEditorOpen.value = false
   editForm.value = {
     enabled: channel.enabled,
     checkIntervalMinutes: channel.checkIntervalMinutes,
@@ -137,26 +198,75 @@ const openEditor = (channel: ChannelMonitorChannel) => {
   }
 }
 
+const openBulkEditor = () => {
+  const first = selectedChannels.value[0]
+  editingChannel.value = null
+  isBulkEditorOpen.value = true
+  editForm.value = {
+    enabled: first?.enabled ?? true,
+    checkIntervalMinutes: first?.checkIntervalMinutes ?? 10,
+    failureThreshold: first?.failureThreshold ?? 3,
+    balanceThreshold: first?.balanceThreshold ?? 1,
+  }
+}
+
 const closeEditor = () => {
   editingChannel.value = null
+  isBulkEditorOpen.value = false
 }
 
 const saveEditor = async () => {
-  if (!editingChannel.value) return
   const payload: UpdateChannelMonitorRuleRequest = {
     enabled: editForm.value.enabled,
     checkIntervalMinutes: Number(editForm.value.checkIntervalMinutes),
     failureThreshold: Number(editForm.value.failureThreshold),
     balanceThreshold: Number(editForm.value.balanceThreshold),
   }
-  await runAction(() => updateChannelMonitorRule(editingChannel.value!.ruleId, payload))
+  if (editingChannel.value) {
+    await runAction(() => updateChannelMonitorRule(editingChannel.value!.ruleId, payload))
+  } else if (isBulkEditorOpen.value) {
+    await runAction(() => bulkUpdateChannelMonitorRules({ ...payload, ruleIds: selectedRuleIds.value }), true)
+  }
   closeEditor()
+}
+
+const setSelectedMonitoring = (enabled: boolean) =>
+  runAction(() => bulkUpdateChannelMonitorRules({ ruleIds: selectedRuleIds.value, enabled }), true)
+
+const setSelectedSchedulable = (schedulable: boolean) =>
+  runAction(() => bulkSetChannelMonitorRulesSchedulable(selectedRuleIds.value, schedulable), true)
+
+const runSelected = () =>
+  runAction(() => bulkRunChannelMonitorRules(selectedRuleIds.value), false)
+
+const toggleChannelMonitoring = (channel: ChannelMonitorChannel) =>
+  runAction(() => updateChannelMonitorRule(channel.ruleId, { enabled: !channel.enabled }))
+
+const toggleChannelSchedulable = (channel: ChannelMonitorChannel) =>
+  runAction(() => setChannelMonitorRuleSchedulable(channel.ruleId, channel.schedulable === false))
+
+const timelineItems = (channel: ChannelMonitorChannel): Array<ChannelMonitorResult | null> => {
+  const ordered = [...channel.recentResults].reverse().slice(-60)
+  return [...Array(Math.max(0, 60 - ordered.length)).fill(null), ...ordered]
+}
+
+const timelineClass = (result: ChannelMonitorResult | null): string => {
+  if (!result) return 'bg-border/60'
+  if (result.success) return 'bg-emerald-500'
+  if (result.status === 'balance_paused') return 'bg-amber-500'
+  if (result.status === 'auto_paused' || result.status === 'failed') return 'bg-red-500'
+  return 'bg-muted-foreground/60'
+}
+
+const timelineTitle = (result: ChannelMonitorResult | null): string => {
+  if (!result) return t('admin.channelMonitor.timeline.empty')
+  return `${formatDateTime(result.createdAt)} · ${statusLabel(result.status)} · ${formatLatency(result.latencyMs)} · ${result.message || '-'}`
 }
 </script>
 
 <template>
   <div class="h-[calc(100vh-8rem)] flex flex-col gap-5">
-    <div class="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-5">
+    <div class="grid grid-cols-2 gap-3 lg:grid-cols-3 2xl:grid-cols-6">
       <div v-for="card in statCards" :key="card.key" class="rounded-lg border border-border/50 bg-surface p-4">
         <div class="flex items-center justify-between gap-3">
           <div>
@@ -170,9 +280,9 @@ const saveEditor = async () => {
       </div>
     </div>
 
-    <div class="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
-      <div class="flex flex-1 flex-col gap-3 sm:flex-row">
-        <div class="relative w-full sm:max-w-sm">
+    <div class="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
+      <div class="flex flex-1 flex-col gap-3 md:flex-row">
+        <div class="relative w-full md:max-w-sm">
           <Search class="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
           <input
             v-model="searchQuery"
@@ -191,7 +301,8 @@ const saveEditor = async () => {
           <option value="failed">{{ statusLabel('failed') }}</option>
           <option value="auto_paused">{{ statusLabel('auto_paused') }}</option>
           <option value="balance_paused">{{ statusLabel('balance_paused') }}</option>
-          <option value="manual_paused">{{ statusLabel('manual_paused') }}</option>
+          <option value="monitor_paused">{{ statusLabel('monitor_paused') }}</option>
+          <option value="dispatch_paused">{{ statusLabel('dispatch_paused') }}</option>
           <option value="unsupported">{{ statusLabel('unsupported') }}</option>
         </select>
       </div>
@@ -201,11 +312,39 @@ const saveEditor = async () => {
       </Button>
     </div>
 
+    <div v-if="selectedCount > 0" class="flex flex-wrap items-center gap-2 rounded-lg border border-border/50 bg-surface px-4 py-3">
+      <span class="mr-2 text-sm font-medium text-foreground">{{ t('admin.channelMonitor.bulk.selected', { count: selectedCount }) }}</span>
+      <Button variant="secondary" size="sm" class="gap-1.5" :disabled="isActionLoading" @click="runSelected">
+        <RefreshCw class="h-3.5 w-3.5" />
+        {{ t('admin.channelMonitor.bulk.run') }}
+      </Button>
+      <Button variant="secondary" size="sm" class="gap-1.5" :disabled="isActionLoading" @click="setSelectedMonitoring(true)">
+        <Play class="h-3.5 w-3.5" />
+        {{ t('admin.channelMonitor.bulk.enableMonitor') }}
+      </Button>
+      <Button variant="secondary" size="sm" class="gap-1.5" :disabled="isActionLoading" @click="setSelectedMonitoring(false)">
+        <PauseCircle class="h-3.5 w-3.5" />
+        {{ t('admin.channelMonitor.bulk.disableMonitor') }}
+      </Button>
+      <Button variant="secondary" size="sm" class="gap-1.5" :disabled="isActionLoading" @click="setSelectedSchedulable(true)">
+        <Power class="h-3.5 w-3.5" />
+        {{ t('admin.channelMonitor.bulk.enableDispatch') }}
+      </Button>
+      <Button variant="secondary" size="sm" class="gap-1.5" :disabled="isActionLoading" @click="setSelectedSchedulable(false)">
+        <PowerOff class="h-3.5 w-3.5" />
+        {{ t('admin.channelMonitor.bulk.disableDispatch') }}
+      </Button>
+      <Button variant="ghost" size="sm" class="gap-1.5" :disabled="isActionLoading" @click="openBulkEditor">
+        <Settings2 class="h-3.5 w-3.5" />
+        {{ t('admin.channelMonitor.bulk.editRules') }}
+      </Button>
+    </div>
+
     <div v-if="errorKey" class="rounded-xl border border-warning/20 bg-warning/10 p-3 text-sm text-warning">
       {{ t(errorKey) }}
     </div>
 
-    <div class="grid min-h-0 flex-1 grid-cols-1 gap-5 xl:grid-cols-[minmax(280px,360px)_1fr]">
+    <div class="grid min-h-0 flex-1 grid-cols-1 gap-5 xl:grid-cols-[minmax(320px,420px)_1fr]">
       <section class="min-h-0 overflow-hidden rounded-lg border border-border/50 bg-surface">
         <div class="border-b border-border/50 px-5 py-4">
           <h2 class="text-sm font-semibold text-foreground">{{ t('admin.channelMonitor.groups.title') }}</h2>
@@ -217,6 +356,7 @@ const saveEditor = async () => {
               <tr>
                 <th class="px-4 py-3 font-medium">{{ t('admin.channelMonitor.groups.columns.group') }}</th>
                 <th class="px-4 py-3 font-medium">{{ t('admin.channelMonitor.groups.columns.available') }}</th>
+                <th class="px-4 py-3 font-medium">{{ t('admin.channelMonitor.groups.columns.paused') }}</th>
                 <th class="px-4 py-3 font-medium">{{ t('admin.channelMonitor.groups.columns.last') }}</th>
               </tr>
             </thead>
@@ -227,10 +367,11 @@ const saveEditor = async () => {
                   <div class="text-xs text-muted-foreground">{{ group.platform || t('admin.channelMonitor.common.unknown') }}</div>
                 </td>
                 <td class="px-4 py-3 font-mono text-foreground">{{ group.available }}/{{ group.total }}</td>
+                <td class="px-4 py-3 text-xs text-muted-foreground">{{ group.monitorPaused }}/{{ group.dispatchPaused }}</td>
                 <td class="px-4 py-3 text-xs text-muted-foreground">{{ formatDateTime(group.lastCheckedAt) }}</td>
               </tr>
               <tr v-if="!isLoading && summary.groups.length === 0">
-                <td colspan="3" class="px-4 py-10 text-center text-sm text-muted-foreground">{{ t('admin.channelMonitor.empty') }}</td>
+                <td colspan="4" class="px-4 py-10 text-center text-sm text-muted-foreground">{{ t('admin.channelMonitor.empty') }}</td>
               </tr>
             </tbody>
           </table>
@@ -238,9 +379,16 @@ const saveEditor = async () => {
       </section>
 
       <section class="min-h-0 overflow-hidden rounded-lg border border-border/50 bg-surface">
-        <div class="border-b border-border/50 px-5 py-4">
-          <h2 class="text-sm font-semibold text-foreground">{{ t('admin.channelMonitor.channels.title') }}</h2>
-          <p class="mt-1 text-xs text-muted-foreground">{{ t('admin.channelMonitor.channels.subtitle', { count: filteredChannels.length }) }}</p>
+        <div class="flex items-center justify-between gap-3 border-b border-border/50 px-5 py-4">
+          <div>
+            <h2 class="text-sm font-semibold text-foreground">{{ t('admin.channelMonitor.channels.title') }}</h2>
+            <p class="mt-1 text-xs text-muted-foreground">{{ t('admin.channelMonitor.channels.subtitle', { count: filteredChannels.length }) }}</p>
+          </div>
+          <button type="button" class="inline-flex items-center gap-2 rounded-lg px-2 py-1 text-xs text-muted-foreground hover:bg-surface-elevated hover:text-foreground" @click="toggleSelectAllVisible">
+            <CheckSquare2 v-if="allVisibleSelected" class="h-4 w-4 text-primary" />
+            <Square v-else class="h-4 w-4" />
+            {{ t('admin.channelMonitor.actions.selectAll') }}
+          </button>
         </div>
 
         <div v-if="isLoading" class="flex h-64 items-center justify-center text-muted-foreground">
@@ -249,24 +397,40 @@ const saveEditor = async () => {
         </div>
 
         <div v-else class="max-h-full overflow-auto">
-          <table class="w-full min-w-[980px] text-left text-sm">
+          <table class="w-full min-w-[1320px] text-left text-sm">
             <thead class="sticky top-0 bg-surface-elevated text-xs text-muted-foreground">
               <tr>
+                <th class="w-10 px-4 py-3 font-medium"></th>
                 <th class="px-5 py-3 font-medium">{{ t('admin.channelMonitor.channels.columns.channel') }}</th>
                 <th class="px-5 py-3 font-medium">{{ t('admin.channelMonitor.channels.columns.group') }}</th>
                 <th class="px-5 py-3 font-medium">{{ t('admin.channelMonitor.channels.columns.status') }}</th>
                 <th class="px-5 py-3 font-medium">{{ t('admin.channelMonitor.channels.columns.balance') }}</th>
+                <th class="px-5 py-3 font-medium">{{ t('admin.channelMonitor.channels.columns.timeline') }}</th>
                 <th class="px-5 py-3 font-medium">{{ t('admin.channelMonitor.channels.columns.last') }}</th>
                 <th class="px-5 py-3 text-right font-medium">{{ t('admin.channelMonitor.channels.columns.actions') }}</th>
               </tr>
             </thead>
             <tbody class="divide-y divide-border/40">
               <tr v-for="channel in filteredChannels" :key="channel.connectionId" class="hover:bg-surface-elevated/60">
-                <td class="px-5 py-4">
+                <td class="px-4 py-4 align-top">
+                  <button type="button" class="mt-1 text-muted-foreground hover:text-primary" @click="toggleSelect(channel.ruleId)">
+                    <CheckSquare2 v-if="selectedRuleIds.includes(channel.ruleId)" class="h-4 w-4 text-primary" />
+                    <Square v-else class="h-4 w-4" />
+                  </button>
+                </td>
+                <td class="px-5 py-4 align-top">
                   <div class="font-medium text-foreground">{{ channel.adminAccountName || channel.adminAccountId }}</div>
                   <div class="mt-1 text-xs text-muted-foreground">{{ channel.siteName }} · {{ channel.upstreamGroupName }}</div>
+                  <div class="mt-2 flex flex-wrap gap-1.5">
+                    <span :class="['rounded-md border px-2 py-0.5 text-[11px] font-medium', channel.enabled ? 'border-emerald-500/20 bg-emerald-500/10 text-emerald-600' : 'border-sky-500/20 bg-sky-500/10 text-sky-600']">
+                      {{ channel.enabled ? t('admin.channelMonitor.flags.monitorOn') : t('admin.channelMonitor.flags.monitorOff') }}
+                    </span>
+                    <span :class="['rounded-md border px-2 py-0.5 text-[11px] font-medium', channel.schedulable === false ? 'border-zinc-500/20 bg-zinc-500/10 text-zinc-600' : 'border-emerald-500/20 bg-emerald-500/10 text-emerald-600']">
+                      {{ channel.schedulable === false ? t('admin.channelMonitor.flags.dispatchOff') : t('admin.channelMonitor.flags.dispatchOn') }}
+                    </span>
+                  </div>
                 </td>
-                <td class="px-5 py-4">
+                <td class="px-5 py-4 align-top">
                   <div class="flex flex-wrap gap-1.5">
                     <span v-for="group in channel.ownGroups" :key="group" class="rounded-md border border-border/50 bg-surface-elevated px-2 py-0.5 text-xs font-medium text-muted-foreground">
                       {{ group }}
@@ -274,7 +438,7 @@ const saveEditor = async () => {
                   </div>
                   <div class="mt-1 text-xs text-muted-foreground">{{ channel.groupType || t('admin.channelMonitor.common.unknown') }}</div>
                 </td>
-                <td class="px-5 py-4">
+                <td class="px-5 py-4 align-top">
                   <span :class="['inline-flex items-center gap-1.5 rounded-md border px-2 py-1 text-xs font-semibold', statusClass(channel.status)]">
                     <component :is="statusIcon(channel.status)" class="h-3.5 w-3.5" />
                     {{ statusLabel(channel.status) }}
@@ -283,27 +447,55 @@ const saveEditor = async () => {
                     {{ t('admin.channelMonitor.channels.failures', { count: channel.consecutiveFailures }) }}
                   </div>
                 </td>
-                <td class="px-5 py-4">
+                <td class="px-5 py-4 align-top">
                   <div class="font-mono text-foreground">{{ formatMoney(channel.balance) }}</div>
                   <div class="text-xs text-muted-foreground">{{ t('admin.channelMonitor.channels.threshold', { value: channel.balanceThreshold }) }}</div>
                 </td>
-                <td class="px-5 py-4">
-                  <div class="text-xs text-muted-foreground">{{ formatDateTime(channel.lastCheckedAt) }}</div>
+                <td class="px-5 py-4 align-top">
+                  <div class="flex items-center justify-between gap-3 text-xs text-muted-foreground">
+                    <span>{{ t('admin.channelMonitor.timeline.window') }}</span>
+                    <span>{{ channel.recentTotal ? `${channel.uptimePercent.toFixed(0)}%` : '-' }}</span>
+                  </div>
+                  <div class="mt-2 grid h-8 grid-cols-[repeat(60,minmax(3px,1fr))] gap-0.5">
+                    <span
+                      v-for="(result, index) in timelineItems(channel)"
+                      :key="`${channel.ruleId}-${index}-${result?.id ?? 'empty'}`"
+                      :class="['h-8 rounded-sm', timelineClass(result)]"
+                      :title="timelineTitle(result)"
+                    />
+                  </div>
+                  <div class="mt-1 flex justify-between text-[10px] uppercase text-muted-foreground">
+                    <span>{{ t('admin.channelMonitor.timeline.past') }}</span>
+                    <span>{{ t('admin.channelMonitor.timeline.now') }}</span>
+                  </div>
+                </td>
+                <td class="px-5 py-4 align-top">
+                  <div class="flex items-center gap-1.5 text-xs text-muted-foreground">
+                    <Clock3 class="h-3.5 w-3.5" />
+                    {{ formatDateTime(channel.lastCheckedAt) }}
+                  </div>
+                  <div class="mt-1 flex items-center gap-1.5 text-xs text-muted-foreground">
+                    <Gauge class="h-3.5 w-3.5" />
+                    {{ formatLatency(channel.lastLatencyMs) }}
+                  </div>
+                  <div class="mt-1 text-xs text-muted-foreground">{{ t('admin.channelMonitor.channels.next', { value: formatDateTime(channel.nextCheckAt) }) }}</div>
                   <div class="mt-1 max-w-[240px] truncate text-xs text-muted-foreground" :title="channel.lastMessage">{{ channel.lastMessage || '-' }}</div>
                 </td>
-                <td class="px-5 py-4">
+                <td class="px-5 py-4 align-top">
                   <div class="flex justify-end gap-1.5">
                     <Button variant="secondary" size="sm" class="gap-1.5" :disabled="isActionLoading || !channel.supported" @click="runAction(() => runChannelMonitorRule(channel.ruleId))">
                       <RefreshCw class="h-3.5 w-3.5" />
                       {{ t('admin.channelMonitor.actions.run') }}
                     </Button>
-                    <Button v-if="channel.manualPaused" size="sm" class="gap-1.5" :disabled="isActionLoading || !channel.supported" @click="runAction(() => resumeChannelMonitorRule(channel.ruleId))">
-                      <Play class="h-3.5 w-3.5" />
-                      {{ t('admin.channelMonitor.actions.resume') }}
+                    <Button variant="secondary" size="sm" class="gap-1.5" :disabled="isActionLoading" @click="toggleChannelMonitoring(channel)">
+                      <Play v-if="!channel.enabled" class="h-3.5 w-3.5" />
+                      <PauseCircle v-else class="h-3.5 w-3.5" />
+                      {{ channel.enabled ? t('admin.channelMonitor.actions.disableMonitor') : t('admin.channelMonitor.actions.enableMonitor') }}
                     </Button>
-                    <Button v-else variant="secondary" size="sm" class="gap-1.5" :disabled="isActionLoading || !channel.supported" @click="runAction(() => pauseChannelMonitorRule(channel.ruleId))">
-                      <PauseCircle class="h-3.5 w-3.5" />
-                      {{ t('admin.channelMonitor.actions.pause') }}
+                    <Button variant="secondary" size="sm" class="gap-1.5" :disabled="isActionLoading || !channel.supported" @click="toggleChannelSchedulable(channel)">
+                      <Power v-if="channel.schedulable === false" class="h-3.5 w-3.5" />
+                      <PowerOff v-else class="h-3.5 w-3.5" />
+                      {{ channel.schedulable === false ? t('admin.channelMonitor.actions.enableDispatch') : t('admin.channelMonitor.actions.disableDispatch') }}
                     </Button>
                     <Button variant="ghost" size="sm" :disabled="isActionLoading" @click="openEditor(channel)">
                       <Settings2 class="h-3.5 w-3.5" />
@@ -312,7 +504,7 @@ const saveEditor = async () => {
                 </td>
               </tr>
               <tr v-if="filteredChannels.length === 0">
-                <td colspan="6" class="px-5 py-16 text-center text-sm text-muted-foreground">{{ t('admin.channelMonitor.empty') }}</td>
+                <td colspan="8" class="px-5 py-16 text-center text-sm text-muted-foreground">{{ t('admin.channelMonitor.empty') }}</td>
               </tr>
             </tbody>
           </table>
@@ -320,9 +512,11 @@ const saveEditor = async () => {
       </section>
     </div>
 
-    <div v-if="editingChannel" class="fixed inset-0 z-50 flex items-center justify-center bg-background/80 p-4 backdrop-blur-sm">
+    <div v-if="editingChannel || isBulkEditorOpen" class="fixed inset-0 z-50 flex items-center justify-center bg-background/80 p-4 backdrop-blur-sm">
       <div class="w-full max-w-md rounded-xl border border-border/50 bg-card p-6 shadow-xl">
-        <h2 class="text-lg font-semibold text-foreground">{{ t('admin.channelMonitor.editor.title') }}</h2>
+        <h2 class="text-lg font-semibold text-foreground">
+          {{ isBulkEditorOpen ? t('admin.channelMonitor.editor.bulkTitle', { count: selectedCount }) : t('admin.channelMonitor.editor.title') }}
+        </h2>
         <div class="mt-5 space-y-4">
           <label class="flex items-center justify-between gap-4">
             <span class="text-sm font-medium text-foreground">{{ t('admin.channelMonitor.editor.enabled') }}</span>

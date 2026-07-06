@@ -13,6 +13,8 @@ export interface ChannelMonitorStats {
   failed: number
   balancePaused: number
   manualPaused: number
+  monitorPaused: number
+  dispatchPaused: number
   unsupported: number
 }
 
@@ -24,6 +26,8 @@ export interface ChannelMonitorGroup {
   failed: number
   balancePaused: number
   manualPaused: number
+  monitorPaused: number
+  dispatchPaused: number
   lastCheckedAt: string | null
 }
 
@@ -33,6 +37,7 @@ export interface ChannelMonitorChannel {
   enabled: boolean
   supported: boolean
   manualPaused: boolean
+  schedulable: boolean | null
   status: ChannelMonitorStatus
   siteId: string
   siteName: string
@@ -52,6 +57,10 @@ export interface ChannelMonitorChannel {
   lastLatencyMs: number | null
   lastCheckedAt: string | null
   nextCheckAt: string | null
+  recentResults: ChannelMonitorResult[]
+  recentTotal: number
+  recentSuccess: number
+  uptimePercent: number
 }
 
 export interface ChannelMonitorSummary {
@@ -65,6 +74,10 @@ export interface UpdateChannelMonitorRuleRequest {
   checkIntervalMinutes?: number
   failureThreshold?: number
   balanceThreshold?: number
+}
+
+export interface BulkUpdateChannelMonitorRuleRequest extends UpdateChannelMonitorRuleRequest {
+  ruleIds: string[]
 }
 
 export interface ChannelMonitorResult {

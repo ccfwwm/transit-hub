@@ -19,7 +19,11 @@ func RegisterRoutes(mux *http.ServeMux, service *Service) {
 	mux.HandleFunc("POST /api/channel-monitor/rules/{id}/run", handler.runRule)
 	mux.HandleFunc("POST /api/channel-monitor/rules/{id}/pause", handler.pauseRule)
 	mux.HandleFunc("POST /api/channel-monitor/rules/{id}/resume", handler.resumeRule)
+	mux.HandleFunc("POST /api/channel-monitor/rules/{id}/schedulable", handler.setSchedulable)
 	mux.HandleFunc("PATCH /api/channel-monitor/rules/{id}", handler.updateRule)
+	mux.HandleFunc("PATCH /api/channel-monitor/rules/bulk", handler.bulkUpdateRules)
+	mux.HandleFunc("POST /api/channel-monitor/rules/bulk/run", handler.bulkRunRules)
+	mux.HandleFunc("POST /api/channel-monitor/rules/bulk/schedulable", handler.bulkSetSchedulable)
 }
 
 func (h *Handler) summary(w http.ResponseWriter, r *http.Request) {
@@ -95,6 +99,80 @@ func (h *Handler) updateRule(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	httpjson.Write(w, http.StatusOK, rule)
+}
+
+func (h *Handler) setSchedulable(w http.ResponseWriter, r *http.Request) {
+	userID, ok := authctx.UserID(r.Context())
+	if !ok {
+		httpjson.WriteError(w, http.StatusUnauthorized, "auth.errors.unauthorized")
+		return
+	}
+	var req SetSchedulableRequest
+	if err := httpjson.Decode(r, &req); err != nil {
+		httpjson.WriteError(w, http.StatusBadRequest, "admin.channelMonitor.errors.request")
+		return
+	}
+	if err := h.service.SetRuleSchedulable(r.Context(), userID, r.PathValue("id"), req.Schedulable); err != nil {
+		writeMonitorError(w, err)
+		return
+	}
+	httpjson.Write(w, http.StatusOK, map[string]bool{"success": true})
+}
+
+func (h *Handler) bulkUpdateRules(w http.ResponseWriter, r *http.Request) {
+	userID, ok := authctx.UserID(r.Context())
+	if !ok {
+		httpjson.WriteError(w, http.StatusUnauthorized, "auth.errors.unauthorized")
+		return
+	}
+	var req BulkUpdateRuleRequest
+	if err := httpjson.Decode(r, &req); err != nil {
+		httpjson.WriteError(w, http.StatusBadRequest, "admin.channelMonitor.errors.request")
+		return
+	}
+	rules, err := h.service.BulkUpdateRules(r.Context(), userID, req)
+	if err != nil {
+		writeMonitorError(w, err)
+		return
+	}
+	httpjson.Write(w, http.StatusOK, rules)
+}
+
+func (h *Handler) bulkRunRules(w http.ResponseWriter, r *http.Request) {
+	userID, ok := authctx.UserID(r.Context())
+	if !ok {
+		httpjson.WriteError(w, http.StatusUnauthorized, "auth.errors.unauthorized")
+		return
+	}
+	var req BulkRunRequest
+	if err := httpjson.Decode(r, &req); err != nil {
+		httpjson.WriteError(w, http.StatusBadRequest, "admin.channelMonitor.errors.request")
+		return
+	}
+	results, err := h.service.BulkRunRules(r.Context(), userID, req)
+	if err != nil {
+		writeMonitorError(w, err)
+		return
+	}
+	httpjson.Write(w, http.StatusOK, results)
+}
+
+func (h *Handler) bulkSetSchedulable(w http.ResponseWriter, r *http.Request) {
+	userID, ok := authctx.UserID(r.Context())
+	if !ok {
+		httpjson.WriteError(w, http.StatusUnauthorized, "auth.errors.unauthorized")
+		return
+	}
+	var req BulkSchedulableRequest
+	if err := httpjson.Decode(r, &req); err != nil {
+		httpjson.WriteError(w, http.StatusBadRequest, "admin.channelMonitor.errors.request")
+		return
+	}
+	if err := h.service.BulkSetSchedulable(r.Context(), userID, req); err != nil {
+		writeMonitorError(w, err)
+		return
+	}
+	httpjson.Write(w, http.StatusOK, map[string]bool{"success": true})
 }
 
 func writeMonitorError(w http.ResponseWriter, err error) {

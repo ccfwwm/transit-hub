@@ -29,3 +29,19 @@ func (a PlatformAdapter) TestSub2APIAdminAccount(session upstream.Session, accou
 func (a PlatformAdapter) SetSub2APIAdminAccountSchedulable(session upstream.Session, accountID string, schedulable bool) error {
 	return a.platform.SetSub2APIAdminAccountSchedulable(session, accountID, schedulable)
 }
+
+func (a PlatformAdapter) ListSub2APIAdminAccounts(session upstream.Session) ([]AdminAccountStatus, error) {
+	accounts, err := a.platform.ListSub2APIAdminAccounts(session)
+	if err != nil {
+		return nil, err
+	}
+	statuses := make([]AdminAccountStatus, 0, len(accounts))
+	for _, account := range accounts {
+		statuses = append(statuses, AdminAccountStatus{
+			ID:          account.ID,
+			Name:        account.Name,
+			Schedulable: account.Schedulable,
+		})
+	}
+	return statuses, nil
+}

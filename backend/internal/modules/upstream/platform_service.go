@@ -1327,6 +1327,41 @@ func (s *PlatformService) CreateSub2APIAdminAccount(session Session, payload map
 	return accountID, nil
 }
 
+func (s *PlatformService) ListSub2APIAdminAccounts(session Session) ([]Sub2APIAdminAccountStatus, error) {
+	if session.Platform != PlatformSub2API || strings.TrimSpace(session.AccessToken) == "" {
+		return nil, newRequestError(ErrorAuth, PlatformSub2API)
+	}
+	response, err := s.httpClient.requestJSON(session.BaseURL+"/api/v1/admin/accounts?page=1&page_size=1000", requestOptions{
+		AccessToken: session.AccessToken,
+		TokenType:   session.TokenType,
+	})
+	if err != nil {
+		return nil, err
+	}
+	items := dataArray(response.Payload)
+	accounts := make([]Sub2APIAdminAccountStatus, 0, len(items))
+	for _, item := range items {
+		record, ok := item.(map[string]any)
+		if !ok {
+			continue
+		}
+		id := groupID2(record)
+		if strings.TrimSpace(id) == "" {
+			continue
+		}
+		name := ""
+		if value := firstString(record, []string{"name", "username", "display_name", "displayName"}); value != nil {
+			name = *value
+		}
+		accounts = append(accounts, Sub2APIAdminAccountStatus{
+			ID:          id,
+			Name:        name,
+			Schedulable: firstBool(record, []string{"schedulable", "is_schedulable", "isSchedulable"}),
+		})
+	}
+	return accounts, nil
+}
+
 // DeleteSub2APIKey 删除上游 Sub2API 站点的指定 API Key。
 func (s *PlatformService) DeleteSub2APIKey(session Session, keyID string) error {
 	if session.Platform != PlatformSub2API || strings.TrimSpace(session.AccessToken) == "" {

@@ -95,7 +95,7 @@ func TestRunRulePausesAfterFailureThreshold(t *testing.T) {
 	if second.Status != StatusAutoPaused {
 		t.Fatalf("expected auto paused result, got %+v", second)
 	}
-	if got := service.platform.schedulableCalls; len(got) != 1 || got[0] {
+	if got := service.platform.schedulableCalls; len(got) != 1 || got[0].Schedulable {
 		t.Fatalf("expected one disable call, got %+v", got)
 	}
 }
@@ -116,7 +116,7 @@ func TestRunRulePausesWhenBalanceBelowThreshold(t *testing.T) {
 	if result.Status != StatusBalancePaused {
 		t.Fatalf("expected balance paused, got %+v", result)
 	}
-	if got := service.platform.schedulableCalls; len(got) != 1 || got[0] {
+	if got := service.platform.schedulableCalls; len(got) != 1 || got[0].Schedulable {
 		t.Fatalf("expected one disable call, got %+v", got)
 	}
 }
@@ -137,7 +137,7 @@ func TestRunRuleRestoresAutoPausedHealthyChannel(t *testing.T) {
 	if result.Status != StatusHealthy {
 		t.Fatalf("expected healthy result, got %+v", result)
 	}
-	if got := service.platform.schedulableCalls; len(got) != 1 || !got[0] {
+	if got := service.platform.schedulableCalls; len(got) != 1 || !got[0].Schedulable {
 		t.Fatalf("expected one enable call, got %+v", got)
 	}
 }
@@ -164,29 +164,132 @@ func TestManualPausedRuleDoesNotAutoRestore(t *testing.T) {
 	}
 }
 
-func TestResumeRuleRestoresManualPausedHealthyChannel(t *testing.T) {
+func TestSetRuleEnabledOnlyControlsDetection(t *testing.T) {
 	ctx := context.Background()
 	repo := newFakeRepository()
 	service := newTestService(repo)
 	rule := repo.mustRule("conn-1")
-	rule.ManualPaused = true
-	rule.LastStatus = StatusManualPaused
+
+	updated, err := service.UpdateRule(ctx, "user-1", rule.ID, UpdateRuleRequest{Enabled: boolPtr(false)})
+	if err != nil {
+		t.Fatalf("UpdateRule returned error: %v", err)
+	}
+
+	if updated.Enabled {
+		t.Fatalf("expected monitoring disabled, got %+v", updated)
+	}
+	if got := service.platform.schedulableCalls; len(got) != 0 {
+		t.Fatalf("monitor toggle must not change schedulable, got %+v", got)
+	}
+}
+
+func TestManualRunStillChecksDisabledRule(t *testing.T) {
+	ctx := context.Background()
+	repo := newFakeRepository()
+	service := newTestService(repo)
+	rule := repo.mustRule("conn-1")
+	rule.Enabled = false
 	repo.rules[rule.ID] = rule
 
-	result, err := service.ResumeRule(ctx, "user-1", rule.ID)
+	result, err := service.RunRuleForUser(ctx, "user-1", rule.ID, "manual")
 	if err != nil {
-		t.Fatalf("ResumeRule returned error: %v", err)
+		t.Fatalf("RunRuleForUser returned error: %v", err)
 	}
 
 	if result.Status != StatusHealthy {
-		t.Fatalf("expected healthy result, got %+v", result)
+		t.Fatalf("expected manual run to perform a real check, got %+v", result)
 	}
-	if got := service.platform.schedulableCalls; len(got) != 1 || !got[0] {
-		t.Fatalf("expected one enable call, got %+v", got)
+}
+
+func TestSetRuleSchedulableOnlyControlsRemoteDispatch(t *testing.T) {
+	ctx := context.Background()
+	repo := newFakeRepository()
+	service := newTestService(repo)
+	rule := repo.mustRule("conn-1")
+
+	if err := service.SetRuleSchedulable(ctx, "user-1", rule.ID, false); err != nil {
+		t.Fatalf("SetRuleSchedulable returned error: %v", err)
 	}
+
 	updated := repo.mustRule("conn-1")
-	if updated.ManualPaused {
-		t.Fatalf("expected manual pause cleared, got %+v", updated)
+	if !updated.Enabled {
+		t.Fatalf("dispatch toggle must not disable monitoring, got %+v", updated)
+	}
+	if got := service.platform.schedulableCalls; len(got) != 1 || got[0].AccountID != "123" || got[0].Schedulable {
+		t.Fatalf("expected one remote disable call for account 123, got %+v", got)
+	}
+}
+
+func TestBulkUpdateRulesAppliesSelectedRules(t *testing.T) {
+	ctx := context.Background()
+	repo := newFakeRepository()
+	second := DefaultRule("user-1", "admin-1", "conn-2")
+	repo.rules[second.ID] = second
+	service := newTestService(repo)
+	service.conns.connections = append(service.conns.connections, my_sites.RealConnection{
+		ID:                "conn-2",
+		UpstreamSiteID:    "site-1",
+		UpstreamGroupID:   "g-upstream-2",
+		UpstreamGroupName: "GPT-4.1",
+		AdminAccountID:    "456",
+		AdminAccountName:  "A-【site】-GPT-4.1",
+		OwnGroupIDs:       []string{"own-1"},
+		GroupType:         "openai",
+	})
+
+	updated, err := service.BulkUpdateRules(ctx, "user-1", BulkUpdateRuleRequest{
+		RuleIDs:              []string{"conn-1"},
+		Enabled:              boolPtr(false),
+		CheckIntervalMinutes: intPtr(3),
+		FailureThreshold:     intPtr(5),
+		BalanceThreshold:     floatPtr(2.5),
+	})
+	if err != nil {
+		t.Fatalf("BulkUpdateRules returned error: %v", err)
+	}
+	if len(updated) != 1 || updated[0].ID != "conn-1" {
+		t.Fatalf("expected only conn-1 updated, got %+v", updated)
+	}
+	first := repo.mustRule("conn-1")
+	if first.Enabled || first.CheckIntervalMinutes != 3 || first.FailureThreshold != 5 || first.BalanceThreshold != 2.5 {
+		t.Fatalf("unexpected first rule after bulk update: %+v", first)
+	}
+	other := repo.mustRule("conn-2")
+	if !other.Enabled || other.CheckIntervalMinutes != DefaultCheckIntervalMinutes {
+		t.Fatalf("unselected rule should remain unchanged, got %+v", other)
+	}
+}
+
+func TestSummaryIncludesRemoteSchedulableAndRecentResults(t *testing.T) {
+	ctx := context.Background()
+	repo := newFakeRepository()
+	repo.results = append(repo.results,
+		Result{ID: "r1", RuleID: "conn-1", ConnectionID: "conn-1", Status: StatusHealthy, Success: true, LatencyMS: intPtr(40)},
+		Result{ID: "r2", RuleID: "conn-1", ConnectionID: "conn-1", Status: StatusFailed, Success: false},
+	)
+	service := newTestService(repo)
+	disabled := false
+	service.platform.accounts = []AdminAccountStatus{{ID: "123", Name: "A-【site】-GPT-4o", Schedulable: &disabled}}
+
+	summary, err := service.Summary(ctx, "user-1")
+	if err != nil {
+		t.Fatalf("Summary returned error: %v", err)
+	}
+	if summary.Stats.DispatchPaused != 1 {
+		t.Fatalf("expected one dispatch paused channel, got %+v", summary.Stats)
+	}
+	if summary.Stats.Available != 0 {
+		t.Fatalf("schedulable=false should not count as available, got %+v", summary.Stats)
+	}
+	channel := summary.Channels[0]
+	if channel.Schedulable == nil || *channel.Schedulable {
+		t.Fatalf("expected schedulable=false in channel status, got %+v", channel.Schedulable)
+	}
+	if len(channel.RecentResults) != 2 {
+		t.Fatalf("expected recent results in summary, got %+v", channel.RecentResults)
+	}
+	if channel.RecentTotal != 2 || channel.RecentSuccess != 1 || channel.UptimePercent != 50 {
+		t.Fatalf("unexpected recent stats: total=%d success=%d uptime=%.1f", channel.RecentTotal, channel.RecentSuccess, channel.UptimePercent)
 	}
 }
 
@@ -244,20 +347,29 @@ func (r *fakeRepository) AddResult(_ context.Context, result Result) error {
 	return nil
 }
 func (r *fakeRepository) ListRecentResults(context.Context, string, int) ([]Result, error) {
-	return nil, nil
+	results := []Result{}
+	for _, result := range r.results {
+		if result.RuleID == "conn-1" {
+			results = append(results, result)
+		}
+	}
+	return results, nil
 }
 func (r *fakeRepository) ListDueRules(context.Context, int) ([]Rule, error) { return nil, nil }
 
 type fakeConnections struct {
-	conn my_sites.RealConnection
+	connections []my_sites.RealConnection
 }
 
-func (f fakeConnections) ListRealConnections(context.Context, string, string) ([]my_sites.RealConnection, error) {
-	return []my_sites.RealConnection{f.conn}, nil
+func (f *fakeConnections) ListRealConnections(context.Context, string, string) ([]my_sites.RealConnection, error) {
+	return append([]my_sites.RealConnection(nil), f.connections...), nil
 }
-func (f fakeConnections) GetRealConnection(_ context.Context, id, _ string, _ string) (*my_sites.RealConnection, error) {
-	if id == f.conn.ID {
-		return &f.conn, nil
+func (f *fakeConnections) GetRealConnection(_ context.Context, id, _ string, _ string) (*my_sites.RealConnection, error) {
+	for _, conn := range f.connections {
+		if id == conn.ID {
+			next := conn
+			return &next, nil
+		}
 	}
 	return nil, nil
 }
@@ -286,7 +398,13 @@ func (fakeAccounts) RequireCurrentID(context.Context, string) (string, error) {
 
 type fakeMonitorPlatform struct {
 	testErr          error
-	schedulableCalls []bool
+	accounts         []AdminAccountStatus
+	schedulableCalls []schedulableCall
+}
+
+type schedulableCall struct {
+	AccountID   string
+	Schedulable bool
 }
 
 func (f *fakeMonitorPlatform) TestSub2APIAdminAccount(upstream.Session, string, AccountTestOptions) (AccountTestResult, error) {
@@ -296,15 +414,20 @@ func (f *fakeMonitorPlatform) TestSub2APIAdminAccount(upstream.Session, string, 
 	return AccountTestResult{Success: true, Message: "ok", LatencyMS: 42, Model: "gpt-test"}, nil
 }
 
-func (f *fakeMonitorPlatform) SetSub2APIAdminAccountSchedulable(_ upstream.Session, _ string, schedulable bool) error {
-	f.schedulableCalls = append(f.schedulableCalls, schedulable)
+func (f *fakeMonitorPlatform) SetSub2APIAdminAccountSchedulable(_ upstream.Session, accountID string, schedulable bool) error {
+	f.schedulableCalls = append(f.schedulableCalls, schedulableCall{AccountID: accountID, Schedulable: schedulable})
 	return nil
+}
+
+func (f *fakeMonitorPlatform) ListSub2APIAdminAccounts(upstream.Session) ([]AdminAccountStatus, error) {
+	return append([]AdminAccountStatus(nil), f.accounts...), nil
 }
 
 type testService struct {
 	*Service
 	platform  *fakeMonitorPlatform
 	upstreams fakeUpstreams
+	conns     *fakeConnections
 }
 
 func newTestService(repo *fakeRepository) *testService {
@@ -341,6 +464,11 @@ func newTestService(repo *fakeRepository) *testService {
 			{OwnGroup: "PLUS", UpstreamTargets: []my_sites.UpstreamGroupRef{{SiteID: "site-1", GroupName: "GPT-4o"}}},
 		},
 	}
-	service := NewService(repo, fakeConnections{conn: conn}, fakeStateStore{state: state}, upstreams, platform, fakeAccounts{})
-	return &testService{Service: service, platform: platform, upstreams: upstreams}
+	conns := &fakeConnections{connections: []my_sites.RealConnection{conn}}
+	service := NewService(repo, conns, fakeStateStore{state: state}, upstreams, platform, fakeAccounts{})
+	return &testService{Service: service, platform: platform, upstreams: upstreams, conns: conns}
 }
+
+func boolPtr(value bool) *bool        { return &value }
+func intPtr(value int) *int           { return &value }
+func floatPtr(value float64) *float64 { return &value }

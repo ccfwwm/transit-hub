@@ -128,7 +128,9 @@ export default {
         available: '可用',
         failed: '故障',
         balancePaused: '余额停用',
-        manualPaused: '手动停用'
+        manualPaused: '手动停用',
+        monitorPaused: '检测停用',
+        dispatchPaused: '调度停用'
       },
       filters: {
         search: '搜索站点、渠道或分组...',
@@ -142,7 +144,15 @@ export default {
         auto_paused: '自动停用',
         balance_paused: '余额不足',
         manual_paused: '手动停用',
+        monitor_paused: '检测停用',
+        dispatch_paused: '调度停用',
         unsupported: '暂不支持'
+      },
+      flags: {
+        monitorOn: '检测开',
+        monitorOff: '检测停',
+        dispatchOn: '调度开',
+        dispatchOff: '调度停'
       },
       groups: {
         title: '分组概览',
@@ -150,6 +160,7 @@ export default {
         columns: {
           group: '分组',
           available: '可用',
+          paused: '检测/调度停用',
           last: '最后检测'
         }
       },
@@ -161,14 +172,32 @@ export default {
           group: '我的分组',
           status: '状态',
           balance: '余额',
+          timeline: '近况',
           last: '最近检测',
           actions: '操作'
         },
         failures: '连续失败 {count} 次',
-        threshold: '阈值 {value}'
+        threshold: '阈值 {value}',
+        next: '下次 {value}'
+      },
+      timeline: {
+        window: '近 60 次记录',
+        past: 'PAST',
+        now: 'NOW',
+        empty: '暂无记录'
+      },
+      bulk: {
+        selected: '已选 {count} 个',
+        run: '检测选中',
+        enableMonitor: '启用检测',
+        disableMonitor: '停用检测',
+        enableDispatch: '开启分组调度',
+        disableDispatch: '停用分组调度',
+        editRules: '批量设置规则'
       },
       editor: {
         title: '监控规则',
+        bulkTitle: '批量设置 {count} 条规则',
         enabled: '启用监控',
         interval: '检测间隔（分钟）',
         failureThreshold: '连续失败阈值',
@@ -179,6 +208,11 @@ export default {
         run: '检测',
         pause: '停止',
         resume: '启动',
+        selectAll: '全选当前筛选',
+        enableMonitor: '启用检测',
+        disableMonitor: '停用检测',
+        enableDispatch: '开启分组调度',
+        disableDispatch: '停用分组调度',
         cancel: '取消',
         save: '保存'
       },
@@ -186,6 +220,7 @@ export default {
         network: '网络异常，请检查连接后重试。',
         request: '状态监控操作失败，请稍后重试。',
         notFound: '监控规则不存在。',
+        unsupported: '当前渠道暂不支持该操作。',
         unknown: '状态监控服务异常。'
       }
     },

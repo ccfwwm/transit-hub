@@ -105,6 +105,15 @@ func firstString(value any, keys []string) *string {
 	return nil
 }
 
+func firstBool(record map[string]any, keys []string) *bool {
+	for _, key := range keys {
+		if value, ok := record[key].(bool); ok {
+			return &value
+		}
+	}
+	return nil
+}
+
 func firstNumber(value any, keys []string) *float64 {
 	record, ok := value.(map[string]any)
 	if !ok {
