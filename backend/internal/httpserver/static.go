@@ -3,6 +3,7 @@ package httpserver
 import (
 	"net/http"
 	"os"
+	"path"
 	"path/filepath"
 	"strings"
 )
@@ -15,7 +16,7 @@ func staticHandler(publicDir string) http.Handler {
 
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// 安全：禁止路径穿越
-		cleanPath := filepath.Clean(r.URL.Path)
+		cleanPath := path.Clean("/" + strings.TrimPrefix(r.URL.Path, "/"))
 		if strings.Contains(cleanPath, "..") {
 			http.NotFound(w, r)
 			return
@@ -25,8 +26,17 @@ func staticHandler(publicDir string) http.Handler {
 		fullPath := filepath.Join(publicDir, filepath.FromSlash(cleanPath))
 		info, err := os.Stat(fullPath)
 		if err == nil && !info.IsDir() {
-			// 文件存在，直接返回
+			if strings.HasPrefix(cleanPath, "/assets/") {
+				w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
+			} else if cleanPath == "/" || strings.HasSuffix(cleanPath, ".html") {
+				w.Header().Set("Cache-Control", "no-cache, no-store, must-revalidate")
+			}
 			fileServer.ServeHTTP(w, r)
+			return
+		}
+
+		if strings.HasPrefix(cleanPath, "/assets/") {
+			http.NotFound(w, r)
 			return
 		}
 
@@ -36,6 +46,7 @@ func staticHandler(publicDir string) http.Handler {
 			http.NotFound(w, r)
 			return
 		}
+		w.Header().Set("Cache-Control", "no-cache, no-store, must-revalidate")
 		http.ServeFile(w, r, indexPath)
 	})
 }
