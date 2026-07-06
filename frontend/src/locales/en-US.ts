@@ -112,8 +112,82 @@ export default {
       upstream: 'Upstream',
       groupRates: 'Group Rates',
       groupRateCampaigns: 'Rate Campaigns',
+      statusMonitor: 'Status Monitor',
       settings: 'Settings',
       signOut: 'Sign Out'
+    },
+    channelMonitor: {
+      loading: 'Loading status monitor...',
+      empty: 'No connected channels yet.',
+      common: {
+        unknown: 'Unknown',
+        never: 'Never'
+      },
+      stats: {
+        total: 'Total',
+        available: 'Available',
+        failed: 'Failed',
+        balancePaused: 'Balance paused',
+        manualPaused: 'Manual paused'
+      },
+      filters: {
+        search: 'Search sites, channels, or groups...',
+        allGroups: 'All groups',
+        allStatus: 'All status'
+      },
+      status: {
+        unknown: 'Pending',
+        healthy: 'Healthy',
+        failed: 'Failed',
+        auto_paused: 'Auto paused',
+        balance_paused: 'Low balance',
+        manual_paused: 'Manual paused',
+        unsupported: 'Unsupported'
+      },
+      groups: {
+        title: 'Group Overview',
+        subtitle: 'Availability grouped by your own groups.',
+        columns: {
+          group: 'Group',
+          available: 'Available',
+          last: 'Last check'
+        }
+      },
+      channels: {
+        title: 'Channel Details',
+        subtitle: '{count} channels in current filter',
+        columns: {
+          channel: 'Channel',
+          group: 'Own groups',
+          status: 'Status',
+          balance: 'Balance',
+          last: 'Last check',
+          actions: 'Actions'
+        },
+        failures: '{count} consecutive failures',
+        threshold: 'Threshold {value}'
+      },
+      editor: {
+        title: 'Monitor Rule',
+        enabled: 'Enable monitor',
+        interval: 'Check interval (minutes)',
+        failureThreshold: 'Failure threshold',
+        balanceThreshold: 'Balance pause threshold'
+      },
+      actions: {
+        refresh: 'Refresh',
+        run: 'Check',
+        pause: 'Stop',
+        resume: 'Start',
+        cancel: 'Cancel',
+        save: 'Save'
+      },
+      errors: {
+        network: 'Network error. Please retry.',
+        request: 'Status monitor request failed.',
+        notFound: 'Monitor rule not found.',
+        unknown: 'Status monitor service error.'
+      }
     },
     adminAccounts: {
       title: 'Select Workspace',

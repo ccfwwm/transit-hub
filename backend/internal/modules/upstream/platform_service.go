@@ -1353,6 +1353,90 @@ func (s *PlatformService) DeleteSub2APIAdminAccount(session Session, accountID s
 	return err
 }
 
+func (s *PlatformService) SetSub2APIAdminAccountSchedulable(session Session, accountID string, schedulable bool) error {
+	if session.Platform != PlatformSub2API || strings.TrimSpace(session.AccessToken) == "" {
+		return newRequestError(ErrorAuth, PlatformSub2API)
+	}
+	_, err := s.httpClient.requestJSON(session.BaseURL+"/api/v1/admin/accounts/"+accountID+"/schedulable", requestOptions{
+		AccessToken: session.AccessToken,
+		TokenType:   session.TokenType,
+		Method:      http.MethodPost,
+		Body: map[string]any{
+			"schedulable": schedulable,
+		},
+	})
+	return err
+}
+
+func (s *PlatformService) TestSub2APIAdminAccount(session Session, accountID string, options Sub2APIAccountTestOptions) (Sub2APIAccountTestResult, error) {
+	if session.Platform != PlatformSub2API || strings.TrimSpace(session.AccessToken) == "" {
+		return Sub2APIAccountTestResult{}, newRequestError(ErrorAuth, PlatformSub2API)
+	}
+	body := map[string]any{}
+	if strings.TrimSpace(options.ModelID) != "" {
+		body["model_id"] = strings.TrimSpace(options.ModelID)
+	}
+	if strings.TrimSpace(options.Prompt) != "" {
+		body["prompt"] = options.Prompt
+	}
+	started := time.Now()
+	response, err := s.httpClient.requestText(session.BaseURL+"/api/v1/admin/accounts/"+accountID+"/test", requestOptions{
+		AccessToken: session.AccessToken,
+		TokenType:   session.TokenType,
+		Method:      http.MethodPost,
+		Body:        body,
+	})
+	latency := int(time.Since(started).Milliseconds())
+	if err != nil {
+		return Sub2APIAccountTestResult{}, err
+	}
+	return parseSub2APIAccountTestResponse(response.Body, latency), nil
+}
+
+func parseSub2APIAccountTestResponse(raw string, latency int) Sub2APIAccountTestResult {
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" {
+		return Sub2APIAccountTestResult{Success: false, Message: "测试接口未返回内容", LatencyMS: latency}
+	}
+	var record map[string]any
+	if strings.HasPrefix(trimmed, "{") && json.Unmarshal([]byte(trimmed), &record) == nil {
+		payload := dataRecord(record)
+		if nested := dataRecord(record["data"]); len(nested) > 0 {
+			payload = nested
+		}
+		success := false
+		if value, ok := payload["success"].(bool); ok {
+			success = value
+		}
+		message := "账号测试失败"
+		if success {
+			message = "账号测试通过"
+		}
+		if msg := firstString(payload, []string{"message", "error"}); msg != nil && strings.TrimSpace(*msg) != "" {
+			message = *msg
+		}
+		if lm := firstNumber(payload, []string{"latency_ms", "latencyMs"}); lm != nil {
+			latency = int(*lm)
+		}
+		model := ""
+		if value := firstString(payload, []string{"model"}); value != nil {
+			model = *value
+		}
+		return Sub2APIAccountTestResult{Success: success, Message: message, LatencyMS: latency, Model: model}
+	}
+	if strings.Contains(trimmed, `"success":true`) || strings.Contains(trimmed, `"type":"test_complete"`) {
+		return Sub2APIAccountTestResult{Success: true, Message: "账号测试通过", LatencyMS: latency}
+	}
+	message := "账号测试失败"
+	if idx := strings.LastIndex(trimmed, `"error"`); idx >= 0 {
+		message = trimmed[idx:]
+		if len(message) > 200 {
+			message = message[:200]
+		}
+	}
+	return Sub2APIAccountTestResult{Success: false, Message: message, LatencyMS: latency}
+}
+
 // FetchAdminUsageStats 平台中性的管理员今日消费查询。
 // sub2api 返回 actual_cost，new-api 返回 quota 并按 quotaPerUnit 换算为 USD。
 func (s *PlatformService) FetchAdminUsageStats(session Session, startDate, endDate string) (float64, error) {

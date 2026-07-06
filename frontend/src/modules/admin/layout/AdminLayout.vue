@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, ref, onMounted, onBeforeUnmount } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { LayoutDashboard, Network, Settings, LogOut, Globe, Moon, Sun, Percent, Megaphone, ChevronDown, ArrowRightLeft } from 'lucide-vue-next'
+import { LayoutDashboard, Network, Settings, LogOut, Globe, Moon, Sun, Percent, Megaphone, ChevronDown, ArrowRightLeft, Activity } from 'lucide-vue-next'
 import { useDark, useToggle } from '@vueuse/core'
 import { useI18n } from 'vue-i18n'
 import { useAdminAccounts } from '../composables/useAdminAccounts'
@@ -74,6 +74,7 @@ const menuItems = computed(() => [
   { name: t('admin.menu.upstream'), path: '/admin/upstream', icon: Network },
   { name: t('admin.menu.groupRates'), path: '/admin/group-rates', icon: Percent },
   { name: t('admin.menu.groupRateCampaigns'), path: '/admin/group-rate-campaigns', icon: Megaphone },
+  { name: t('admin.menu.statusMonitor'), path: '/admin/status-monitor', icon: Activity },
   { name: t('admin.menu.settings'), path: '/admin/settings', icon: Settings },
 ])
 

@@ -15,6 +15,7 @@ import (
 	"transithub/backend/internal/config"
 	"transithub/backend/internal/modules/admin_accounts"
 	"transithub/backend/internal/modules/auth"
+	"transithub/backend/internal/modules/channel_monitor"
 	"transithub/backend/internal/modules/dashboard"
 	"transithub/backend/internal/modules/group_rate_campaigns"
 	"transithub/backend/internal/modules/group_rates"
@@ -83,6 +84,20 @@ func New(cfg config.Config, db *pgxpool.Pool, redisClient *redis.Client) *Server
 	}
 	my_sites.RegisterRoutes(server.mux, mySitesService)
 	mySitesService.SetAdminAccountResolver(adminAccountsService)
+
+	channelMonitorService := channel_monitor.NewService(
+		channel_monitor.NewRepository(db),
+		my_sites.NewRepository(db),
+		my_sites.NewRepository(db),
+		upstreamService,
+		channel_monitor.NewPlatformAdapter(platformService),
+		adminAccountsService,
+	)
+	if err := channelMonitorService.EnsureSchema(context.Background()); err != nil {
+		panic(err)
+	}
+	channel_monitor.RegisterRoutes(server.mux, channelMonitorService)
+	channelMonitorService.StartScheduler(context.Background())
 
 	settingsService := settings.NewService(http.DefaultClient, settings.NewRepository(db))
 	settingsService.SetAdminAccountResolver(adminAccountsService)
@@ -222,7 +237,7 @@ func (s *Server) Handler() http.Handler {
 }
 
 func (s *Server) protectedPath(path string) bool {
-	return strings.HasPrefix(path, "/api/admin-accounts") || strings.HasPrefix(path, "/api/upstream-sites") || strings.HasPrefix(path, "/api/group-rates") || strings.HasPrefix(path, "/api/group-rate-campaigns") || strings.HasPrefix(path, "/api/my-sites") || strings.HasPrefix(path, "/api/settings") || strings.HasPrefix(path, "/api/dashboard") || strings.HasPrefix(path, "/api/system")
+	return strings.HasPrefix(path, "/api/admin-accounts") || strings.HasPrefix(path, "/api/upstream-sites") || strings.HasPrefix(path, "/api/group-rates") || strings.HasPrefix(path, "/api/group-rate-campaigns") || strings.HasPrefix(path, "/api/channel-monitor") || strings.HasPrefix(path, "/api/my-sites") || strings.HasPrefix(path, "/api/settings") || strings.HasPrefix(path, "/api/dashboard") || strings.HasPrefix(path, "/api/system")
 }
 
 func bearerToken(header string) string {

@@ -259,6 +259,18 @@ type KeyUsageTodayItem struct {
 	RechargeRate float64
 }
 
+type Sub2APIAccountTestOptions struct {
+	ModelID string
+	Prompt  string
+}
+
+type Sub2APIAccountTestResult struct {
+	Success   bool
+	Message   string
+	LatencyMS int
+	Model     string
+}
+
 // BalanceBreakdownItem 是仪表盘「上游总余额」下钻明细中单个站点的余额展示数据。
 // Balance/RawBalance 为 nil 表示该站点余额未知（未配置 rechargeRate 或尚未同步成功）。
 type BalanceBreakdownItem struct {

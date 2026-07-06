@@ -29,6 +29,12 @@ type jsonResponse struct {
 	Header  http.Header
 }
 
+type textResponse struct {
+	Body   string
+	Header http.Header
+	Status int
+}
+
 func NewHTTPClient(client *http.Client) *HTTPClient {
 	return &HTTPClient{client: client}
 }
@@ -88,6 +94,62 @@ func (c *HTTPClient) requestJSON(reqURL string, options requestOptions) (jsonRes
 		return jsonResponse{}, newRequestError(ErrorRequest, "")
 	}
 	return jsonResponse{Payload: payload, Header: response.Header}, nil
+}
+
+func (c *HTTPClient) requestText(reqURL string, options requestOptions) (textResponse, error) {
+	method := options.Method
+	if method == "" {
+		method = http.MethodGet
+	}
+
+	body, err := encodeBody(options.Body)
+	if err != nil {
+		return textResponse{}, err
+	}
+
+	req, err := http.NewRequest(method, reqURL, body)
+	if err != nil {
+		return textResponse{}, newRequestError(ErrorInvalidURL, "")
+	}
+	req.Header.Set("Accept", "text/event-stream, application/json")
+	if options.Body != nil {
+		req.Header.Set("Content-Type", "application/json")
+	}
+	if options.AccessToken != "" {
+		tokenType := options.TokenType
+		if tokenType == "" {
+			tokenType = "Bearer"
+		}
+		req.Header.Set("Authorization", tokenType+" "+options.AccessToken)
+	}
+	req.Header.Set("User-Agent", BrowserUserAgent)
+	if options.Cookie != "" {
+		req.Header.Set("Cookie", options.Cookie)
+	}
+	if options.UserID != "" {
+		req.Header.Set("New-Api-User", options.UserID)
+	}
+
+	response, err := c.client.Do(req)
+	if err != nil {
+		log.Printf("[http-client] 请求失败 url=%s err=%v", reqURL, err)
+		return textResponse{}, newRequestError(ErrorNetwork, "")
+	}
+	defer response.Body.Close()
+
+	data, err := io.ReadAll(response.Body)
+	if err != nil {
+		log.Printf("[http-client] 读取响应体失败 url=%s err=%v", reqURL, err)
+		return textResponse{}, newRequestError(ErrorInvalidResponse, "")
+	}
+	if response.StatusCode < 200 || response.StatusCode >= 300 {
+		log.Printf("[http-client] 非 2xx 响应 url=%s status=%d", reqURL, response.StatusCode)
+		if response.StatusCode == http.StatusUnauthorized {
+			return textResponse{}, newRequestError(ErrorAuth, "")
+		}
+		return textResponse{}, newRequestError(ErrorRequest, "")
+	}
+	return textResponse{Body: string(data), Header: response.Header, Status: response.StatusCode}, nil
 }
 
 func encodeBody(body any) (io.Reader, error) {

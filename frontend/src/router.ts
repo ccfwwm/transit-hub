@@ -53,6 +53,12 @@ const routes = [
         component: () => import('./modules/admin/views/GroupRateCampaignsView.vue')
       },
       {
+        path: 'status-monitor',
+        name: 'AdminStatusMonitor',
+        meta: { requiresWorkspace: true },
+        component: () => import('./modules/admin/views/StatusMonitorView.vue')
+      },
+      {
         path: 'settings',
         name: 'AdminSettings',
         meta: { requiresWorkspace: true },

@@ -112,8 +112,82 @@ export default {
       upstream: '上游管理',
       groupRates: '分组倍率',
       groupRateCampaigns: '活动调价',
+      statusMonitor: '状态监控',
       settings: '系统设置',
       signOut: '退出登录'
+    },
+    channelMonitor: {
+      loading: '正在加载状态监控...',
+      empty: '暂无已对接渠道。',
+      common: {
+        unknown: '未知',
+        never: '未检测'
+      },
+      stats: {
+        total: '总对接',
+        available: '可用',
+        failed: '故障',
+        balancePaused: '余额停用',
+        manualPaused: '手动停用'
+      },
+      filters: {
+        search: '搜索站点、渠道或分组...',
+        allGroups: '全部分组',
+        allStatus: '全部状态'
+      },
+      status: {
+        unknown: '待检测',
+        healthy: '正常',
+        failed: '故障',
+        auto_paused: '自动停用',
+        balance_paused: '余额不足',
+        manual_paused: '手动停用',
+        unsupported: '暂不支持'
+      },
+      groups: {
+        title: '分组概览',
+        subtitle: '按我的分组统计已对接渠道可用性。',
+        columns: {
+          group: '分组',
+          available: '可用',
+          last: '最后检测'
+        }
+      },
+      channels: {
+        title: '渠道明细',
+        subtitle: '当前筛选 {count} 个渠道',
+        columns: {
+          channel: '渠道',
+          group: '我的分组',
+          status: '状态',
+          balance: '余额',
+          last: '最近检测',
+          actions: '操作'
+        },
+        failures: '连续失败 {count} 次',
+        threshold: '阈值 {value}'
+      },
+      editor: {
+        title: '监控规则',
+        enabled: '启用监控',
+        interval: '检测间隔（分钟）',
+        failureThreshold: '连续失败阈值',
+        balanceThreshold: '余额停用阈值'
+      },
+      actions: {
+        refresh: '刷新',
+        run: '检测',
+        pause: '停止',
+        resume: '启动',
+        cancel: '取消',
+        save: '保存'
+      },
+      errors: {
+        network: '网络异常，请检查连接后重试。',
+        request: '状态监控操作失败，请稍后重试。',
+        notFound: '监控规则不存在。',
+        unknown: '状态监控服务异常。'
+      }
     },
     adminAccounts: {
       title: '选择工作区',
