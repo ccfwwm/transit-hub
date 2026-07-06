@@ -14,6 +14,8 @@ services:
       - "127.0.0.1:10621:10621"
     env_file:
       - ../.env.production
+    environment:
+      APP_VERSION: "2.0.1"
 
   postgres:
     image: postgres:16-alpine

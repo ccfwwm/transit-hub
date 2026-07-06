@@ -25,7 +25,7 @@ services:
       # 生产环境建议关闭公开注册，只允许使用初始化管理员登录。
       ALLOW_PUBLIC_REGISTER: "false"
       # 当前运行版本号，仅用于后台纯展示。
-      APP_VERSION: latest
+      APP_VERSION: "2.0.1"
 
   # PostgreSQL 数据库服务。
   postgres:
