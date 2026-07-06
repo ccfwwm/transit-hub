@@ -763,6 +763,7 @@ export default {
       filters: {
         searchLabel: 'Search',
         searchPlaceholder: 'Search site or group...',
+        allSites: 'All Sites',
         typeLabel: 'Group Type',
         platformLabel: 'Site Platform'
       },

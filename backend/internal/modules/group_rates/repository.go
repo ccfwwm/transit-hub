@@ -224,6 +224,7 @@ func (r *Repository) List(ctx context.Context, userID string, adminAccountID str
 	search := strings.ToLower(strings.TrimSpace(query.Search))
 	filterType := strings.TrimSpace(query.Type)
 	filterPlatform := strings.TrimSpace(query.Platform)
+	filterSite := strings.TrimSpace(query.Site)
 	if query.Page < 1 {
 		query.Page = 1
 	}
@@ -333,7 +334,7 @@ func (r *Repository) List(ctx context.Context, userID string, adminAccountID str
 							OR connections.upstream_group_name = latest.group_name
 						)
 				) AS own_group_candidates
-				WHERE own_group <> ''
+				WHERE own_group <> '' AND own_group !~ '^[0-9]+$'
 			) AS mapped_groups ON true
 		), filtered AS (
 			SELECT *
@@ -341,22 +342,24 @@ func (r *Repository) List(ctx context.Context, userID string, adminAccountID str
 			WHERE ($3 = '' OR lower(site_name) LIKE '%' || $3 || '%' OR lower(group_name) LIKE '%' || $3 || '%' OR lower(platform) LIKE '%' || $3 || '%' OR lower(type) LIKE '%' || $3 || '%')
 				AND ($4 = '' OR type = $4)
 				AND ($5 = '' OR platform = $5)
+				AND ($6 = '' OR site_name = $6 OR site_id = $6)
 		), facets AS (
 			SELECT
 				COALESCE(array_agg(DISTINCT type ORDER BY type) FILTER (WHERE type <> ''), ARRAY[]::text[]) AS types,
-				COALESCE(array_agg(DISTINCT platform ORDER BY platform) FILTER (WHERE platform <> ''), ARRAY[]::text[]) AS platforms
+				COALESCE(array_agg(DISTINCT platform ORDER BY platform) FILTER (WHERE platform <> ''), ARRAY[]::text[]) AS platforms,
+				COALESCE(array_agg(DISTINCT site_name ORDER BY site_name) FILTER (WHERE site_name <> ''), ARRAY[]::text[]) AS sites
 			FROM latest
 		), counted AS (
 			SELECT count(*)::int AS total FROM filtered
 		)
 		SELECT filtered.id, filtered.user_id, filtered.site_id, filtered.site_name, filtered.balance, filtered.group_id, filtered.group_name, filtered.platform, filtered.type, filtered.mapped, filtered.mapped_own_groups, filtered.deleted,
-			filtered.multiplier, filtered.recharge_rate, filtered.created_at, filtered.previous_multiplier, counted.total, facets.types, facets.platforms
+			filtered.multiplier, filtered.recharge_rate, filtered.created_at, filtered.previous_multiplier, counted.total, facets.types, facets.platforms, facets.sites
 		FROM filtered
 		CROSS JOIN counted
 		CROSS JOIN facets
 		ORDER BY filtered.mapped DESC, filtered.multiplier * filtered.recharge_rate ASC, filtered.site_name ASC, filtered.group_name ASC, filtered.platform ASC, filtered.type ASC
-		LIMIT $6 OFFSET $7
-	`, userID, adminAccountID, search, filterType, filterPlatform, query.PageSize, offset)
+		LIMIT $7 OFFSET $8
+	`, userID, adminAccountID, search, filterType, filterPlatform, filterSite, query.PageSize, offset)
 	if err != nil {
 		return listRecords{}, err
 	}
@@ -371,6 +374,7 @@ func (r *Repository) List(ctx context.Context, userID string, adminAccountID str
 		}
 		result.Types = facets.Types
 		result.Platforms = facets.Platforms
+		result.Sites = facets.Sites
 	}
 	return result, nil
 }
@@ -497,6 +501,7 @@ func scanListSnapshots(rows pgxRows) (listRecords, error) {
 			&result.Total,
 			&result.Types,
 			&result.Platforms,
+			&result.Sites,
 		); err != nil {
 			return listRecords{}, err
 		}
@@ -555,6 +560,7 @@ func (r *Repository) facets(ctx context.Context, userID string, adminAccountID s
 			SELECT
 				snapshots.user_id,
 				snapshots.site_id,
+				snapshots.site_name,
 				snapshots.group_name,
 				COALESCE(NULLIF(snapshots.group_id, ''), snapshots.group_name) AS group_key,
 				snapshots.platform,
@@ -568,17 +574,18 @@ func (r *Repository) facets(ctx context.Context, userID string, adminAccountID s
 				AND sites.id = snapshots.site_id
 			WHERE snapshots.user_id = $1 AND snapshots.admin_account_id = $2
 		), ranked AS (
-			SELECT platform, type,
+			SELECT platform, type, site_name,
 				ROW_NUMBER() OVER (PARTITION BY user_id, site_key, group_key ORDER BY created_at DESC, id DESC) AS row_number
 			FROM enriched
 		), latest AS (
-			SELECT platform, type FROM ranked WHERE row_number = 1
+			SELECT platform, type, site_name FROM ranked WHERE row_number = 1
 		)
 		SELECT
 			COALESCE(array_agg(DISTINCT type ORDER BY type) FILTER (WHERE type <> ''), ARRAY[]::text[]) AS types,
-			COALESCE(array_agg(DISTINCT platform ORDER BY platform) FILTER (WHERE platform <> ''), ARRAY[]::text[]) AS platforms
+			COALESCE(array_agg(DISTINCT platform ORDER BY platform) FILTER (WHERE platform <> ''), ARRAY[]::text[]) AS platforms,
+			COALESCE(array_agg(DISTINCT site_name ORDER BY site_name) FILTER (WHERE site_name <> ''), ARRAY[]::text[]) AS sites
 		FROM latest
-	`, userID, adminAccountID).Scan(&result.Types, &result.Platforms)
+	`, userID, adminAccountID).Scan(&result.Types, &result.Platforms, &result.Sites)
 	return result, err
 }
 

@@ -22,7 +22,9 @@ const {
   pageSize,
   totalPages,
   types,
+  sites,
   typeFilter,
+  siteFilter,
   isLoading,
   isHistoryLoading,
   isActionLoading,
@@ -33,6 +35,7 @@ const {
   saveType,
   setSearch,
   setTypeFilter,
+  setSiteFilter,
   goToPage,
 } = useGroupRates()
 
@@ -70,10 +73,12 @@ const editTypeOptions = computed(() => {
   return Array.from(options).sort((first, second) => first.localeCompare(second))
 })
 const mappedOwnGroupsForRate = (rate: GroupRate): string[] => {
-  if (rate.mappedOwnGroups?.length) return rate.mappedOwnGroups
-  return mySiteMappings.value
+  const groups = rate.mappedOwnGroups?.length
+    ? rate.mappedOwnGroups
+    : mySiteMappings.value
     .filter((mapping) => mapping.upstreamTargets.some((target) => target.siteId === rate.siteId && target.groupName === rate.groupName))
     .map((mapping) => mapping.ownGroup)
+  return groups.filter(group => !/^\d+$/.test(group.trim()))
 }
 
 const firstMappedOwnGroupForRate = (rate: GroupRate): string => mappedOwnGroupsForRate(rate)[0] ?? ''
@@ -187,6 +192,11 @@ const canSubmitConnect = computed(() => {
 const handleTypeChange = async (event: Event) => {
   const target = event.target as HTMLSelectElement
   await setTypeFilter(target.value)
+}
+
+const handleSiteChange = async (event: Event) => {
+  const target = event.target as HTMLSelectElement
+  await setSiteFilter(target.value)
 }
 
 const formatMultiplier = (value: number | null): string => {
@@ -500,6 +510,20 @@ const historyRowKey = (row: GroupRateHistoryRow, index: number): string => (
             :placeholder="t('admin.groupRates.filters.searchPlaceholder')"
             class="w-full h-10 pl-10 pr-4 rounded-xl bg-surface border border-border/50 focus:border-primary focus:ring-1 focus:ring-primary outline-none transition-all text-sm text-foreground placeholder:text-muted-foreground"
           />
+        </div>
+
+        <div class="relative w-full sm:w-48">
+          <select
+            v-model="siteFilter"
+            class="h-10 w-full rounded-xl border border-border/50 bg-surface px-3 pr-8 text-sm text-foreground outline-none appearance-none transition-all focus:border-primary focus:ring-1 focus:ring-primary"
+            @change="handleSiteChange"
+          >
+            <option value="">{{ t('admin.groupRates.filters.allSites') }}</option>
+            <option v-for="site in sites" :key="site" :value="site">{{ site }}</option>
+          </select>
+          <div class="absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none text-muted-foreground">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg>
+          </div>
         </div>
 
         <div class="relative w-full sm:w-48">

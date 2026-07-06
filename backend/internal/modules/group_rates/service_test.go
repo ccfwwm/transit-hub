@@ -17,7 +17,7 @@ func TestRateRowsIncludeConvertedBalanceAndConnectedOwnGroups(t *testing.T) {
 		Platform:           "sub2api",
 		Type:               "openai",
 		Mapped:             true,
-		MappedOwnGroups:    []string{"PLUS", "PRO"},
+		MappedOwnGroups:    []string{"3", "PLUS", "32", "PRO"},
 		Multiplier:         0.8,
 		RechargeRate:       2,
 		Balance:            &balance,

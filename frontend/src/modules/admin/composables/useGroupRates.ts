@@ -11,9 +11,11 @@ export const useGroupRates = () => {
   const totalPages = ref(1)
   const types = ref<string[]>([])
   const platforms = ref<string[]>([])
+  const sites = ref<string[]>([])
   const search = ref('')
   const typeFilter = ref('')
   const platformFilter = ref('')
+  const siteFilter = ref('')
   const isLoading = ref(false)
   const isHistoryLoading = ref(false)
   const isActionLoading = ref(false)
@@ -29,6 +31,7 @@ export const useGroupRates = () => {
         search: search.value,
         type: typeFilter.value,
         platform: platformFilter.value,
+        site: siteFilter.value,
       })
 
       rates.value = response.items
@@ -38,6 +41,7 @@ export const useGroupRates = () => {
       totalPages.value = response.totalPages
       types.value = response.types
       platforms.value = response.platforms
+      sites.value = response.sites
     } catch (error) {
       errorKey.value = error instanceof Error ? error.message : 'admin.groupRates.errors.unknown'
     } finally {
@@ -62,6 +66,11 @@ export const useGroupRates = () => {
 
   const setPlatformFilter = async (value: string) => {
     platformFilter.value = value
+    await resetPageAndLoadRates()
+  }
+
+  const setSiteFilter = async (value: string) => {
+    siteFilter.value = value
     await resetPageAndLoadRates()
   }
 
@@ -110,9 +119,11 @@ export const useGroupRates = () => {
     totalPages,
     types,
     platforms,
+    sites,
     search,
     typeFilter,
     platformFilter,
+    siteFilter,
     isLoading,
     isHistoryLoading,
     isActionLoading,
@@ -124,6 +135,7 @@ export const useGroupRates = () => {
     setSearch,
     setTypeFilter,
     setPlatformFilter,
+    setSiteFilter,
     goToPage,
   }
 }

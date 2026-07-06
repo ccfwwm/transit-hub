@@ -20,6 +20,7 @@ export interface GroupRatesQuery {
   search: string
   type: string
   platform: string
+  site: string
 }
 
 export interface PaginatedGroupRatesResponse {
@@ -30,6 +31,7 @@ export interface PaginatedGroupRatesResponse {
   totalPages: number
   types: string[]
   platforms: string[]
+  sites: string[]
 }
 
 export interface GroupRateHistoryQuery {

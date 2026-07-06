@@ -763,6 +763,7 @@ export default {
       filters: {
         searchLabel: '搜索',
         searchPlaceholder: '搜索站点或分组...',
+        allSites: '全部站点',
         typeLabel: '分组类型',
         platformLabel: '站点平台'
       },

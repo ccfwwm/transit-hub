@@ -40,6 +40,7 @@ type ListQuery struct {
 	Search   string
 	Type     string
 	Platform string
+	Site     string
 }
 
 type ListResult struct {
@@ -50,6 +51,7 @@ type ListResult struct {
 	TotalPages int       `json:"totalPages"`
 	Types      []string  `json:"types"`
 	Platforms  []string  `json:"platforms"`
+	Sites      []string  `json:"sites"`
 }
 
 type UpdateTypeRequest struct {
@@ -116,4 +118,5 @@ type listRecords struct {
 	Total     int
 	Types     []string
 	Platforms []string
+	Sites     []string
 }

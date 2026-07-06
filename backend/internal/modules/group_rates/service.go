@@ -147,6 +147,7 @@ func (s *Service) List(ctx context.Context, userID string, adminAccountID string
 		TotalPages: totalPages(records.Total, query.PageSize),
 		Types:      records.Types,
 		Platforms:  records.Platforms,
+		Sites:      records.Sites,
 	}, nil
 }
 
@@ -163,7 +164,7 @@ func rateRowsFromRecords(records []snapshotRecord) []RateRow {
 			Platform:          record.Platform,
 			Type:              record.Type,
 			Mapped:            record.Mapped,
-			MappedOwnGroups:   append([]string(nil), record.MappedOwnGroups...),
+			MappedOwnGroups:   visibleOwnGroups(record.MappedOwnGroups),
 			Deleted:           record.Deleted,
 			CurrentMultiplier: record.Multiplier * record.RechargeRate,
 			Delta:             delta,
@@ -222,6 +223,7 @@ func normalizeListQuery(query ListQuery) ListQuery {
 	query.Search = strings.TrimSpace(query.Search)
 	query.Type = strings.TrimSpace(query.Type)
 	query.Platform = strings.TrimSpace(query.Platform)
+	query.Site = strings.TrimSpace(query.Site)
 	if query.Page < 1 {
 		query.Page = 1
 	}
@@ -232,6 +234,35 @@ func normalizeListQuery(query ListQuery) ListQuery {
 		query.PageSize = 100
 	}
 	return query
+}
+
+func visibleOwnGroups(groups []string) []string {
+	visible := make([]string, 0, len(groups))
+	seen := map[string]struct{}{}
+	for _, group := range groups {
+		name := strings.TrimSpace(group)
+		if name == "" || isNumericGroupID(name) {
+			continue
+		}
+		if _, ok := seen[name]; ok {
+			continue
+		}
+		seen[name] = struct{}{}
+		visible = append(visible, name)
+	}
+	return visible
+}
+
+func isNumericGroupID(value string) bool {
+	if value == "" {
+		return false
+	}
+	for _, char := range value {
+		if char < '0' || char > '9' {
+			return false
+		}
+	}
+	return true
 }
 
 func totalPages(total int, pageSize int) int {
