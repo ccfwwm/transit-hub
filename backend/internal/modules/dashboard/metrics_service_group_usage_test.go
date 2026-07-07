@@ -51,6 +51,7 @@ func (f *fakeSessionStore) ActiveSessions(ctx context.Context) ([]ActiveSessionR
 // fakeAdminAccounts 是 AdminAccountService 的内存实现，按 userID 返回固定的当前工作区。
 type fakeAdminAccounts struct {
 	current map[string]string // userID -> adminAccountID
+	upserts []admin_accounts.UpsertInput
 }
 
 func (f *fakeAdminAccounts) RequireCurrentID(ctx context.Context, userID string) (string, error) {
@@ -62,32 +63,70 @@ func (f *fakeAdminAccounts) RequireCurrentID(ctx context.Context, userID string)
 }
 
 func (f *fakeAdminAccounts) UpsertAndSwitch(ctx context.Context, userID string, input admin_accounts.UpsertInput) (admin_accounts.Account, error) {
-	return admin_accounts.Account{}, errors.New("not implemented")
+	f.upserts = append(f.upserts, input)
+	id := f.current[userID]
+	if id == "" {
+		id = "account-1"
+	}
+	return admin_accounts.Account{
+		ID:          id,
+		UserID:      userID,
+		Platform:    input.Platform,
+		BaseURL:     input.BaseURL,
+		Identity:    input.Identity,
+		DisplayName: input.DisplayName,
+		AuthMethod:  input.AuthMethod,
+		Current:     true,
+	}, nil
 }
 
 // fakePlatformClient 是 PlatformClient 的桩实现，只有测试用到的方法有真实行为，
 // 其余方法返回零值以满足接口。
 type fakePlatformClient struct {
-	verifyAdminErr error
-	groups         []upstream.GroupInfo
-	groupsErr      error
-	dailyStats     []upstream.GroupDailyStat
-	dailyStatsErr  error
+	verifyAdminErr        error
+	verifyAdminErrByToken map[string]error
+	groups                []upstream.GroupInfo
+	groupsErr             error
+	dailyStats            []upstream.GroupDailyStat
+	dailyStatsErr         error
 	// capturedSession 记录最后一次调用 FetchAdminGroupDailyStats 时传入的 session，
 	// 用于断言隔离性（不同工作区应使用不同 session）。
 	capturedSession upstream.Session
 	// refreshSessionErr / refreshSessionResult 供 RefreshAdminSession 测试控制 RefreshSession 的行为。
-	refreshSessionErr    error
-	refreshSessionResult *upstream.Session
+	refreshSessionErr         error
+	refreshSessionResult      *upstream.Session
+	loginAdminResult          *upstream.Session
+	loginAdminErr             error
+	loginAdminCalls           int
+	loginSub2APIAdminResult   *upstream.Session
+	loginSub2APIAdminErr      error
+	loginSub2APIAdminCalls    int
+	loginSub2APIAdminBaseURL  string
+	loginSub2APIAdminEmail    string
+	loginSub2APIAdminPassword string
 }
 
 func (f *fakePlatformClient) NormalizeURL(value string) (string, error) { return value, nil }
 
 func (f *fakePlatformClient) LoginAdmin(baseURL string, platform upstream.Platform, account string, password string) (upstream.Session, error) {
+	f.loginAdminCalls++
+	if f.loginAdminErr != nil {
+		return upstream.Session{}, f.loginAdminErr
+	}
+	if f.loginAdminResult != nil {
+		return *f.loginAdminResult, nil
+	}
 	return upstream.Session{}, errors.New("not implemented")
 }
 
-func (f *fakePlatformClient) VerifyAdmin(session upstream.Session) error { return f.verifyAdminErr }
+func (f *fakePlatformClient) VerifyAdmin(session upstream.Session) error {
+	if f.verifyAdminErrByToken != nil {
+		if err, ok := f.verifyAdminErrByToken[session.AccessToken]; ok {
+			return err
+		}
+	}
+	return f.verifyAdminErr
+}
 
 func (f *fakePlatformClient) RefreshSession(session upstream.Session) (upstream.Session, error) {
 	if f.refreshSessionErr != nil {
@@ -121,6 +160,16 @@ func (f *fakePlatformClient) FetchAdminGroupDailyStats(session upstream.Session,
 }
 
 func (f *fakePlatformClient) LoginSub2APIAdmin(baseURL string, email string, password string) (upstream.Session, error) {
+	f.loginSub2APIAdminCalls++
+	f.loginSub2APIAdminBaseURL = baseURL
+	f.loginSub2APIAdminEmail = email
+	f.loginSub2APIAdminPassword = password
+	if f.loginSub2APIAdminErr != nil {
+		return upstream.Session{}, f.loginSub2APIAdminErr
+	}
+	if f.loginSub2APIAdminResult != nil {
+		return *f.loginSub2APIAdminResult, nil
+	}
 	return upstream.Session{}, errors.New("not implemented")
 }
 

@@ -36,6 +36,7 @@ type AdminSession struct {
 	BaseURL         string           `json:"baseUrl"`
 	AuthMethod      string           `json:"authMethod"`
 	Identity        string           `json:"identity"` // 展示用标识：邮箱或登录方式名
+	Password        string           `json:"password,omitempty"`
 	Session         upstream.Session `json:"session"`
 	CreatedAt       int64            `json:"createdAt"`       // 毫秒时间戳
 	LastRefreshedAt int64            `json:"lastRefreshedAt"` // 主 RT 最近一次刷新的毫秒时间戳

@@ -85,7 +85,14 @@ func (s *Service) CurrentAdminSession(ctx context.Context, userID string, adminA
 	if record == nil || !record.Session.IsAuthenticated() {
 		return upstream.Session{}, "", false, nil
 	}
-	return record.Session, record.Identity, true, nil
+	usable, ok, err := s.ensureUsableSession(ctx, userID, adminAccountID, record)
+	if err != nil {
+		return upstream.Session{}, "", false, err
+	}
+	if !ok {
+		return upstream.Session{}, "", false, nil
+	}
+	return usable.Session, usable.Identity, true, nil
 }
 
 func nowMillis() int64 {
@@ -108,17 +115,14 @@ func (s *Service) Status(ctx context.Context, userID string) (StatusResponse, er
 		return StatusResponse{Authenticated: false}, nil
 	}
 
-	if refreshed, changed := s.refreshIfNeeded(record); changed {
-		if err := s.store.Save(ctx, userID, adminAccountID, *refreshed); err != nil {
-			return StatusResponse{}, err
-		}
-		record = refreshed
+	usable, ok, err := s.ensureUsableSession(ctx, userID, adminAccountID, record)
+	if err != nil {
+		return StatusResponse{}, err
 	}
-
-	if err := s.platform.VerifyAdmin(record.Session); err != nil {
+	if !ok {
 		return statusFromRecord(*record, false), nil
 	}
-	return statusFromRecord(*record, true), nil
+	return statusFromRecord(*usable, true), nil
 }
 
 // Login 处理 sub2api 和 new-api 的登录方式，登录成功后保存会话。
@@ -137,6 +141,7 @@ func (s *Service) Login(ctx context.Context, userID string, req LoginRequest) (S
 	method := strings.TrimSpace(req.AuthMethod)
 	var session upstream.Session
 	var identity string
+	var passwordCredential string
 
 	switch platform {
 	case PlatformNewAPI:
@@ -152,6 +157,7 @@ func (s *Service) Login(ctx context.Context, userID string, req LoginRequest) (S
 		session = sess
 		identity = account
 		method = AuthMethodPassword
+		passwordCredential = req.Password
 
 	case PlatformSub2API:
 		switch method {
@@ -166,6 +172,7 @@ func (s *Service) Login(ctx context.Context, userID string, req LoginRequest) (S
 			}
 			session = sess
 			identity = email
+			passwordCredential = req.Password
 
 		case AuthMethodToken:
 			accessToken := strings.TrimSpace(req.AccessToken)
@@ -210,6 +217,7 @@ func (s *Service) Login(ctx context.Context, userID string, req LoginRequest) (S
 		BaseURL:         baseURL,
 		AuthMethod:      method,
 		Identity:        identity,
+		Password:        passwordCredential,
 		Session:         session,
 		CreatedAt:       now,
 		LastRefreshedAt: now,
@@ -252,27 +260,27 @@ func (s *Service) RefreshAdminSession(ctx context.Context, userID string) (Statu
 		return StatusResponse{}, requestError(ErrorAdminOnly)
 	}
 
-	refreshedSession, err := s.platform.RefreshSession(record.Session)
-	if err != nil {
-		return StatusResponse{}, requestError(ErrorAdminOnly)
-	}
-	if err := s.platform.VerifyAdmin(refreshedSession); err != nil {
-		return StatusResponse{}, requestError(ErrorAdminOnly)
-	}
-
 	next := *record
-	next.Session = refreshedSession
-	next.LastRefreshedAt = nowMillis()
-	if err := s.store.Save(ctx, userID, adminAccountID, next); err != nil {
-		return StatusResponse{}, err
+	refreshedSession, err := s.platform.RefreshSession(record.Session)
+	if err == nil {
+		next.Session = refreshedSession
+		next.LastRefreshedAt = nowMillis()
+		if err := s.platform.VerifyAdmin(refreshedSession); err == nil {
+			if err := s.saveSession(ctx, userID, adminAccountID, next); err != nil {
+				return StatusResponse{}, err
+			}
+			return statusFromRecord(next, true), nil
+		}
 	}
 
-	// 同步写入 my_site_states，确保 RealConnect 等功能使用最新的 admin 会话
-	if s.mySiteSync != nil {
-		s.mySiteSync.SyncAdminSession(ctx, userID, adminAccountID, next.Session, next.Identity)
+	recovered, ok, recoverErr := s.reloginWithStoredPassword(ctx, userID, adminAccountID, record)
+	if recoverErr != nil {
+		log.Printf("dashboard admin password relogin failed user_id=%s admin_account_id=%s base_url=%s err=%v", userID, adminAccountID, record.BaseURL, recoverErr)
 	}
-
-	return statusFromRecord(next, true), nil
+	if !ok {
+		return StatusResponse{}, requestError(ErrorAdminOnly)
+	}
+	return statusFromRecord(*recovered, true), nil
 }
 
 // StartRefresher 启动后台协程，周期性扫描活跃会话并刷新临期令牌，随 ctx 结束而退出。
@@ -354,6 +362,91 @@ func (s *Service) refreshIfNeeded(record *AdminSession) (*AdminSession, bool) {
 	next.Session = refreshedSession
 	next.LastRefreshedAt = nowMillis()
 	return &next, true
+}
+
+func (s *Service) ensureUsableSession(ctx context.Context, userID string, adminAccountID string, record *AdminSession) (*AdminSession, bool, error) {
+	if refreshed, changed := s.refreshIfNeeded(record); changed {
+		if err := s.saveSession(ctx, userID, adminAccountID, *refreshed); err != nil {
+			return nil, false, err
+		}
+		record = refreshed
+	}
+	if err := s.platform.VerifyAdmin(record.Session); err == nil {
+		return record, true, nil
+	}
+	recovered, ok, err := s.reloginWithStoredPassword(ctx, userID, adminAccountID, record)
+	if err != nil {
+		log.Printf("dashboard admin password relogin failed user_id=%s admin_account_id=%s base_url=%s err=%v", userID, adminAccountID, record.BaseURL, err)
+		return record, false, nil
+	}
+	if !ok {
+		return record, false, nil
+	}
+	return recovered, true, nil
+}
+
+func (s *Service) reloginWithStoredPassword(ctx context.Context, userID string, adminAccountID string, record *AdminSession) (*AdminSession, bool, error) {
+	if record == nil || record.AuthMethod != AuthMethodPassword {
+		return record, false, nil
+	}
+	if strings.TrimSpace(record.Identity) == "" || record.Password == "" {
+		return record, false, nil
+	}
+	baseURL := strings.TrimSpace(record.BaseURL)
+	if baseURL == "" {
+		baseURL = strings.TrimSpace(record.Session.BaseURL)
+	}
+	if baseURL == "" {
+		return record, false, nil
+	}
+
+	platform := record.Platform
+	if platform == "" {
+		switch record.Session.Platform {
+		case upstream.PlatformNewAPI:
+			platform = PlatformNewAPI
+		default:
+			platform = PlatformSub2API
+		}
+	}
+
+	var session upstream.Session
+	var err error
+	switch platform {
+	case PlatformNewAPI:
+		session, err = s.platform.LoginAdmin(baseURL, upstream.PlatformNewAPI, record.Identity, record.Password)
+	case PlatformSub2API:
+		session, err = s.platform.LoginSub2APIAdmin(baseURL, record.Identity, record.Password)
+	default:
+		return record, false, nil
+	}
+	if err != nil {
+		return record, false, err
+	}
+
+	next := *record
+	next.Platform = platform
+	next.BaseURL = session.BaseURL
+	if next.BaseURL == "" {
+		next.BaseURL = baseURL
+	}
+	next.Session = session
+	next.LastRefreshedAt = nowMillis()
+	if err := s.saveSession(ctx, userID, adminAccountID, next); err != nil {
+		return record, false, err
+	}
+	log.Printf("dashboard admin password relogin succeeded user_id=%s admin_account_id=%s base_url=%s", userID, adminAccountID, next.BaseURL)
+	return &next, true, nil
+}
+
+func (s *Service) saveSession(ctx context.Context, userID string, adminAccountID string, record AdminSession) error {
+	if err := s.store.Save(ctx, userID, adminAccountID, record); err != nil {
+		return err
+	}
+	if s.mySiteSync != nil {
+		s.mySiteSync.SyncAdminSession(ctx, userID, adminAccountID, record.Session, record.Identity)
+	}
+	return nil
 }
 
 func statusFromRecord(record AdminSession, authenticated bool) StatusResponse {
