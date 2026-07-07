@@ -96,6 +96,7 @@ func New(cfg config.Config, db *pgxpool.Pool, redisClient *redis.Client) *Server
 	if err := channelMonitorService.EnsureSchema(context.Background()); err != nil {
 		panic(err)
 	}
+	channelMonitorService.SetSessionProvider(mySitesService)
 	channel_monitor.RegisterRoutes(server.mux, channelMonitorService)
 	channelMonitorService.StartScheduler(context.Background())
 

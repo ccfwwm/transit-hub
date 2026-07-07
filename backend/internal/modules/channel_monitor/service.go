@@ -40,6 +40,10 @@ type StateStore interface {
 	Get(ctx context.Context, userID string, adminAccountID string) (*my_sites.State, error)
 }
 
+type SessionProvider interface {
+	RequireSession(ctx context.Context, userID string, adminAccountID string) (upstream.Session, error)
+}
+
 type UpstreamLookup interface {
 	GetSite(ctx context.Context, siteID string) (*upstream.Site, error)
 }
@@ -59,6 +63,7 @@ type Service struct {
 	store         Store
 	conns         ConnectionStore
 	states        StateStore
+	sessions      SessionProvider
 	upstreams     UpstreamLookup
 	platform      MonitorPlatform
 	accounts      AdminAccountResolver
@@ -74,6 +79,10 @@ func NewService(store Store, conns ConnectionStore, states StateStore, upstreams
 		platform:  platform,
 		accounts:  accounts,
 	}
+}
+
+func (s *Service) SetSessionProvider(provider SessionProvider) {
+	s.sessions = provider
 }
 
 func (s *Service) EnsureSchema(ctx context.Context) error {
@@ -100,7 +109,7 @@ func (s *Service) Summary(ctx context.Context, userID string) (SummaryResponse, 
 		}
 		rulesByConnection[conn.ID] = rule
 	}
-	state, _ := s.states.Get(ctx, userID, adminAccountID)
+	state := s.summaryState(ctx, userID, adminAccountID)
 	accountsByID := s.adminAccountsByID(state)
 	rateRule, err := s.ensureRateRule(ctx, userID, adminAccountID)
 	if err != nil {
@@ -211,7 +220,7 @@ func (s *Service) PauseRule(ctx context.Context, userID, ruleID string) (Rule, e
 	if err != nil {
 		return Rule{}, err
 	}
-	state, err := s.states.Get(ctx, userID, adminAccountID)
+	state, err := s.workspaceState(ctx, userID, adminAccountID)
 	if err != nil {
 		return Rule{}, err
 	}
@@ -248,7 +257,7 @@ func (s *Service) ResumeRule(ctx context.Context, userID, ruleID string) (Result
 	if err != nil {
 		return Result{}, err
 	}
-	state, err := s.states.Get(ctx, userID, adminAccountID)
+	state, err := s.workspaceState(ctx, userID, adminAccountID)
 	if err != nil {
 		return Result{}, err
 	}
@@ -333,7 +342,7 @@ func (s *Service) SetRuleSchedulable(ctx context.Context, userID, ruleID string,
 	if err != nil {
 		return err
 	}
-	state, err := s.states.Get(ctx, userID, adminAccountID)
+	state, err := s.workspaceState(ctx, userID, adminAccountID)
 	if err != nil {
 		return err
 	}
@@ -366,7 +375,7 @@ func (s *Service) SetRulePriority(ctx context.Context, userID, ruleID string, pr
 	if err != nil {
 		return err
 	}
-	state, err := s.states.Get(ctx, userID, adminAccountID)
+	state, err := s.workspaceState(ctx, userID, adminAccountID)
 	if err != nil {
 		return err
 	}
@@ -425,7 +434,7 @@ func (s *Service) RateRuleView(ctx context.Context, userID string) (RateRuleView
 	if err != nil {
 		return RateRuleView{}, err
 	}
-	connections, rulesByConnection, state, accountsByID, err := s.rateRuleContext(ctx, userID, adminAccountID)
+	connections, rulesByConnection, state, accountsByID, err := s.rateRuleContext(ctx, userID, adminAccountID, false)
 	if err != nil {
 		return RateRuleView{}, err
 	}
@@ -479,7 +488,7 @@ func (s *Service) applyRateRuleForWorkspace(ctx context.Context, userID, adminAc
 	if err != nil {
 		return RateApplyResult{}, err
 	}
-	connections, rulesByConnection, state, accountsByID, err := s.rateRuleContext(ctx, userID, adminAccountID)
+	connections, rulesByConnection, state, accountsByID, err := s.rateRuleContext(ctx, userID, adminAccountID, true)
 	if err != nil {
 		return RateApplyResult{}, err
 	}
@@ -656,9 +665,10 @@ func (s *Service) runRule(ctx context.Context, rule Rule, reason string) (Result
 	if conn == nil {
 		return finish(StatusFailed, false, "真实对接记录不存在", nil, "")
 	}
-	state, err := s.states.Get(ctx, rule.UserID, rule.AdminAccountID)
+	state, err := s.workspaceState(ctx, rule.UserID, rule.AdminAccountID)
 	if err != nil {
-		return Result{}, err
+		rule.ConsecutiveFailures = 0
+		return finish(StatusUnknown, true, "admin 登录会话失效，已跳过本次检测："+err.Error(), nil, "")
 	}
 	if state == nil || state.Session.Platform != upstream.PlatformSub2API {
 		rule.ConsecutiveFailures = 0
@@ -751,6 +761,41 @@ func (s *Service) currentAdminAccountID(ctx context.Context, userID string) (str
 		return "", requestError("admin.adminAccounts.errors.noCurrentAccount")
 	}
 	return s.accounts.RequireCurrentID(ctx, userID)
+}
+
+func (s *Service) summaryState(ctx context.Context, userID, adminAccountID string) *my_sites.State {
+	state, err := s.workspaceState(ctx, userID, adminAccountID)
+	if err == nil {
+		return state
+	}
+	log.Printf("[channel-monitor] admin session unavailable user_id=%s admin_account_id=%s err=%v", userID, adminAccountID, err)
+	state, _ = s.states.Get(ctx, userID, adminAccountID)
+	return state
+}
+
+func (s *Service) workspaceState(ctx context.Context, userID, adminAccountID string) (*my_sites.State, error) {
+	state, err := s.states.Get(ctx, userID, adminAccountID)
+	if err != nil {
+		return nil, err
+	}
+	if s.sessions == nil {
+		return state, nil
+	}
+	session, err := s.sessions.RequireSession(ctx, userID, adminAccountID)
+	if err != nil {
+		return state, err
+	}
+	if state == nil {
+		state = &my_sites.State{
+			UserID:         userID,
+			AdminAccountID: adminAccountID,
+			Mappings:       []my_sites.GroupMapping{},
+		}
+	}
+	state.UserID = userID
+	state.AdminAccountID = adminAccountID
+	state.Session = session
+	return state, nil
 }
 
 func (s *Service) channelStatus(ctx context.Context, conn my_sites.RealConnection, rule Rule, state *my_sites.State, accountsByID map[string]AdminAccountStatus) ChannelStatus {
@@ -849,7 +894,7 @@ func (s *Service) ensureRateRule(ctx context.Context, userID, adminAccountID str
 	return defaultRule, nil
 }
 
-func (s *Service) rateRuleContext(ctx context.Context, userID, adminAccountID string) ([]my_sites.RealConnection, map[string]Rule, *my_sites.State, map[string]AdminAccountStatus, error) {
+func (s *Service) rateRuleContext(ctx context.Context, userID, adminAccountID string, requireSession bool) ([]my_sites.RealConnection, map[string]Rule, *my_sites.State, map[string]AdminAccountStatus, error) {
 	connections, err := s.conns.ListRealConnections(ctx, userID, adminAccountID)
 	if err != nil {
 		return nil, nil, nil, nil, err
@@ -862,7 +907,14 @@ func (s *Service) rateRuleContext(ctx context.Context, userID, adminAccountID st
 		}
 		rulesByConnection[conn.ID] = rule
 	}
-	state, _ := s.states.Get(ctx, userID, adminAccountID)
+	state, err := s.workspaceState(ctx, userID, adminAccountID)
+	if err != nil {
+		if requireSession {
+			return nil, nil, nil, nil, err
+		}
+		log.Printf("[channel-monitor] rate rule context using stale state user_id=%s admin_account_id=%s err=%v", userID, adminAccountID, err)
+		state, _ = s.states.Get(ctx, userID, adminAccountID)
+	}
 	return connections, rulesByConnection, state, s.adminAccountsByID(state), nil
 }
 

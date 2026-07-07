@@ -86,6 +86,56 @@ func TestRunRuleSuccessWritesHealthyResultWithoutPausing(t *testing.T) {
 	}
 }
 
+func TestRunRuleUsesSessionProviderSession(t *testing.T) {
+	ctx := context.Background()
+	repo := newFakeRepository()
+	service := newTestService(repo)
+	service.SetSessionProvider(fakeSessionProvider{session: upstream.Session{
+		Platform:    upstream.PlatformSub2API,
+		BaseURL:     "https://admin.example.com",
+		AccessToken: "fresh-admin-token",
+		TokenType:   "Bearer",
+	}})
+	rule := repo.mustRule("conn-1")
+
+	_, err := service.RunRule(ctx, rule.ID, "manual")
+	if err != nil {
+		t.Fatalf("RunRule returned error: %v", err)
+	}
+	if len(service.platform.testSessions) != 1 {
+		t.Fatalf("expected one test call, got %d", len(service.platform.testSessions))
+	}
+	if service.platform.testSessions[0].AccessToken != "fresh-admin-token" {
+		t.Fatalf("expected refreshed session token, got %q", service.platform.testSessions[0].AccessToken)
+	}
+}
+
+func TestRunRuleSkipsWhenAdminSessionCannotBeRecovered(t *testing.T) {
+	ctx := context.Background()
+	repo := newFakeRepository()
+	service := newTestService(repo)
+	service.SetSessionProvider(fakeSessionProvider{err: upstreamAuthError()})
+	rule := repo.mustRule("conn-1")
+
+	result, err := service.RunRule(ctx, rule.ID, "manual")
+	if err != nil {
+		t.Fatalf("RunRule returned error: %v", err)
+	}
+	if result.Status != StatusUnknown || !result.Success {
+		t.Fatalf("expected unknown successful skip result, got %+v", result)
+	}
+	updated := repo.mustRule("conn-1")
+	if updated.ConsecutiveFailures != 0 {
+		t.Fatalf("admin auth failure should not count against channel, got %d", updated.ConsecutiveFailures)
+	}
+	if len(service.platform.testSessions) != 0 {
+		t.Fatalf("expected no account test when admin session cannot be recovered")
+	}
+	if len(service.platform.schedulableCalls) != 0 {
+		t.Fatalf("expected no schedulable changes when admin session cannot be recovered")
+	}
+}
+
 func TestRunRulePausesAfterFailureThreshold(t *testing.T) {
 	ctx := context.Background()
 	repo := newFakeRepository()
@@ -643,6 +693,7 @@ func (fakeAccounts) RequireCurrentID(context.Context, string) (string, error) {
 type fakeMonitorPlatform struct {
 	testErr          error
 	accounts         []AdminAccountStatus
+	testSessions     []upstream.Session
 	schedulableCalls []schedulableCall
 	priorityCalls    []priorityCall
 }
@@ -657,7 +708,8 @@ type priorityCall struct {
 	Priority  int
 }
 
-func (f *fakeMonitorPlatform) TestSub2APIAdminAccount(upstream.Session, string, AccountTestOptions) (AccountTestResult, error) {
+func (f *fakeMonitorPlatform) TestSub2APIAdminAccount(session upstream.Session, _ string, _ AccountTestOptions) (AccountTestResult, error) {
+	f.testSessions = append(f.testSessions, session)
 	if f.testErr != nil {
 		return AccountTestResult{}, f.testErr
 	}
@@ -676,6 +728,22 @@ func (f *fakeMonitorPlatform) ListSub2APIAdminAccounts(upstream.Session) ([]Admi
 func (f *fakeMonitorPlatform) UpdateSub2APIAdminAccountPriority(_ upstream.Session, accountID string, priority int) error {
 	f.priorityCalls = append(f.priorityCalls, priorityCall{AccountID: accountID, Priority: priority})
 	return nil
+}
+
+type fakeSessionProvider struct {
+	session upstream.Session
+	err     error
+}
+
+func (f fakeSessionProvider) RequireSession(context.Context, string, string) (upstream.Session, error) {
+	if f.err != nil {
+		return upstream.Session{}, f.err
+	}
+	return f.session, nil
+}
+
+func upstreamAuthError() error {
+	return &upstream.RequestError{MessageKey: upstream.ErrorAuth, Platform: upstream.PlatformSub2API}
 }
 
 type testService struct {
