@@ -605,15 +605,15 @@ const dispatchButtonClass = (channel: ChannelMonitorChannel): string => (
         </div>
 
         <div v-else class="max-h-full overflow-auto">
-          <table class="w-[1260px] min-w-[1260px] table-fixed text-left text-xs">
+          <table class="w-full min-w-[1320px] table-fixed text-left text-xs">
             <colgroup>
-              <col class="w-9" />
-              <col class="w-[430px]" />
-              <col class="w-[160px]" />
-              <col class="w-[120px]" />
-              <col class="w-[100px]" />
-              <col class="w-[190px]" />
-              <col class="w-[221px]" />
+              <col style="width: 2.5%;" />
+              <col style="width: 45%;" />
+              <col style="width: 9%;" />
+              <col style="width: 8%;" />
+              <col style="width: 7%;" />
+              <col style="width: 14%;" />
+              <col style="width: 14.5%;" />
             </colgroup>
             <thead class="sticky top-0 bg-surface-elevated text-xs text-muted-foreground">
               <tr>
@@ -635,86 +635,91 @@ const dispatchButtonClass = (channel: ChannelMonitorChannel): string => (
                   </button>
                 </td>
                 <td class="px-3 py-3 align-top">
-                  <div class="font-medium text-foreground">{{ channel.adminAccountName || channel.adminAccountId }}</div>
-                  <div class="mt-1 text-xs text-muted-foreground">{{ channel.siteName }} · {{ channel.upstreamGroupName }}</div>
-                  <div class="mt-1.5 flex flex-wrap gap-1">
-                    <span :class="['rounded-md border px-2 py-0.5 text-[11px] font-medium', channel.enabled ? 'border-emerald-500/20 bg-emerald-500/10 text-emerald-600' : 'border-sky-500/20 bg-sky-500/10 text-sky-600']">
-                      {{ channel.enabled ? t('admin.channelMonitor.flags.monitorOn') : t('admin.channelMonitor.flags.monitorOff') }}
-                    </span>
-                    <span :class="['rounded-md border px-2 py-0.5 text-[11px] font-medium', channel.schedulable === false ? 'border-zinc-500/20 bg-zinc-500/10 text-zinc-600' : 'border-emerald-500/20 bg-emerald-500/10 text-emerald-600']">
-                      {{ channel.schedulable === false ? t('admin.channelMonitor.flags.dispatchOff') : t('admin.channelMonitor.flags.dispatchOn') }}
-                    </span>
-                    <span :class="['rounded-md border px-2 py-0.5 text-[11px] font-medium', rateGateClass(channel.rateGateStatus)]">
-                      {{ rateGateLabel(channel.rateGateStatus) }}
-                    </span>
-                  </div>
-                  <div class="mt-2 grid max-w-[390px] grid-cols-2 gap-1.5 text-[11px] text-muted-foreground sm:grid-cols-4">
-                    <div>
-                      <div>{{ t('admin.channelMonitor.rateRule.upstreamRate') }}</div>
-                      <div class="font-mono text-foreground">{{ formatMultiplier(channel.upstreamEffectiveMultiplier) }}</div>
-                    </div>
-                    <div>
-                      <div>{{ t('admin.channelMonitor.rateRule.ownRate') }}</div>
-                      <div class="font-mono text-foreground">{{ formatMultiplier(channel.ownGroupMultiplier) }}</div>
-                    </div>
-                    <div>
-                      <div>{{ t('admin.channelMonitor.rateRule.priority') }}</div>
-                      <div class="font-mono text-foreground">{{ channel.accountPriority ?? '-' }} → {{ channel.recommendedPriority ?? '-' }}</div>
-                      <div class="mt-1 flex items-center gap-1">
-                        <input
-                          v-model.number="priorityDrafts[channel.ruleId]"
-                          type="number"
-                          min="0"
-                          max="999"
-                          class="h-7 w-16 rounded-md border border-border/50 bg-surface px-2 text-xs font-mono text-foreground outline-none focus:border-primary focus:ring-1 focus:ring-primary"
-                          :disabled="isChannelBusy(channel) || !channel.supported"
-                          :aria-label="t('admin.channelMonitor.rateRule.manualPriority')"
-                        />
-                        <Button
-                          type="button"
-                          variant="secondary"
-                          size="sm"
-                          class="h-7 px-2 text-xs !border-amber-500/30 !bg-amber-500/10 !text-amber-700 hover:!bg-amber-500/15 dark:!text-amber-300"
-                          :disabled="isChannelBusy(channel) || !channel.supported"
-                          @click="setChannelPriority(channel)"
-                        >
-                          <Loader2 v-if="isActionActive(channelActionKey(channel, 'priority'))" class="h-3 w-3 animate-spin" />
-                          <span v-else>{{ t('admin.channelMonitor.rateRule.setPriority') }}</span>
-                        </Button>
+                  <div class="flex items-start gap-3">
+                    <div class="min-w-[300px] flex-1">
+                      <div class="font-medium text-foreground">{{ channel.adminAccountName || channel.adminAccountId }}</div>
+                      <div class="mt-1 text-xs text-muted-foreground">{{ channel.siteName }} · {{ channel.upstreamGroupName }}</div>
+                      <div class="mt-1.5 flex flex-wrap gap-1">
+                        <span :class="['rounded-md border px-2 py-0.5 text-[11px] font-medium', channel.enabled ? 'border-emerald-500/20 bg-emerald-500/10 text-emerald-600' : 'border-sky-500/20 bg-sky-500/10 text-sky-600']">
+                          {{ channel.enabled ? t('admin.channelMonitor.flags.monitorOn') : t('admin.channelMonitor.flags.monitorOff') }}
+                        </span>
+                        <span :class="['rounded-md border px-2 py-0.5 text-[11px] font-medium', channel.schedulable === false ? 'border-zinc-500/20 bg-zinc-500/10 text-zinc-600' : 'border-emerald-500/20 bg-emerald-500/10 text-emerald-600']">
+                          {{ channel.schedulable === false ? t('admin.channelMonitor.flags.dispatchOff') : t('admin.channelMonitor.flags.dispatchOn') }}
+                        </span>
+                        <span :class="['rounded-md border px-2 py-0.5 text-[11px] font-medium', rateGateClass(channel.rateGateStatus)]">
+                          {{ rateGateLabel(channel.rateGateStatus) }}
+                        </span>
+                      </div>
+                      <div class="mt-2 grid max-w-[390px] grid-cols-2 gap-1.5 text-[11px] text-muted-foreground sm:grid-cols-4">
+                        <div>
+                          <div>{{ t('admin.channelMonitor.rateRule.upstreamRate') }}</div>
+                          <div class="font-mono text-foreground">{{ formatMultiplier(channel.upstreamEffectiveMultiplier) }}</div>
+                        </div>
+                        <div>
+                          <div>{{ t('admin.channelMonitor.rateRule.ownRate') }}</div>
+                          <div class="font-mono text-foreground">{{ formatMultiplier(channel.ownGroupMultiplier) }}</div>
+                        </div>
+                        <div>
+                          <div>{{ t('admin.channelMonitor.rateRule.priority') }}</div>
+                          <div class="font-mono text-foreground">{{ channel.accountPriority ?? '-' }} → {{ channel.recommendedPriority ?? '-' }}</div>
+                          <div class="mt-1 flex items-center gap-1">
+                            <input
+                              v-model.number="priorityDrafts[channel.ruleId]"
+                              type="number"
+                              min="0"
+                              max="999"
+                              class="h-7 w-16 rounded-md border border-border/50 bg-surface px-2 text-xs font-mono text-foreground outline-none focus:border-primary focus:ring-1 focus:ring-primary"
+                              :disabled="isChannelBusy(channel) || !channel.supported"
+                              :aria-label="t('admin.channelMonitor.rateRule.manualPriority')"
+                            />
+                            <Button
+                              type="button"
+                              variant="secondary"
+                              size="sm"
+                              class="h-7 px-2 text-xs !border-amber-500/30 !bg-amber-500/10 !text-amber-700 hover:!bg-amber-500/15 dark:!text-amber-300"
+                              :disabled="isChannelBusy(channel) || !channel.supported"
+                              @click="setChannelPriority(channel)"
+                            >
+                              <Loader2 v-if="isActionActive(channelActionKey(channel, 'priority'))" class="h-3 w-3 animate-spin" />
+                              <span v-else>{{ t('admin.channelMonitor.rateRule.setPriority') }}</span>
+                            </Button>
+                          </div>
+                        </div>
+                        <div>
+                          <div>{{ t('admin.channelMonitor.rateRule.accountRate') }}</div>
+                          <div class="font-mono text-foreground">{{ formatMultiplier(channel.accountRateMultiplier) }}</div>
+                        </div>
+                      </div>
+                      <div v-if="channel.rateGateMessage" class="mt-1 max-w-[390px] truncate text-xs" :class="channel.rateGateStatus === 'blocked' ? 'text-red-600 dark:text-red-300' : 'text-muted-foreground'" :title="channel.rateGateMessage">
+                        {{ channel.rateGateMessage }}
                       </div>
                     </div>
-                    <div>
-                      <div>{{ t('admin.channelMonitor.rateRule.accountRate') }}</div>
-                      <div class="font-mono text-foreground">{{ formatMultiplier(channel.accountRateMultiplier) }}</div>
-                    </div>
-                  </div>
-                  <div v-if="channel.rateGateMessage" class="mt-1 max-w-[390px] truncate text-xs" :class="channel.rateGateStatus === 'blocked' ? 'text-red-600 dark:text-red-300' : 'text-muted-foreground'" :title="channel.rateGateMessage">
-                    {{ channel.rateGateMessage }}
-                  </div>
-                  <div class="mt-2 max-w-[390px] rounded-lg border border-border/50 bg-background/60 p-2 shadow-sm">
-                    <div class="flex items-center justify-between gap-3 text-xs font-medium text-muted-foreground">
-                      <span>{{ t('admin.channelMonitor.timeline.window') }}</span>
-                      <span class="truncate">{{ timelineNextLabel(channel) }}</span>
-                    </div>
-                    <div class="mt-1.5 grid h-5 grid-cols-[repeat(60,minmax(2px,1fr))] gap-0.5">
-                      <span
-                        v-for="(result, index) in timelineItems(channel)"
-                        :key="`${channel.ruleId}-${index}-${result?.id ?? 'empty'}`"
-                        :class="['h-5 rounded-[2px]', timelineClass(result)]"
-                        :title="timelineTitle(result)"
-                      />
-                    </div>
-                    <div class="mt-1 flex justify-between text-[10px] font-medium uppercase text-muted-foreground/70">
-                      <span>{{ t('admin.channelMonitor.timeline.past') }}</span>
-                      <span>{{ t('admin.channelMonitor.timeline.now') }}</span>
-                    </div>
-                    <div class="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
-                      <span class="font-mono text-foreground">{{ channel.recentTotal ? `${channel.uptimePercent.toFixed(0)}%` : '-' }}</span>
-                      <span>{{ t('admin.channelMonitor.timeline.successCount', { success: channel.recentSuccess, total: channel.recentTotal }) }}</span>
-                      <span>{{ latestStatusLine(channel) }}</span>
-                    </div>
-                    <div v-if="channel.lastMessage" class="mt-1 max-w-[520px] truncate text-xs" :class="channel.status === 'healthy' ? 'text-muted-foreground' : 'text-red-600 dark:text-red-300'" :title="channel.lastMessage">
-                      {{ channel.lastMessage }}
+
+                    <div class="w-[360px] shrink-0 rounded-lg border border-border/50 bg-background/60 p-2 shadow-sm">
+                      <div class="flex items-center justify-between gap-3 text-xs font-medium text-muted-foreground">
+                        <span>{{ t('admin.channelMonitor.timeline.window') }}</span>
+                        <span class="truncate">{{ timelineNextLabel(channel) }}</span>
+                      </div>
+                      <div class="mt-1.5 grid h-5 grid-cols-[repeat(60,minmax(2px,1fr))] gap-0.5">
+                        <span
+                          v-for="(result, index) in timelineItems(channel)"
+                          :key="`${channel.ruleId}-${index}-${result?.id ?? 'empty'}`"
+                          :class="['h-5 rounded-[2px]', timelineClass(result)]"
+                          :title="timelineTitle(result)"
+                        />
+                      </div>
+                      <div class="mt-1 flex justify-between text-[10px] font-medium uppercase text-muted-foreground/70">
+                        <span>{{ t('admin.channelMonitor.timeline.past') }}</span>
+                        <span>{{ t('admin.channelMonitor.timeline.now') }}</span>
+                      </div>
+                      <div class="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
+                        <span class="font-mono text-foreground">{{ channel.recentTotal ? `${channel.uptimePercent.toFixed(0)}%` : '-' }}</span>
+                        <span>{{ t('admin.channelMonitor.timeline.successCount', { success: channel.recentSuccess, total: channel.recentTotal }) }}</span>
+                        <span>{{ latestStatusLine(channel) }}</span>
+                      </div>
+                      <div v-if="channel.lastMessage" class="mt-1 max-w-[340px] truncate text-xs" :class="channel.status === 'healthy' ? 'text-muted-foreground' : 'text-red-600 dark:text-red-300'" :title="channel.lastMessage">
+                        {{ channel.lastMessage }}
+                      </div>
                     </div>
                   </div>
                 </td>
