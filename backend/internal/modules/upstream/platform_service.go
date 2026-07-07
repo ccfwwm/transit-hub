@@ -108,7 +108,17 @@ func (s *PlatformService) RefreshSession(session Session) (Session, error) {
 	if session.RefreshToken == "" || (session.ExpiresAt != nil && *session.ExpiresAt-now > refreshSkewMS) {
 		return session, nil
 	}
-	return s.refreshSub2APISession(session)
+	refreshed, err := s.refreshSub2APISession(session)
+	if err == nil {
+		return refreshed, nil
+	}
+	if requestErr, ok := err.(*RequestError); ok && requestErr.MessageKey == ErrorAuth && strings.TrimSpace(session.AccessToken) != "" {
+		log.Printf("[sub2api-refresh] refresh token rejected; keep existing access token base_url=%s", session.BaseURL)
+		session.RefreshToken = ""
+		session.ExpiresAt = nil
+		return session, nil
+	}
+	return Session{}, err
 }
 
 func (s *PlatformService) refreshSub2APISession(session Session) (Session, error) {
