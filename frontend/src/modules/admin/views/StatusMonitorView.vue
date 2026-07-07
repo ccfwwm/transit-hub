@@ -606,20 +606,28 @@ const dispatchButtonClass = (channel: ChannelMonitorChannel): string => (
         </div>
 
         <div v-else class="max-h-full overflow-auto">
-          <table class="w-full min-w-[1320px] table-fixed text-left text-xs">
+          <table class="w-full min-w-[1860px] table-fixed text-left text-xs">
             <colgroup>
-              <col style="width: 2.5%;" />
-              <col style="width: 45%;" />
-              <col style="width: 9%;" />
-              <col style="width: 8%;" />
+              <col style="width: 2%;" />
+              <col style="width: 36%;" />
+              <col style="width: 5%;" />
+              <col style="width: 5%;" />
               <col style="width: 7%;" />
-              <col style="width: 14%;" />
-              <col style="width: 14.5%;" />
+              <col style="width: 5%;" />
+              <col style="width: 7%;" />
+              <col style="width: 6%;" />
+              <col style="width: 5%;" />
+              <col style="width: 10.5%;" />
+              <col style="width: 11.5%;" />
             </colgroup>
             <thead class="sticky top-0 bg-surface-elevated text-xs text-muted-foreground">
               <tr>
                 <th class="w-9 px-3 py-2 font-medium"></th>
                 <th class="px-3 py-2 font-medium">{{ t('admin.channelMonitor.channels.columns.channel') }}</th>
+                <th class="px-3 py-2 font-medium">{{ t('admin.channelMonitor.rateRule.upstreamRate') }}</th>
+                <th class="px-3 py-2 font-medium">{{ t('admin.channelMonitor.rateRule.ownRate') }}</th>
+                <th class="px-3 py-2 font-medium">{{ t('admin.channelMonitor.rateRule.priority') }}</th>
+                <th class="px-3 py-2 font-medium">{{ t('admin.channelMonitor.rateRule.accountRate') }}</th>
                 <th class="px-3 py-2 font-medium">{{ t('admin.channelMonitor.channels.columns.group') }}</th>
                 <th class="px-3 py-2 font-medium">{{ t('admin.channelMonitor.channels.columns.status') }}</th>
                 <th class="px-3 py-2 font-medium">{{ t('admin.channelMonitor.channels.columns.balance') }}</th>
@@ -650,46 +658,6 @@ const dispatchButtonClass = (channel: ChannelMonitorChannel): string => (
                         <span :class="['rounded-md border px-2 py-0.5 text-[11px] font-medium', rateGateClass(channel.rateGateStatus)]">
                           {{ rateGateLabel(channel.rateGateStatus) }}
                         </span>
-                      </div>
-                      <div class="mt-2 grid max-w-[390px] grid-cols-2 gap-1.5 text-[11px] text-muted-foreground sm:grid-cols-4">
-                        <div>
-                          <div>{{ t('admin.channelMonitor.rateRule.upstreamRate') }}</div>
-                          <div class="font-mono text-foreground">{{ formatMultiplier(channel.upstreamEffectiveMultiplier) }}</div>
-                        </div>
-                        <div>
-                          <div>{{ t('admin.channelMonitor.rateRule.ownRate') }}</div>
-                          <div class="font-mono text-foreground">{{ formatMultiplier(channel.ownGroupMultiplier) }}</div>
-                        </div>
-                        <div>
-                          <div>{{ t('admin.channelMonitor.rateRule.priority') }}</div>
-                          <div class="font-mono text-foreground">{{ channel.accountPriority ?? '-' }} → {{ channel.recommendedPriority ?? '-' }}</div>
-                          <div class="mt-1 flex items-center gap-1">
-                            <input
-                              v-model.number="priorityDrafts[channel.ruleId]"
-                              type="number"
-                              min="0"
-                              max="999"
-                              class="h-7 w-16 rounded-md border border-border/50 bg-surface px-2 text-xs font-mono text-foreground outline-none focus:border-primary focus:ring-1 focus:ring-primary"
-                              :disabled="isChannelBusy(channel) || !channel.supported"
-                              :aria-label="t('admin.channelMonitor.rateRule.manualPriority')"
-                            />
-                            <Button
-                              type="button"
-                              variant="secondary"
-                              size="sm"
-                              class="h-7 px-2 text-xs !border-amber-500/30 !bg-amber-500/10 !text-amber-700 hover:!bg-amber-500/15 dark:!text-amber-300"
-                              :disabled="isChannelBusy(channel) || !channel.supported"
-                              @click="setChannelPriority(channel)"
-                            >
-                              <Loader2 v-if="isActionActive(channelActionKey(channel, 'priority'))" class="h-3 w-3 animate-spin" />
-                              <span v-else>{{ t('admin.channelMonitor.rateRule.setPriority') }}</span>
-                            </Button>
-                          </div>
-                        </div>
-                        <div>
-                          <div>{{ t('admin.channelMonitor.rateRule.accountRate') }}</div>
-                          <div class="font-mono text-foreground">{{ formatMultiplier(channel.accountRateMultiplier) }}</div>
-                        </div>
                       </div>
                       <div v-if="channel.rateGateMessage" class="mt-1 max-w-[390px] truncate text-xs" :class="channel.rateGateStatus === 'blocked' ? 'text-red-600 dark:text-red-300' : 'text-muted-foreground'" :title="channel.rateGateMessage">
                         {{ channel.rateGateMessage }}
@@ -723,6 +691,40 @@ const dispatchButtonClass = (channel: ChannelMonitorChannel): string => (
                       </div>
                     </div>
                   </div>
+                </td>
+                <td class="px-3 py-3 align-top">
+                  <div class="font-mono text-xs font-semibold text-foreground">{{ formatMultiplier(channel.upstreamEffectiveMultiplier) }}</div>
+                </td>
+                <td class="px-3 py-3 align-top">
+                  <div class="font-mono text-xs font-semibold text-foreground">{{ formatMultiplier(channel.ownGroupMultiplier) }}</div>
+                </td>
+                <td class="px-3 py-3 align-top">
+                  <div class="font-mono text-xs font-semibold text-foreground">{{ channel.accountPriority ?? '-' }} → {{ channel.recommendedPriority ?? '-' }}</div>
+                  <div class="mt-1 flex items-center gap-1">
+                    <input
+                      v-model.number="priorityDrafts[channel.ruleId]"
+                      type="number"
+                      min="0"
+                      max="999"
+                      class="h-7 w-14 rounded-md border border-border/50 bg-surface px-2 text-xs font-mono text-foreground outline-none focus:border-primary focus:ring-1 focus:ring-primary"
+                      :disabled="isChannelBusy(channel) || !channel.supported"
+                      :aria-label="t('admin.channelMonitor.rateRule.manualPriority')"
+                    />
+                    <Button
+                      type="button"
+                      variant="secondary"
+                      size="sm"
+                      class="h-7 px-2 text-xs !border-amber-500/30 !bg-amber-500/10 !text-amber-700 hover:!bg-amber-500/15 dark:!text-amber-300"
+                      :disabled="isChannelBusy(channel) || !channel.supported"
+                      @click="setChannelPriority(channel)"
+                    >
+                      <Loader2 v-if="isActionActive(channelActionKey(channel, 'priority'))" class="h-3 w-3 animate-spin" />
+                      <span v-else>{{ t('admin.channelMonitor.rateRule.setPriority') }}</span>
+                    </Button>
+                  </div>
+                </td>
+                <td class="px-3 py-3 align-top">
+                  <div class="font-mono text-xs font-semibold text-foreground">{{ formatMultiplier(channel.accountRateMultiplier) }}</div>
                 </td>
                 <td class="px-3 py-3 align-top">
                   <div class="flex max-w-[140px] flex-wrap gap-1">
@@ -782,7 +784,7 @@ const dispatchButtonClass = (channel: ChannelMonitorChannel): string => (
                 </td>
               </tr>
               <tr v-if="filteredChannels.length === 0">
-                <td colspan="7" class="px-5 py-16 text-center text-sm text-muted-foreground">{{ t('admin.channelMonitor.empty') }}</td>
+                <td colspan="11" class="px-5 py-16 text-center text-sm text-muted-foreground">{{ t('admin.channelMonitor.empty') }}</td>
               </tr>
             </tbody>
           </table>
