@@ -237,6 +237,14 @@ export default {
           stopWhenMissingRateHelp: 'Use a conservative pause when upstream or own-group rate cannot be read.'
         }
       },
+      testModel: {
+        title: 'Check Models',
+        configure: 'Configure check models',
+        description: 'Active account checks use a model based on channel type, so Claude groups are not tested with an OpenAI model.',
+        openai: 'OpenAI check model',
+        anthropic: 'Anthropic check model',
+        current: 'Current: OpenAI {openai} / Anthropic {anthropic}'
+      },
       bulk: {
         selected: '{count} selected',
         run: 'Check selected',
@@ -258,6 +266,18 @@ export default {
         interval: 'Check interval (minutes)',
         failureThreshold: 'Failure threshold',
         balanceThreshold: 'Balance pause threshold'
+      },
+      disconnect: {
+        action: 'Disconnect',
+        actionShort: 'Disconnect',
+        title: 'Disconnect channel',
+        description: 'Disconnect "{channel}" from real connection?',
+        unlinkOnly: 'Unlink only',
+        unlinkOnlyHint: 'Only remove the local binding record. Keep the upstream key and admin account.',
+        deleteAll: 'Delete account and key',
+        deleteAllHint: 'Also delete the upstream key and the admin forwarding account. Use only when they are no longer needed.',
+        confirm: 'Disconnect',
+        failed: 'Failed to disconnect. Please retry later.'
       },
       actions: {
         refresh: 'Refresh',

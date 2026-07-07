@@ -6,6 +6,8 @@ const (
 	DefaultCheckIntervalMinutes = 10
 	DefaultFailureThreshold     = 3
 	DefaultBalanceThreshold     = 1.0
+	DefaultOpenAITestModel      = "gpt-5.4"
+	DefaultAnthropicTestModel   = "claude-sonnet-4-6"
 )
 
 const (
@@ -82,10 +84,11 @@ type AdminAccountStatus struct {
 }
 
 type SummaryResponse struct {
-	Stats    SummaryStats    `json:"stats"`
-	Groups   []GroupSummary  `json:"groups"`
-	Channels []ChannelStatus `json:"channels"`
-	RateRule RateRuleView    `json:"rateRule"`
+	Stats           SummaryStats    `json:"stats"`
+	Groups          []GroupSummary  `json:"groups"`
+	Channels        []ChannelStatus `json:"channels"`
+	RateRule        RateRuleView    `json:"rateRule"`
+	TestModelConfig TestModelConfig `json:"testModelConfig"`
 }
 
 type SummaryStats struct {
@@ -184,6 +187,19 @@ type BulkRunRequest struct {
 	RuleIDs []string `json:"ruleIds"`
 }
 
+type TestModelConfig struct {
+	UserID           string    `json:"-"`
+	AdminAccountID   string    `json:"-"`
+	OpenAIModelID    string    `json:"openaiModelId"`
+	AnthropicModelID string    `json:"anthropicModelId"`
+	UpdatedAt        time.Time `json:"updatedAt"`
+}
+
+type UpdateTestModelConfigRequest struct {
+	OpenAIModelID    *string `json:"openaiModelId"`
+	AnthropicModelID *string `json:"anthropicModelId"`
+}
+
 type RateRule struct {
 	UserID              string     `json:"-"`
 	AdminAccountID      string     `json:"-"`
@@ -276,6 +292,16 @@ func DefaultRateRule(userID, adminAccountID string) RateRule {
 		UpdatePriority:      true,
 		StopWhenMissingRate: true,
 		UpdatedAt:           now,
+	}
+}
+
+func DefaultTestModelConfig(userID, adminAccountID string) TestModelConfig {
+	return TestModelConfig{
+		UserID:           userID,
+		AdminAccountID:   adminAccountID,
+		OpenAIModelID:    DefaultOpenAITestModel,
+		AnthropicModelID: DefaultAnthropicTestModel,
+		UpdatedAt:        time.Now(),
 	}
 }
 

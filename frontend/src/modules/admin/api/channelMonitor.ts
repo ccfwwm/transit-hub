@@ -5,8 +5,10 @@ import type {
   ChannelMonitorRateRuleView,
   ChannelMonitorResult,
   ChannelMonitorSummary,
+  ChannelMonitorTestModelConfig,
   UpdateChannelMonitorRateRuleRequest,
   UpdateChannelMonitorRuleRequest,
+  UpdateChannelMonitorTestModelConfigRequest,
 } from '../types/channelMonitor'
 import {
   authUnauthorizedErrorKey,
@@ -124,3 +126,9 @@ export const previewChannelMonitorRateRule = async (): Promise<ChannelMonitorRat
 
 export const applyChannelMonitorRateRule = async (): Promise<ChannelMonitorRateApplyResult> =>
   requestJson<ChannelMonitorRateApplyResult>('/channel-monitor/rate-rule/apply', { method: 'POST' })
+
+export const updateChannelMonitorTestModelConfig = async (request: UpdateChannelMonitorTestModelConfigRequest): Promise<ChannelMonitorTestModelConfig> =>
+  requestJson<ChannelMonitorTestModelConfig>('/channel-monitor/test-model-config', {
+    method: 'PATCH',
+    body: JSON.stringify(request),
+  })

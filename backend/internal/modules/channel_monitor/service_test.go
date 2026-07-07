@@ -110,6 +110,70 @@ func TestRunRuleUsesSessionProviderSession(t *testing.T) {
 	}
 }
 
+func TestRunRuleUsesDefaultOpenAITestModel(t *testing.T) {
+	ctx := context.Background()
+	repo := newFakeRepository()
+	service := newTestService(repo)
+	rule := repo.mustRule("conn-1")
+
+	_, err := service.RunRule(ctx, rule.ID, "manual")
+	if err != nil {
+		t.Fatalf("RunRule returned error: %v", err)
+	}
+	if len(service.platform.testOptions) != 1 {
+		t.Fatalf("expected one test option, got %d", len(service.platform.testOptions))
+	}
+	if service.platform.testOptions[0].ModelID != DefaultOpenAITestModel {
+		t.Fatalf("expected default openai model %q, got %q", DefaultOpenAITestModel, service.platform.testOptions[0].ModelID)
+	}
+}
+
+func TestRunRuleUsesDefaultAnthropicTestModel(t *testing.T) {
+	ctx := context.Background()
+	repo := newFakeRepository()
+	service := newTestService(repo)
+	conn := service.conns.connections[0]
+	conn.GroupType = "anthropic"
+	conn.UpstreamGroupName = "Claude"
+	service.conns.connections[0] = conn
+	rule := repo.mustRule("conn-1")
+
+	_, err := service.RunRule(ctx, rule.ID, "manual")
+	if err != nil {
+		t.Fatalf("RunRule returned error: %v", err)
+	}
+	if len(service.platform.testOptions) != 1 {
+		t.Fatalf("expected one test option, got %d", len(service.platform.testOptions))
+	}
+	if service.platform.testOptions[0].ModelID != DefaultAnthropicTestModel {
+		t.Fatalf("expected default anthropic model %q, got %q", DefaultAnthropicTestModel, service.platform.testOptions[0].ModelID)
+	}
+}
+
+func TestRunRuleUsesSavedTestModelConfig(t *testing.T) {
+	ctx := context.Background()
+	repo := newFakeRepository()
+	repo.testModelConfig = &TestModelConfig{
+		UserID:           "user-1",
+		AdminAccountID:   "admin-1",
+		OpenAIModelID:    "gpt-custom",
+		AnthropicModelID: "claude-custom",
+	}
+	service := newTestService(repo)
+	rule := repo.mustRule("conn-1")
+
+	_, err := service.RunRule(ctx, rule.ID, "manual")
+	if err != nil {
+		t.Fatalf("RunRule returned error: %v", err)
+	}
+	if len(service.platform.testOptions) != 1 {
+		t.Fatalf("expected one test option, got %d", len(service.platform.testOptions))
+	}
+	if service.platform.testOptions[0].ModelID != "gpt-custom" {
+		t.Fatalf("expected saved model, got %q", service.platform.testOptions[0].ModelID)
+	}
+}
+
 func TestRunRuleSkipsWhenAdminSessionCannotBeRecovered(t *testing.T) {
 	ctx := context.Background()
 	repo := newFakeRepository()
@@ -565,6 +629,7 @@ type fakeRepository struct {
 	returnNilResults bool
 	rateRule         *RateRule
 	rateResults      []RateApplyResult
+	testModelConfig  *TestModelConfig
 }
 
 func newFakeRepository() *fakeRepository {
@@ -650,6 +715,17 @@ func (r *fakeRepository) GetLastRateApplyResult(context.Context, string, string)
 	next := r.rateResults[len(r.rateResults)-1]
 	return &next, nil
 }
+func (r *fakeRepository) GetTestModelConfig(context.Context, string, string) (*TestModelConfig, error) {
+	if r.testModelConfig == nil {
+		return nil, nil
+	}
+	next := *r.testModelConfig
+	return &next, nil
+}
+func (r *fakeRepository) SaveTestModelConfig(_ context.Context, config TestModelConfig) error {
+	r.testModelConfig = &config
+	return nil
+}
 
 type fakeConnections struct {
 	connections []my_sites.RealConnection
@@ -694,6 +770,7 @@ type fakeMonitorPlatform struct {
 	testErr          error
 	accounts         []AdminAccountStatus
 	testSessions     []upstream.Session
+	testOptions      []AccountTestOptions
 	schedulableCalls []schedulableCall
 	priorityCalls    []priorityCall
 }
@@ -708,8 +785,9 @@ type priorityCall struct {
 	Priority  int
 }
 
-func (f *fakeMonitorPlatform) TestSub2APIAdminAccount(session upstream.Session, _ string, _ AccountTestOptions) (AccountTestResult, error) {
+func (f *fakeMonitorPlatform) TestSub2APIAdminAccount(session upstream.Session, _ string, options AccountTestOptions) (AccountTestResult, error) {
 	f.testSessions = append(f.testSessions, session)
+	f.testOptions = append(f.testOptions, options)
 	if f.testErr != nil {
 		return AccountTestResult{}, f.testErr
 	}

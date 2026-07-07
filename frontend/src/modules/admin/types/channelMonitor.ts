@@ -76,6 +76,7 @@ export interface ChannelMonitorSummary {
   groups: ChannelMonitorGroup[]
   channels: ChannelMonitorChannel[]
   rateRule: ChannelMonitorRateRuleView
+  testModelConfig: ChannelMonitorTestModelConfig
 }
 
 export interface UpdateChannelMonitorRuleRequest {
@@ -182,4 +183,15 @@ export interface UpdateChannelMonitorRateRuleRequest {
   autoApplyOnCheck?: boolean
   updatePriority?: boolean
   stopWhenMissingRate?: boolean
+}
+
+export interface ChannelMonitorTestModelConfig {
+  openaiModelId: string
+  anthropicModelId: string
+  updatedAt: string
+}
+
+export interface UpdateChannelMonitorTestModelConfigRequest {
+  openaiModelId?: string
+  anthropicModelId?: string
 }

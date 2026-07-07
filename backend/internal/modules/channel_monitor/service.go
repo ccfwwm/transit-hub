@@ -29,6 +29,8 @@ type Store interface {
 	SaveRateRule(ctx context.Context, rule RateRule) error
 	AddRateApplyResult(ctx context.Context, result RateApplyResult) error
 	GetLastRateApplyResult(ctx context.Context, userID, adminAccountID string) (*RateApplyResult, error)
+	GetTestModelConfig(ctx context.Context, userID, adminAccountID string) (*TestModelConfig, error)
+	SaveTestModelConfig(ctx context.Context, config TestModelConfig) error
 }
 
 type ConnectionStore interface {
@@ -121,11 +123,16 @@ func (s *Service) Summary(ctx context.Context, userID string) (SummaryResponse, 
 		rateRowsByConnection[row.ConnectionID] = row
 	}
 	lastRateResult, _ := s.store.GetLastRateApplyResult(ctx, userID, adminAccountID)
+	testModelConfig, err := s.ensureTestModelConfig(ctx, userID, adminAccountID)
+	if err != nil {
+		return SummaryResponse{}, err
+	}
 
 	response := SummaryResponse{
-		Channels: []ChannelStatus{},
-		Groups:   []GroupSummary{},
-		RateRule: RateRuleView{Rule: rateRule, Summary: rateSummary, Rows: rateRows, LastResult: lastRateResult},
+		Channels:        []ChannelStatus{},
+		Groups:          []GroupSummary{},
+		RateRule:        RateRuleView{Rule: rateRule, Summary: rateSummary, Rows: rateRows, LastResult: lastRateResult},
+		TestModelConfig: testModelConfig,
 	}
 	groupMap := map[string]*GroupSummary{}
 	for _, conn := range connections {
@@ -471,6 +478,28 @@ func (s *Service) UpdateRateRule(ctx context.Context, userID string, req UpdateR
 	return rule, nil
 }
 
+func (s *Service) UpdateTestModelConfig(ctx context.Context, userID string, req UpdateTestModelConfigRequest) (TestModelConfig, error) {
+	adminAccountID, err := s.currentAdminAccountID(ctx, userID)
+	if err != nil {
+		return TestModelConfig{}, err
+	}
+	config, err := s.ensureTestModelConfig(ctx, userID, adminAccountID)
+	if err != nil {
+		return TestModelConfig{}, err
+	}
+	if req.OpenAIModelID != nil {
+		config.OpenAIModelID = defaultIfBlank(*req.OpenAIModelID, DefaultOpenAITestModel)
+	}
+	if req.AnthropicModelID != nil {
+		config.AnthropicModelID = defaultIfBlank(*req.AnthropicModelID, DefaultAnthropicTestModel)
+	}
+	config.UpdatedAt = time.Now()
+	if err := s.store.SaveTestModelConfig(ctx, config); err != nil {
+		return TestModelConfig{}, err
+	}
+	return config, nil
+}
+
 func (s *Service) PreviewRateRule(ctx context.Context, userID string) (RateRuleView, error) {
 	return s.RateRuleView(ctx, userID)
 }
@@ -692,7 +721,15 @@ func (s *Service) runRule(ctx context.Context, rule Rule, reason string) (Result
 		return finish(StatusBalancePaused, false, fmt.Sprintf("余额 %.2f 低于阈值 %.2f，已自动停止", *balance, rule.BalanceThreshold), nil, "")
 	}
 
-	testResult, testErr := s.platform.TestSub2APIAdminAccount(state.Session, conn.AdminAccountID, AccountTestOptions{})
+	testModelConfig, err := s.ensureTestModelConfig(ctx, rule.UserID, rule.AdminAccountID)
+	if err != nil {
+		return Result{}, err
+	}
+	testModel := testModelForGroupType(conn.GroupType, testModelConfig)
+	testResult, testErr := s.platform.TestSub2APIAdminAccount(state.Session, conn.AdminAccountID, AccountTestOptions{ModelID: testModel})
+	if strings.TrimSpace(testResult.Model) == "" {
+		testResult.Model = testModel
+	}
 	if testErr != nil || !testResult.Success {
 		message := "账号测试失败"
 		if testErr != nil {
@@ -892,6 +929,23 @@ func (s *Service) ensureRateRule(ctx context.Context, userID, adminAccountID str
 		return RateRule{}, err
 	}
 	return defaultRule, nil
+}
+
+func (s *Service) ensureTestModelConfig(ctx context.Context, userID, adminAccountID string) (TestModelConfig, error) {
+	config, err := s.store.GetTestModelConfig(ctx, userID, adminAccountID)
+	if err != nil {
+		return TestModelConfig{}, err
+	}
+	if config != nil {
+		config.OpenAIModelID = defaultIfBlank(config.OpenAIModelID, DefaultOpenAITestModel)
+		config.AnthropicModelID = defaultIfBlank(config.AnthropicModelID, DefaultAnthropicTestModel)
+		return *config, nil
+	}
+	defaultConfig := DefaultTestModelConfig(userID, adminAccountID)
+	if err := s.store.SaveTestModelConfig(ctx, defaultConfig); err != nil {
+		return TestModelConfig{}, err
+	}
+	return defaultConfig, nil
 }
 
 func (s *Service) rateRuleContext(ctx context.Context, userID, adminAccountID string, requireSession bool) ([]my_sites.RealConnection, map[string]Rule, *my_sites.State, map[string]AdminAccountStatus, error) {
@@ -1168,6 +1222,23 @@ func firstNonBlank(values ...string) string {
 		}
 	}
 	return ""
+}
+
+func defaultIfBlank(value, fallback string) string {
+	trimmed := strings.TrimSpace(value)
+	if trimmed == "" {
+		return fallback
+	}
+	return trimmed
+}
+
+func testModelForGroupType(groupType string, config TestModelConfig) string {
+	switch strings.ToLower(strings.TrimSpace(groupType)) {
+	case "anthropic", "claude":
+		return defaultIfBlank(config.AnthropicModelID, DefaultAnthropicTestModel)
+	default:
+		return defaultIfBlank(config.OpenAIModelID, DefaultOpenAITestModel)
+	}
 }
 
 func convertedBalance(site *upstream.Site) *float64 {

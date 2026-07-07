@@ -237,6 +237,14 @@ export default {
           stopWhenMissingRateHelp: '拿不到上游或自有分组倍率时保守停用，避免误调用。'
         }
       },
+      testModel: {
+        title: '检测模型',
+        configure: '统一设置检测模型',
+        description: '主动检测账号时会按渠道类型使用对应模型，避免 Claude 分组被 OpenAI 模型误判。',
+        openai: 'OpenAI 检测模型',
+        anthropic: 'Anthropic 检测模型',
+        current: '当前：OpenAI {openai} / Anthropic {anthropic}'
+      },
       bulk: {
         selected: '已选 {count} 个',
         run: '检测选中',
@@ -258,6 +266,18 @@ export default {
         interval: '检测间隔（分钟）',
         failureThreshold: '连续失败阈值',
         balanceThreshold: '余额停用阈值'
+      },
+      disconnect: {
+        action: '取消对接',
+        actionShort: '取消',
+        title: '取消对接',
+        description: '确认取消「{channel}」的真实对接？',
+        unlinkOnly: '仅取消关联',
+        unlinkOnlyHint: '仅删除本地绑定记录，保留上游 Key 和 Admin 账号。',
+        deleteAll: '删除账号和 Key',
+        deleteAllHint: '同时删除上游 Key 和 Admin 站点的转发账号，请确认远端资源不再需要。',
+        confirm: '确定取消',
+        failed: '取消对接失败，请稍后重试。'
       },
       actions: {
         refresh: '刷新',

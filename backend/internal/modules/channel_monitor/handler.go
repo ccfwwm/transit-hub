@@ -29,6 +29,7 @@ func RegisterRoutes(mux *http.ServeMux, service *Service) {
 	mux.HandleFunc("PATCH /api/channel-monitor/rate-rule", handler.updateRateRule)
 	mux.HandleFunc("POST /api/channel-monitor/rate-rule/preview", handler.previewRateRule)
 	mux.HandleFunc("POST /api/channel-monitor/rate-rule/apply", handler.applyRateRule)
+	mux.HandleFunc("PATCH /api/channel-monitor/test-model-config", handler.updateTestModelConfig)
 }
 
 func (h *Handler) summary(w http.ResponseWriter, r *http.Request) {
@@ -257,6 +258,25 @@ func (h *Handler) applyRateRule(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	httpjson.Write(w, http.StatusOK, result)
+}
+
+func (h *Handler) updateTestModelConfig(w http.ResponseWriter, r *http.Request) {
+	userID, ok := authctx.UserID(r.Context())
+	if !ok {
+		httpjson.WriteError(w, http.StatusUnauthorized, "auth.errors.unauthorized")
+		return
+	}
+	var req UpdateTestModelConfigRequest
+	if err := httpjson.Decode(r, &req); err != nil {
+		httpjson.WriteError(w, http.StatusBadRequest, "admin.channelMonitor.errors.request")
+		return
+	}
+	config, err := h.service.UpdateTestModelConfig(r.Context(), userID, req)
+	if err != nil {
+		writeMonitorError(w, err)
+		return
+	}
+	httpjson.Write(w, http.StatusOK, config)
 }
 
 func writeMonitorError(w http.ResponseWriter, err error) {

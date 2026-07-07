@@ -119,6 +119,18 @@ func (r *Repository) EnsureSchema(ctx context.Context) error {
 	`); err != nil {
 		return err
 	}
+	if _, err := r.db.Exec(ctx, `
+		CREATE TABLE IF NOT EXISTS channel_monitor_test_model_configs (
+			user_id text NOT NULL,
+			admin_account_id text NOT NULL,
+			openai_model_id text NOT NULL DEFAULT 'gpt-5.4',
+			anthropic_model_id text NOT NULL DEFAULT 'claude-sonnet-4-6',
+			updated_at timestamptz NOT NULL DEFAULT now(),
+			PRIMARY KEY (user_id, admin_account_id)
+		)
+	`); err != nil {
+		return err
+	}
 	_, err := r.db.Exec(ctx, `
 		CREATE INDEX IF NOT EXISTS idx_channel_monitor_rate_results_workspace_created
 		ON channel_monitor_rate_results (user_id, admin_account_id, created_at DESC)
@@ -352,6 +364,40 @@ func (r *Repository) GetLastRateApplyResult(ctx context.Context, userID, adminAc
 		_ = json.Unmarshal(rowsJSON, &result.Rows)
 	}
 	return &result, rows.Err()
+}
+
+func (r *Repository) GetTestModelConfig(ctx context.Context, userID, adminAccountID string) (*TestModelConfig, error) {
+	rows, err := r.db.Query(ctx, `
+		SELECT user_id, admin_account_id, openai_model_id, anthropic_model_id, updated_at
+		FROM channel_monitor_test_model_configs
+		WHERE user_id = $1 AND admin_account_id = $2
+	`, userID, adminAccountID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	if !rows.Next() {
+		return nil, rows.Err()
+	}
+	var config TestModelConfig
+	if err := rows.Scan(&config.UserID, &config.AdminAccountID, &config.OpenAIModelID, &config.AnthropicModelID, &config.UpdatedAt); err != nil {
+		return nil, err
+	}
+	return &config, rows.Err()
+}
+
+func (r *Repository) SaveTestModelConfig(ctx context.Context, config TestModelConfig) error {
+	_, err := r.db.Exec(ctx, `
+		INSERT INTO channel_monitor_test_model_configs (
+			user_id, admin_account_id, openai_model_id, anthropic_model_id, updated_at
+		)
+		VALUES ($1, $2, $3, $4, now())
+		ON CONFLICT (user_id, admin_account_id) DO UPDATE SET
+			openai_model_id = EXCLUDED.openai_model_id,
+			anthropic_model_id = EXCLUDED.anthropic_model_id,
+			updated_at = now()
+	`, config.UserID, config.AdminAccountID, config.OpenAIModelID, config.AnthropicModelID)
+	return err
 }
 
 func scanRules(rows pgx.Rows) ([]Rule, error) {

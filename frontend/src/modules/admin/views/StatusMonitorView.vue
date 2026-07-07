@@ -19,6 +19,7 @@ import {
   Settings2,
   ShieldAlert,
   Square,
+  Trash2,
   WalletCards,
 } from 'lucide-vue-next'
 import { Button } from '@/components/ui/button'
@@ -34,8 +35,11 @@ import {
   setChannelMonitorRulePriority,
   updateChannelMonitorRateRule,
   updateChannelMonitorRule,
+  updateChannelMonitorTestModelConfig,
 } from '../api/channelMonitor'
+import { realDisconnect } from '../api/mySites'
 import type { ChannelMonitorChannel, ChannelMonitorRateRule, ChannelMonitorResult, ChannelMonitorStatus, RateGateStatus, UpdateChannelMonitorRuleRequest } from '../types/channelMonitor'
+import type { RealDisconnectRequest } from '../types/mySites'
 
 type StatusFilter = 'all' | 'monitor_paused' | 'dispatch_paused' | ChannelMonitorStatus
 type RefreshMode = 'initial' | 'manual' | 'silent'
@@ -74,13 +78,23 @@ const summary = ref({
     rows: [],
     lastResult: null,
   },
+  testModelConfig: {
+    openaiModelId: 'gpt-5.4',
+    anthropicModelId: 'claude-sonnet-4-6',
+    updatedAt: '',
+  },
 } as Awaited<ReturnType<typeof getChannelMonitorSummary>>)
 const editingChannel = ref<ChannelMonitorChannel | null>(null)
 const isBulkEditorOpen = ref(false)
 const bulkEditorScope = ref<BulkEditorScope>('selected')
 const isRateRuleEditorOpen = ref(false)
+const isTestModelEditorOpen = ref(false)
+const disconnectingChannel = ref<ChannelMonitorChannel | null>(null)
+const disconnectMode = ref<RealDisconnectRequest['mode']>('unlink')
+const disconnectError = ref('')
 const editForm = ref({ enabled: true, checkIntervalMinutes: 10, failureThreshold: 3, balanceThreshold: 1 })
 const rateRuleForm = ref({ enabled: false, autoApplyOnCheck: true, updatePriority: true, stopWhenMissingRate: true })
+const testModelForm = ref({ openaiModelId: 'gpt-5.4', anthropicModelId: 'claude-sonnet-4-6' })
 const priorityDrafts = ref<Record<string, number | null>>({})
 
 const syncSummaryState = (next: Awaited<ReturnType<typeof getChannelMonitorSummary>>) => {
@@ -149,7 +163,7 @@ const allRuleIds = computed(() => summary.value.channels.map(channel => channel.
 const bulkEditorRuleIds = computed(() => bulkEditorScope.value === 'all' ? allRuleIds.value : selectedRuleIds.value)
 const bulkEditorCount = computed(() => bulkEditorRuleIds.value.length)
 const isActionLoading = computed(() => activeActionKeys.value.length > 0)
-const isBulkActionLoading = computed(() => activeActionKeys.value.some(key => key.startsWith('bulk:') || key.startsWith('editor:') || key.startsWith('rate-rule:')))
+const isBulkActionLoading = computed(() => activeActionKeys.value.some(key => key.startsWith('bulk:') || key.startsWith('editor:') || key.startsWith('rate-rule:') || key.startsWith('test-model:')))
 
 const statusLabel = (status: StatusFilter): string => t(`admin.channelMonitor.status.${status}`)
 
@@ -237,6 +251,37 @@ const rateGateClass = (status: RateGateStatus): string => {
   }
 }
 
+const groupRowClass = (groupName: string, platform: string): string => {
+  const selected = selectedGroup.value === groupName
+  const normalizedPlatform = platform.toLowerCase()
+  if (normalizedPlatform.includes('anthropic')) {
+    return selected
+      ? 'border-l-4 border-l-violet-500 bg-violet-500/15 text-violet-950 ring-1 ring-inset ring-violet-500/30 dark:text-violet-100'
+      : 'border-l-4 border-l-violet-500/40 hover:bg-violet-500/10'
+  }
+  if (normalizedPlatform.includes('openai')) {
+    return selected
+      ? 'border-l-4 border-l-blue-500 bg-blue-500/15 text-blue-950 ring-1 ring-inset ring-blue-500/30 dark:text-blue-100'
+      : 'border-l-4 border-l-blue-500/40 hover:bg-blue-500/10'
+  }
+  if (normalizedPlatform.includes('gemini')) {
+    return selected
+      ? 'border-l-4 border-l-emerald-500 bg-emerald-500/15 text-emerald-950 ring-1 ring-inset ring-emerald-500/30 dark:text-emerald-100'
+      : 'border-l-4 border-l-emerald-500/40 hover:bg-emerald-500/10'
+  }
+  return selected
+    ? 'border-l-4 border-l-primary bg-primary/15 text-foreground ring-1 ring-inset ring-primary/30'
+    : 'border-l-4 border-l-transparent hover:bg-surface-elevated/70'
+}
+
+const groupPlatformBadgeClass = (platform: string): string => {
+  const normalizedPlatform = platform.toLowerCase()
+  if (normalizedPlatform.includes('anthropic')) return 'border-violet-500/20 bg-violet-500/10 text-violet-700 dark:text-violet-300'
+  if (normalizedPlatform.includes('openai')) return 'border-blue-500/20 bg-blue-500/10 text-blue-700 dark:text-blue-300'
+  if (normalizedPlatform.includes('gemini')) return 'border-emerald-500/20 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300'
+  return 'border-border/50 bg-surface-elevated text-muted-foreground'
+}
+
 const isActionActive = (key: string): boolean => activeActionKeys.value.includes(key)
 
 const channelActionKey = (channel: ChannelMonitorChannel, action: string): string => `channel:${channel.ruleId}:${action}`
@@ -321,6 +366,29 @@ const closeRateRuleEditor = () => {
   isRateRuleEditorOpen.value = false
 }
 
+const openTestModelEditor = () => {
+  testModelForm.value = {
+    openaiModelId: summary.value.testModelConfig.openaiModelId || 'gpt-5.4',
+    anthropicModelId: summary.value.testModelConfig.anthropicModelId || 'claude-sonnet-4-6',
+  }
+  isTestModelEditorOpen.value = true
+}
+
+const closeTestModelEditor = () => {
+  isTestModelEditorOpen.value = false
+}
+
+const saveTestModelConfig = async () => {
+  await runAction(async () => {
+    const config = await updateChannelMonitorTestModelConfig({
+      openaiModelId: testModelForm.value.openaiModelId,
+      anthropicModelId: testModelForm.value.anthropicModelId,
+    })
+    summary.value.testModelConfig = config
+  }, { actionKey: 'test-model:save', refresh: false })
+  closeTestModelEditor()
+}
+
 const saveRateRule = async (applyAfterSave = false) => {
   await runAction(async () => {
     await updateChannelMonitorRateRule({ ...rateRuleForm.value })
@@ -377,6 +445,37 @@ const setChannelPriority = (channel: ChannelMonitorChannel) => {
   const priority = Number(priorityDrafts.value[channel.ruleId])
   if (!Number.isFinite(priority)) return
   return runAction(() => setChannelMonitorRulePriority(channel.ruleId, Math.round(priority)), { actionKey: channelActionKey(channel, 'priority') })
+}
+
+const openDisconnect = (channel: ChannelMonitorChannel) => {
+  disconnectingChannel.value = channel
+  disconnectMode.value = 'unlink'
+  disconnectError.value = ''
+}
+
+const closeDisconnect = () => {
+  disconnectingChannel.value = null
+  disconnectMode.value = 'unlink'
+  disconnectError.value = ''
+}
+
+const confirmDisconnect = async () => {
+  if (!disconnectingChannel.value) return
+  const channel = disconnectingChannel.value
+  const actionKey = channelActionKey(channel, 'disconnect')
+  if (isActionActive(actionKey)) return
+  activeActionKeys.value = [...activeActionKeys.value, actionKey]
+  disconnectError.value = ''
+  try {
+    await realDisconnect({ connectionId: channel.connectionId, mode: disconnectMode.value })
+    selectedRuleIds.value = selectedRuleIds.value.filter(id => id !== channel.ruleId)
+    closeDisconnect()
+    await loadSummary('silent')
+  } catch {
+    disconnectError.value = t('admin.channelMonitor.disconnect.failed')
+  } finally {
+    activeActionKeys.value = activeActionKeys.value.filter(key => key !== actionKey)
+  }
 }
 
 const selectGroup = (groupName: string) => {
@@ -468,6 +567,13 @@ const dispatchButtonClass = (channel: ChannelMonitorChannel): string => (
         </select>
       </div>
       <div class="flex flex-wrap items-center gap-2">
+        <Button type="button" variant="secondary" class="h-10 gap-2 rounded-xl !border-violet-500/30 !bg-violet-500/10 !text-violet-700 hover:!bg-violet-500/15 dark:!text-violet-300" :disabled="isLoading || isBulkActionLoading" @click="openTestModelEditor">
+          <Settings2 class="h-4 w-4" />
+          <span>{{ t('admin.channelMonitor.testModel.configure') }}</span>
+          <span class="hidden max-w-[260px] truncate font-mono text-[11px] opacity-80 2xl:inline">
+            {{ summary.testModelConfig.openaiModelId }} / {{ summary.testModelConfig.anthropicModelId }}
+          </span>
+        </Button>
         <Button type="button" variant="secondary" class="h-10 gap-2 rounded-xl" :disabled="isLoading || isBulkActionLoading || allRuleIds.length === 0" @click="openBulkEditor('all')">
           <Settings2 class="h-4 w-4" />
           {{ t('admin.channelMonitor.bulk.editAllRules') }}
@@ -584,14 +690,16 @@ const dispatchButtonClass = (channel: ChannelMonitorChannel): string => (
                 v-for="group in summary.groups"
                 :key="`${group.groupName}-${group.platform}`"
                 :class="[
-                  'cursor-pointer transition-colors hover:bg-surface-elevated/60',
-                  selectedGroup === group.groupName ? 'bg-primary/5 ring-1 ring-inset ring-primary/20' : ''
+                  'cursor-pointer transition-colors',
+                  groupRowClass(group.groupName, group.platform)
                 ]"
                 @click="selectGroup(group.groupName)"
               >
                 <td class="px-3 py-2">
                   <div class="font-medium text-foreground">{{ group.groupName }}</div>
-                  <div class="text-xs text-muted-foreground">{{ group.platform || t('admin.channelMonitor.common.unknown') }}</div>
+                  <span :class="['mt-1 inline-flex rounded-md border px-1.5 py-0.5 text-[11px] font-medium', groupPlatformBadgeClass(group.platform)]">
+                    {{ group.platform || t('admin.channelMonitor.common.unknown') }}
+                  </span>
                 </td>
                 <td class="px-3 py-2 font-mono text-foreground">{{ group.available }}/{{ group.total }}</td>
                 <td class="px-3 py-2 text-xs text-muted-foreground">{{ group.monitorPaused }}/{{ group.dispatchPaused }}</td>
@@ -798,6 +906,10 @@ const dispatchButtonClass = (channel: ChannelMonitorChannel): string => (
                     <Button type="button" variant="ghost" size="sm" class="h-8 px-2 text-xs" :disabled="isChannelBusy(channel)" @click="openEditor(channel)">
                       <Settings2 class="h-3.5 w-3.5" />
                     </Button>
+                    <Button type="button" variant="secondary" size="sm" class="h-8 gap-1 !border-red-500/30 !bg-red-500/10 px-2 text-xs !text-red-700 hover:!bg-red-500/15 dark:!text-red-300" :disabled="isChannelBusy(channel)" :title="t('admin.channelMonitor.disconnect.action')" @click="openDisconnect(channel)">
+                      <Trash2 class="h-3.5 w-3.5" />
+                      {{ t('admin.channelMonitor.disconnect.actionShort') }}
+                    </Button>
                   </div>
                 </td>
               </tr>
@@ -841,6 +953,80 @@ const dispatchButtonClass = (channel: ChannelMonitorChannel): string => (
           <Button class="gap-2" :disabled="isActionLoading" @click="saveEditor">
             <Loader2 v-if="isActionLoading" class="h-4 w-4 animate-spin" />
             {{ t('admin.channelMonitor.actions.save') }}
+          </Button>
+        </div>
+      </div>
+    </div>
+
+    <div v-if="isTestModelEditorOpen" class="fixed inset-0 z-50 flex items-center justify-center bg-background/80 p-4 backdrop-blur-sm">
+      <div class="w-full max-w-lg rounded-xl border border-border/50 bg-card p-6 shadow-xl">
+        <h2 class="text-lg font-semibold text-foreground">{{ t('admin.channelMonitor.testModel.title') }}</h2>
+        <p class="mt-1 text-sm text-muted-foreground">{{ t('admin.channelMonitor.testModel.description') }}</p>
+        <div class="mt-5 grid gap-4">
+          <label class="block space-y-2">
+            <span class="text-sm font-medium text-foreground">{{ t('admin.channelMonitor.testModel.openai') }}</span>
+            <input v-model.trim="testModelForm.openaiModelId" type="text" class="h-10 w-full rounded-xl border border-border/50 bg-surface px-3 font-mono text-sm outline-none focus:border-primary focus:ring-1 focus:ring-primary" placeholder="gpt-5.4" />
+          </label>
+          <label class="block space-y-2">
+            <span class="text-sm font-medium text-foreground">{{ t('admin.channelMonitor.testModel.anthropic') }}</span>
+            <input v-model.trim="testModelForm.anthropicModelId" type="text" class="h-10 w-full rounded-xl border border-border/50 bg-surface px-3 font-mono text-sm outline-none focus:border-primary focus:ring-1 focus:ring-primary" placeholder="claude-sonnet-4-6" />
+          </label>
+          <div class="rounded-lg border border-border/50 bg-surface-elevated px-3 py-2 text-xs text-muted-foreground">
+            {{ t('admin.channelMonitor.testModel.current', { openai: summary.testModelConfig.openaiModelId, anthropic: summary.testModelConfig.anthropicModelId }) }}
+          </div>
+        </div>
+        <div class="mt-6 flex justify-end gap-2">
+          <Button variant="secondary" :disabled="isActionActive('test-model:save')" @click="closeTestModelEditor">{{ t('admin.channelMonitor.actions.cancel') }}</Button>
+          <Button class="gap-2" :disabled="isActionActive('test-model:save')" @click="saveTestModelConfig">
+            <Loader2 v-if="isActionActive('test-model:save')" class="h-4 w-4 animate-spin" />
+            {{ t('admin.channelMonitor.actions.save') }}
+          </Button>
+        </div>
+      </div>
+    </div>
+
+    <div v-if="disconnectingChannel" class="fixed inset-0 z-50 flex items-center justify-center bg-background/80 p-4 backdrop-blur-sm">
+      <div class="w-full max-w-lg rounded-xl border border-border/50 bg-card shadow-xl">
+        <div class="border-b border-border/50 px-6 py-5">
+          <h2 class="text-lg font-semibold text-foreground">{{ t('admin.channelMonitor.disconnect.title') }}</h2>
+          <p class="mt-1 text-sm text-muted-foreground">
+            {{ t('admin.channelMonitor.disconnect.description', { channel: disconnectingChannel.adminAccountName || disconnectingChannel.adminAccountId }) }}
+          </p>
+        </div>
+        <div v-if="disconnectError" class="mx-6 mt-5 rounded-xl border border-warning/20 bg-warning/10 p-3 text-sm text-warning">
+          {{ disconnectError }}
+        </div>
+        <div class="space-y-3 px-6 py-5">
+          <label
+            :class="[
+              'flex cursor-pointer gap-3 rounded-xl border p-4 transition',
+              disconnectMode === 'unlink' ? 'border-primary/40 bg-primary/10' : 'border-border/50 bg-surface hover:bg-surface-elevated'
+            ]"
+          >
+            <input v-model="disconnectMode" type="radio" value="unlink" class="mt-1 h-4 w-4 border-border text-primary focus:ring-primary" />
+            <span>
+              <span class="block text-sm font-medium text-foreground">{{ t('admin.channelMonitor.disconnect.unlinkOnly') }}</span>
+              <span class="mt-1 block text-xs text-muted-foreground">{{ t('admin.channelMonitor.disconnect.unlinkOnlyHint') }}</span>
+            </span>
+          </label>
+          <label
+            :class="[
+              'flex cursor-pointer gap-3 rounded-xl border p-4 transition',
+              disconnectMode === 'full' ? 'border-red-500/40 bg-red-500/10' : 'border-border/50 bg-surface hover:bg-surface-elevated'
+            ]"
+          >
+            <input v-model="disconnectMode" type="radio" value="full" class="mt-1 h-4 w-4 border-border text-red-600 focus:ring-red-500" />
+            <span>
+              <span class="block text-sm font-medium text-red-600 dark:text-red-400">{{ t('admin.channelMonitor.disconnect.deleteAll') }}</span>
+              <span class="mt-1 block text-xs text-red-500/80">{{ t('admin.channelMonitor.disconnect.deleteAllHint') }}</span>
+            </span>
+          </label>
+        </div>
+        <div class="flex justify-end gap-2 border-t border-border/50 px-6 py-4">
+          <Button variant="secondary" :disabled="isActionActive(channelActionKey(disconnectingChannel, 'disconnect'))" @click="closeDisconnect">{{ t('admin.channelMonitor.actions.cancel') }}</Button>
+          <Button :variant="disconnectMode === 'full' ? 'destructive' : 'default'" class="gap-2" :disabled="isActionActive(channelActionKey(disconnectingChannel, 'disconnect'))" @click="confirmDisconnect">
+            <Loader2 v-if="isActionActive(channelActionKey(disconnectingChannel, 'disconnect'))" class="h-4 w-4 animate-spin" />
+            {{ t('admin.channelMonitor.disconnect.confirm') }}
           </Button>
         </div>
       </div>
