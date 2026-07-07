@@ -798,7 +798,9 @@ func (s *Service) channelStatus(ctx context.Context, conn my_sites.RealConnectio
 	}
 	results, err := s.store.ListRecentResults(ctx, rule.ID, 60)
 	if err == nil {
-		row.RecentResults = results
+		if results != nil {
+			row.RecentResults = results
+		}
 		row.RecentTotal = len(results)
 		for _, result := range results {
 			if result.Success {

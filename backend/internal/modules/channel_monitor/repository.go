@@ -374,7 +374,7 @@ func scanRules(rows pgx.Rows) ([]Rule, error) {
 
 func scanResults(rows pgx.Rows) ([]Result, error) {
 	defer rows.Close()
-	var results []Result
+	results := []Result{}
 	for rows.Next() {
 		var result Result
 		if err := rows.Scan(

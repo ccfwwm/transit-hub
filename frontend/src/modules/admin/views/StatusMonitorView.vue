@@ -372,7 +372,8 @@ const selectGroup = (groupName: string) => {
 }
 
 const timelineItems = (channel: ChannelMonitorChannel): Array<ChannelMonitorResult | null> => {
-  const ordered = [...channel.recentResults].reverse().slice(-60)
+  const recentResults = Array.isArray(channel.recentResults) ? channel.recentResults : []
+  const ordered = [...recentResults].reverse().slice(-60)
   return [...Array(Math.max(0, 60 - ordered.length)).fill(null), ...ordered]
 }
 

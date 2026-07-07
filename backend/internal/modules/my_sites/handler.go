@@ -4,6 +4,7 @@ import (
 	"errors"
 	"net/http"
 
+	"transithub/backend/internal/modules/upstream"
 	"transithub/backend/internal/shared/authctx"
 	"transithub/backend/internal/shared/httpjson"
 )
@@ -171,6 +172,20 @@ func writeError(w http.ResponseWriter, err error) {
 			status = http.StatusConflict
 		}
 		httpjson.WriteError(w, status, requestErr.Error())
+		return
+	}
+	var upstreamErr *upstream.RequestError
+	if errors.As(err, &upstreamErr) {
+		status := http.StatusBadRequest
+		switch upstreamErr.MessageKey {
+		case upstream.ErrorAuth:
+			status = http.StatusBadRequest
+		case upstream.ErrorNetwork:
+			status = http.StatusBadGateway
+		case upstream.ErrorNotFound:
+			status = http.StatusNotFound
+		}
+		httpjson.WriteError(w, status, upstreamErr.MessageKey)
 		return
 	}
 	httpjson.WriteError(w, http.StatusInternalServerError, ErrorUnknown)

@@ -45,6 +45,24 @@ func TestSummaryCreatesDefaultRulesAndGroupCounts(t *testing.T) {
 	}
 }
 
+func TestSummaryKeepsRecentResultsAsEmptySliceWhenStoreReturnsNil(t *testing.T) {
+	ctx := context.Background()
+	repo := newFakeRepository()
+	repo.returnNilResults = true
+	service := newTestService(repo)
+
+	summary, err := service.Summary(ctx, "user-1")
+	if err != nil {
+		t.Fatalf("Summary returned error: %v", err)
+	}
+	if len(summary.Channels) != 1 {
+		t.Fatalf("expected one channel, got %d", len(summary.Channels))
+	}
+	if summary.Channels[0].RecentResults == nil {
+		t.Fatalf("expected recentResults to stay an empty slice when store returns nil")
+	}
+}
+
 func TestRunRuleSuccessWritesHealthyResultWithoutPausing(t *testing.T) {
 	ctx := context.Background()
 	repo := newFakeRepository()
@@ -492,10 +510,11 @@ func TestRateRuleDoesNotReEnableBalancePausedChannel(t *testing.T) {
 }
 
 type fakeRepository struct {
-	rules       map[string]Rule
-	results     []Result
-	rateRule    *RateRule
-	rateResults []RateApplyResult
+	rules            map[string]Rule
+	results          []Result
+	returnNilResults bool
+	rateRule         *RateRule
+	rateResults      []RateApplyResult
 }
 
 func newFakeRepository() *fakeRepository {
@@ -547,6 +566,9 @@ func (r *fakeRepository) AddResult(_ context.Context, result Result) error {
 	return nil
 }
 func (r *fakeRepository) ListRecentResults(context.Context, string, int) ([]Result, error) {
+	if r.returnNilResults {
+		return nil, nil
+	}
 	results := []Result{}
 	for _, result := range r.results {
 		if result.RuleID == "conn-1" {

@@ -11,7 +11,7 @@ import type { GroupRate, GroupRateHistoryRow } from '../types/groupRates'
 import type { MySiteMapping, MySiteMappingOwnGroupOption, RealConnection, UpstreamKeyItem } from '../types/mySites'
 import { NEW_API_CHANNEL_TYPES } from '../types/mySites'
 
-const { t, locale } = useI18n()
+const { t, te, locale } = useI18n()
 const router = useRouter()
 
 const {
@@ -366,6 +366,11 @@ const submitConnector = async () => {
 
 const realConnectError = ref('')
 
+const translatedActionError = (err: unknown, fallbackKey: string): string => {
+  const key = err instanceof Error ? err.message : ''
+  return key && te(key) ? t(key) : t(fallbackKey)
+}
+
 const submitRealConnect = async () => {
   if (!connectingRate.value || connectOwnGroups.value.length === 0) return
   realConnectError.value = ''
@@ -378,15 +383,12 @@ const submitRealConnect = async () => {
     channelType: selectedChannelType.value || undefined,
     ownGroupIds: connectOwnGroups.value,
   }
-  console.log('[real-connect] payload:', JSON.stringify(payload, null, 2))
   try {
-    const result = await realConnect(payload)
-    console.log('[real-connect] success:', JSON.stringify(result, null, 2))
+    await realConnect(payload)
     closeConnector()
     await Promise.all([loadRates(), loadRealConnections()])
-  } catch (err: any) {
-    console.error('[real-connect] error:', err)
-    realConnectError.value = t('admin.groupRates.connect.realFailed')
+  } catch (err: unknown) {
+    realConnectError.value = translatedActionError(err, 'admin.groupRates.connect.realFailed')
   } finally {
     isActionLoading.value = false
   }

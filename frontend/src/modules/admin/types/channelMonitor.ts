@@ -65,7 +65,7 @@ export interface ChannelMonitorChannel {
   lastLatencyMs: number | null
   lastCheckedAt: string | null
   nextCheckAt: string | null
-  recentResults: ChannelMonitorResult[]
+  recentResults?: ChannelMonitorResult[] | null
   recentTotal: number
   recentSuccess: number
   uptimePercent: number
