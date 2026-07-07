@@ -39,6 +39,7 @@ import type { ChannelMonitorChannel, ChannelMonitorRateRule, ChannelMonitorResul
 
 type StatusFilter = 'all' | 'monitor_paused' | 'dispatch_paused' | ChannelMonitorStatus
 type RefreshMode = 'initial' | 'manual' | 'silent'
+type BulkEditorScope = 'all' | 'selected'
 type ActionOptions = {
   actionKey?: string
   clearSelection?: boolean
@@ -76,6 +77,7 @@ const summary = ref({
 } as Awaited<ReturnType<typeof getChannelMonitorSummary>>)
 const editingChannel = ref<ChannelMonitorChannel | null>(null)
 const isBulkEditorOpen = ref(false)
+const bulkEditorScope = ref<BulkEditorScope>('selected')
 const isRateRuleEditorOpen = ref(false)
 const editForm = ref({ enabled: true, checkIntervalMinutes: 10, failureThreshold: 3, balanceThreshold: 1 })
 const rateRuleForm = ref({ enabled: false, autoApplyOnCheck: true, updatePriority: true, stopWhenMissingRate: true })
@@ -143,6 +145,9 @@ const visibleRuleIds = computed(() => filteredChannels.value.map(channel => chan
 const selectedCount = computed(() => selectedRuleIds.value.length)
 const allVisibleSelected = computed(() => visibleRuleIds.value.length > 0 && visibleRuleIds.value.every(id => selectedRuleIds.value.includes(id)))
 const selectedChannels = computed(() => summary.value.channels.filter(channel => selectedRuleIds.value.includes(channel.ruleId)))
+const allRuleIds = computed(() => summary.value.channels.map(channel => channel.ruleId))
+const bulkEditorRuleIds = computed(() => bulkEditorScope.value === 'all' ? allRuleIds.value : selectedRuleIds.value)
+const bulkEditorCount = computed(() => bulkEditorRuleIds.value.length)
 const isActionLoading = computed(() => activeActionKeys.value.length > 0)
 const isBulkActionLoading = computed(() => activeActionKeys.value.some(key => key.startsWith('bulk:') || key.startsWith('editor:') || key.startsWith('rate-rule:')))
 
@@ -282,8 +287,9 @@ const openEditor = (channel: ChannelMonitorChannel) => {
   }
 }
 
-const openBulkEditor = () => {
-  const first = selectedChannels.value[0]
+const openBulkEditor = (scope: BulkEditorScope = 'selected') => {
+  bulkEditorScope.value = scope
+  const first = (scope === 'all' ? summary.value.channels : selectedChannels.value)[0]
   editingChannel.value = null
   isBulkEditorOpen.value = true
   editForm.value = {
@@ -297,6 +303,7 @@ const openBulkEditor = () => {
 const closeEditor = () => {
   editingChannel.value = null
   isBulkEditorOpen.value = false
+  bulkEditorScope.value = 'selected'
 }
 
 const openRateRuleEditor = () => {
@@ -332,7 +339,12 @@ const saveEditor = async () => {
   if (editingChannel.value) {
     await runAction(() => updateChannelMonitorRule(editingChannel.value!.ruleId, payload), { actionKey: `editor:${editingChannel.value.ruleId}` })
   } else if (isBulkEditorOpen.value) {
-    await runAction(() => bulkUpdateChannelMonitorRules({ ...payload, ruleIds: selectedRuleIds.value }), { actionKey: 'bulk:edit', clearSelection: true })
+    const ruleIds = bulkEditorRuleIds.value
+    if (ruleIds.length === 0) return
+    await runAction(() => bulkUpdateChannelMonitorRules({ ...payload, ruleIds }), {
+      actionKey: `bulk:edit:${bulkEditorScope.value}`,
+      clearSelection: bulkEditorScope.value === 'selected',
+    })
   }
   closeEditor()
 }
@@ -455,10 +467,16 @@ const dispatchButtonClass = (channel: ChannelMonitorChannel): string => (
           <option value="unsupported">{{ statusLabel('unsupported') }}</option>
         </select>
       </div>
-      <Button type="button" variant="secondary" class="h-10 gap-2 rounded-xl" :disabled="isLoading || isRefreshing" @click="loadSummary('manual')">
-        <RefreshCw :class="['h-4 w-4', (isLoading || isRefreshing) ? 'animate-spin' : '']" />
-        {{ t('admin.channelMonitor.actions.refresh') }}
-      </Button>
+      <div class="flex flex-wrap items-center gap-2">
+        <Button type="button" variant="secondary" class="h-10 gap-2 rounded-xl" :disabled="isLoading || isBulkActionLoading || allRuleIds.length === 0" @click="openBulkEditor('all')">
+          <Settings2 class="h-4 w-4" />
+          {{ t('admin.channelMonitor.bulk.editAllRules') }}
+        </Button>
+        <Button type="button" variant="secondary" class="h-10 gap-2 rounded-xl" :disabled="isLoading || isRefreshing" @click="loadSummary('manual')">
+          <RefreshCw :class="['h-4 w-4', (isLoading || isRefreshing) ? 'animate-spin' : '']" />
+          {{ t('admin.channelMonitor.actions.refresh') }}
+        </Button>
+      </div>
     </div>
 
     <div v-if="selectedCount > 0" class="flex flex-wrap items-center gap-2 rounded-lg border border-border/50 bg-surface px-4 py-3">
@@ -483,9 +501,9 @@ const dispatchButtonClass = (channel: ChannelMonitorChannel): string => (
         <PowerOff class="h-3.5 w-3.5" />
         {{ t('admin.channelMonitor.bulk.disableDispatch') }}
       </Button>
-      <Button type="button" variant="ghost" size="sm" class="gap-1.5" :disabled="isBulkActionLoading" @click="openBulkEditor">
+      <Button type="button" variant="ghost" size="sm" class="gap-1.5" :disabled="isBulkActionLoading" @click="openBulkEditor('selected')">
         <Settings2 class="h-3.5 w-3.5" />
-        {{ t('admin.channelMonitor.bulk.editRules') }}
+        {{ t('admin.channelMonitor.bulk.editSelectedRules') }}
       </Button>
     </div>
 
@@ -795,8 +813,11 @@ const dispatchButtonClass = (channel: ChannelMonitorChannel): string => (
     <div v-if="editingChannel || isBulkEditorOpen" class="fixed inset-0 z-50 flex items-center justify-center bg-background/80 p-4 backdrop-blur-sm">
       <div class="w-full max-w-md rounded-xl border border-border/50 bg-card p-6 shadow-xl">
         <h2 class="text-lg font-semibold text-foreground">
-          {{ isBulkEditorOpen ? t('admin.channelMonitor.editor.bulkTitle', { count: selectedCount }) : t('admin.channelMonitor.editor.title') }}
+          {{ editingChannel ? t('admin.channelMonitor.editor.title') : t(bulkEditorScope === 'all' ? 'admin.channelMonitor.editor.allTitle' : 'admin.channelMonitor.editor.bulkTitle', { count: bulkEditorCount }) }}
         </h2>
+        <p v-if="isBulkEditorOpen" class="mt-1 text-xs text-muted-foreground">
+          {{ t(bulkEditorScope === 'all' ? 'admin.channelMonitor.editor.allDescription' : 'admin.channelMonitor.editor.bulkDescription', { count: bulkEditorCount }) }}
+        </p>
         <div class="mt-5 space-y-4">
           <label class="flex items-center justify-between gap-4">
             <span class="text-sm font-medium text-foreground">{{ t('admin.channelMonitor.editor.enabled') }}</span>

@@ -244,11 +244,16 @@ export default {
         disableMonitor: 'Disable monitor',
         enableDispatch: 'Enable group dispatch',
         disableDispatch: 'Disable group dispatch',
-        editRules: 'Bulk edit rules'
+        editRules: 'Bulk edit rules',
+        editAllRules: 'Edit all rules',
+        editSelectedRules: 'Edit selected rules'
       },
       editor: {
         title: 'Monitor Rule',
         bulkTitle: 'Bulk edit {count} rules',
+        allTitle: 'Edit all {count} rules',
+        bulkDescription: 'Saving updates only the {count} selected channels.',
+        allDescription: 'Saving updates all {count} connected channels in the current workspace.',
         enabled: 'Enable monitor',
         interval: 'Check interval (minutes)',
         failureThreshold: 'Failure threshold',

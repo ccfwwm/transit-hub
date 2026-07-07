@@ -244,11 +244,16 @@ export default {
         disableMonitor: '停用检测',
         enableDispatch: '开启分组调度',
         disableDispatch: '停用分组调度',
-        editRules: '批量设置规则'
+        editRules: '批量设置规则',
+        editAllRules: '统一设置规则',
+        editSelectedRules: '设置选中规则'
       },
       editor: {
         title: '监控规则',
         bulkTitle: '批量设置 {count} 条规则',
+        allTitle: '统一设置全部 {count} 条规则',
+        bulkDescription: '保存后只会更新当前选中的 {count} 个渠道。',
+        allDescription: '保存后会更新当前工作区全部 {count} 个已对接渠道。',
         enabled: '启用监控',
         interval: '检测间隔（分钟）',
         failureThreshold: '连续失败阈值',
