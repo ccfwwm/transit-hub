@@ -586,16 +586,20 @@ type AdminGroupInfo struct {
 	MultiplierDisplay string
 }
 
-// FetchSub2APIAdminAllGroups 通过 /api/v1/admin/groups 获取管理端全量分组列表，
+// FetchSub2APIAdminAllGroups 通过 /api/v1/admin/groups/all 获取管理端全量分组列表，
 // 包括专属分组、已禁用分组等 /api/v1/groups/available 不返回的条目。
 func (s *PlatformService) FetchSub2APIAdminAllGroups(session Session) ([]AdminGroupInfo, error) {
 	if session.Platform != PlatformSub2API || strings.TrimSpace(session.AccessToken) == "" {
 		return nil, newRequestError(ErrorAuth, PlatformSub2API)
 	}
 	authOptions := requestOptions{AccessToken: session.AccessToken, TokenType: session.TokenType}
-	response, err := s.httpClient.requestJSON(session.BaseURL+"/api/v1/admin/groups", authOptions)
+	response, err := s.httpClient.requestJSON(session.BaseURL+"/api/v1/admin/groups/all", authOptions)
 	if err != nil {
-		return nil, err
+		log.Printf("[sub2api-admin-groups] /api/v1/admin/groups/all 拉取失败，尝试旧接口 base_url=%s err=%v", session.BaseURL, err)
+		response, err = s.httpClient.requestJSON(session.BaseURL+"/api/v1/admin/groups", authOptions)
+		if err != nil {
+			return nil, err
+		}
 	}
 	groups := make([]AdminGroupInfo, 0)
 	for _, item := range dataArray(response.Payload) {

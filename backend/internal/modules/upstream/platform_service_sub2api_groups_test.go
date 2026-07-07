@@ -190,6 +190,69 @@ func TestFetchSub2APIAdminGroups_RatesUnavailable(t *testing.T) {
 	}
 }
 
+func TestFetchSub2APIAdminAllGroups_UsesAllEndpoint(t *testing.T) {
+	var legacyCalled bool
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/v1/admin/groups/all":
+			writeJSON(w, map[string]any{"data": []map[string]any{
+				{"id": 1, "name": "default", "platform": "openai", "status": "active", "rate_multiplier": 1.0},
+				{"id": 2, "name": "disabled", "platform": "claude", "status": "inactive", "rate_multiplier": 2.5},
+			}})
+		case "/api/v1/admin/groups":
+			legacyCalled = true
+			w.WriteHeader(http.StatusForbidden)
+		default:
+			t.Fatalf("unexpected path: %s", r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	service := NewPlatformService(NewHTTPClient(server.Client()))
+	session := Session{Platform: PlatformSub2API, BaseURL: server.URL, AccessToken: "token"}
+
+	groups, err := service.FetchSub2APIAdminAllGroups(session)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if legacyCalled {
+		t.Fatalf("expected /admin/groups/all to be used before legacy /admin/groups")
+	}
+	if len(groups) != 2 {
+		t.Fatalf("expected 2 groups from /admin/groups/all, got %d", len(groups))
+	}
+	if groups[1].Name != "disabled" || groups[1].Status != "inactive" {
+		t.Fatalf("expected inactive group from all endpoint, got %+v", groups[1])
+	}
+}
+
+func TestFetchSub2APIAdminAllGroups_FallsBackToLegacyEndpoint(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/v1/admin/groups/all":
+			w.WriteHeader(http.StatusNotFound)
+		case "/api/v1/admin/groups":
+			writeJSON(w, map[string]any{"data": []map[string]any{
+				{"id": 1, "name": "legacy", "platform": "openai", "status": "active", "rate_multiplier": 1.0},
+			}})
+		default:
+			t.Fatalf("unexpected path: %s", r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	service := NewPlatformService(NewHTTPClient(server.Client()))
+	session := Session{Platform: PlatformSub2API, BaseURL: server.URL, AccessToken: "token"}
+
+	groups, err := service.FetchSub2APIAdminAllGroups(session)
+	if err != nil {
+		t.Fatalf("expected legacy fallback to succeed, got err: %v", err)
+	}
+	if len(groups) != 1 || groups[0].Name != "legacy" {
+		t.Fatalf("unexpected groups from legacy fallback: %+v", groups)
+	}
+}
+
 // TestFetchSub2APIMetrics_UsesOverriddenMultiplier 验证 fetchSub2APIMetrics 的
 // Metrics.Groups 复用同一套合并逻辑，使用覆盖后的最终生效倍率。
 func TestFetchSub2APIMetrics_UsesOverriddenMultiplier(t *testing.T) {

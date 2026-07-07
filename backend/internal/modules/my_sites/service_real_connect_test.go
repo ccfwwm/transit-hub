@@ -83,7 +83,7 @@ func TestRealConnectNewAPIUpstreamCreatesSub2APIAdminAccountWhenAdminSessionIsSu
 				t.Fatalf("decode admin account payload: %v", err)
 			}
 			writeJSON(t, w, map[string]any{"data": map[string]any{"id": 1281}})
-		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/admin/groups":
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/admin/groups/all":
 			writeJSON(t, w, map[string]any{"data": []any{map[string]any{
 				"id":              101,
 				"name":            "codex-极速福利",
