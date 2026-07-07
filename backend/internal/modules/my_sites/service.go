@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"log"
 	"math"
@@ -49,10 +50,15 @@ type Service struct {
 	upstreamLookup  UpstreamSiteLookup
 	botNotifier     BotNotifier
 	accounts        AdminAccountResolver
+	adminSessions   AdminSessionProvider
 }
 
 type AdminAccountResolver interface {
 	RequireCurrentID(ctx context.Context, userID string) (string, error)
+}
+
+type AdminSessionProvider interface {
+	CurrentAdminSession(ctx context.Context, userID string, adminAccountID string) (upstream.Session, string, bool, error)
 }
 
 func NewService(repository StateRepository, platformService *upstream.PlatformService, upstreamLookup UpstreamSiteLookup) *Service {
@@ -74,6 +80,10 @@ func (s *Service) SetBotNotifier(notifier BotNotifier) {
 
 func (s *Service) SetAdminAccountResolver(accounts AdminAccountResolver) {
 	s.accounts = accounts
+}
+
+func (s *Service) SetAdminSessionProvider(provider AdminSessionProvider) {
+	s.adminSessions = provider
 }
 
 // MappingOptions 获取分组映射选项：自有分组（通过 admin 接口拉取全量）与上游分组（从缓存读取）。
@@ -1002,9 +1012,17 @@ func (s *Service) authenticatedState(ctx context.Context, userID string, adminAc
 		return nil, err
 	}
 	if state == nil || !state.Session.IsAuthenticated() {
-		return nil, requestError(ErrorAuthRequired)
+		return s.authenticatedStateFromAdminSession(ctx, userID, adminAccountID, state, requestError(ErrorAuthRequired))
 	}
-	return s.validatedState(ctx, state)
+	validated, err := s.validatedState(ctx, state)
+	if err == nil {
+		return validated, nil
+	}
+	var reqErr requestError
+	if errors.As(err, &reqErr) && (reqErr == requestError(ErrorAuthRequired) || reqErr == requestError(ErrorAdminOnly)) {
+		return s.authenticatedStateFromAdminSession(ctx, userID, adminAccountID, state, err)
+	}
+	return nil, err
 }
 
 // RequireSession 获取并校验用户的 admin 会话（必要时刷新令牌），供活动调价模块
@@ -1026,6 +1044,43 @@ func (s *Service) FetchAdminGroups(session upstream.Session) ([]upstream.AdminGr
 // UpdateAdminGroupMultiplier 透传 platformService 修改 admin 自有分组倍率。
 func (s *Service) UpdateAdminGroupMultiplier(session upstream.Session, group upstream.AdminGroupInfo, multiplier float64) error {
 	return s.platformService.UpdateAdminGroupMultiplier(session, group, multiplier)
+}
+
+func (s *Service) authenticatedStateFromAdminSession(ctx context.Context, userID string, adminAccountID string, existing *State, fallback error) (*State, error) {
+	if s.adminSessions == nil {
+		return nil, fallback
+	}
+	session, identity, ok, err := s.adminSessions.CurrentAdminSession(ctx, userID, adminAccountID)
+	if err != nil {
+		return nil, err
+	}
+	if !ok || !session.IsAuthenticated() {
+		return nil, fallback
+	}
+	state := &State{
+		UserID:         userID,
+		AdminAccountID: adminAccountID,
+		Mappings:       []GroupMapping{},
+	}
+	if existing != nil {
+		copied := *existing
+		state = &copied
+	}
+	state.UserID = userID
+	state.AdminAccountID = adminAccountID
+	state.BaseURL = session.BaseURL
+	state.Email = identity
+	state.Session = session
+	validated, err := s.validatedState(ctx, state)
+	if err != nil {
+		log.Printf("[my-sites] dashboard admin session recovery failed user_id=%s admin_account_id=%s err=%v", userID, adminAccountID, err)
+		return nil, fallback
+	}
+	if err := s.repository.Save(ctx, *validated); err != nil {
+		return nil, err
+	}
+	log.Printf("[my-sites] recovered admin session from dashboard user_id=%s admin_account_id=%s base_url=%s", userID, adminAccountID, session.BaseURL)
+	return validated, nil
 }
 
 // validatedState 刷新临期令牌并校验 admin 角色（平台中性）。

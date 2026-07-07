@@ -182,6 +182,7 @@ func New(cfg config.Config, db *pgxpool.Pool, redisClient *redis.Client) *Server
 	dashboardService := dashboard.NewService(dashboardSessionStore, platformService)
 	dashboardService.SetAdminAccountService(adminAccountsService)
 	dashboardService.SetMySiteSync(mySitesService)
+	mySitesService.SetAdminSessionProvider(dashboardService)
 	dashboardService.StartRefresher(context.Background())
 
 	// 仪表盘指标服务：实时计算五项核心指标 + 历史趋势快照。

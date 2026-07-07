@@ -77,6 +77,17 @@ func (s *Service) SetAdminAccountService(accounts AdminAccountService) {
 	s.accounts = accounts
 }
 
+func (s *Service) CurrentAdminSession(ctx context.Context, userID string, adminAccountID string) (upstream.Session, string, bool, error) {
+	record, err := s.store.Get(ctx, userID, adminAccountID)
+	if err != nil {
+		return upstream.Session{}, "", false, err
+	}
+	if record == nil || !record.Session.IsAuthenticated() {
+		return upstream.Session{}, "", false, nil
+	}
+	return record.Session, record.Identity, true, nil
+}
+
 func nowMillis() int64 {
 	return time.Now().UnixMilli()
 }
