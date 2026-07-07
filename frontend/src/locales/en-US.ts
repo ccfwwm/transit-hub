@@ -257,13 +257,18 @@ export default {
       actions: {
         refresh: 'Refresh',
         run: 'Check',
+        runShort: 'Check',
         pause: 'Stop',
         resume: 'Start',
         selectAll: 'Select filtered',
         enableMonitor: 'Enable monitor',
+        enableMonitorShort: 'Monitor on',
         disableMonitor: 'Disable monitor',
+        disableMonitorShort: 'Monitor off',
         enableDispatch: 'Enable group dispatch',
+        enableDispatchShort: 'Dispatch on',
         disableDispatch: 'Disable group dispatch',
+        disableDispatchShort: 'Dispatch off',
         cancel: 'Cancel',
         save: 'Save'
       },

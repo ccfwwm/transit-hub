@@ -257,13 +257,18 @@ export default {
       actions: {
         refresh: '刷新',
         run: '检测',
+        runShort: '检测',
         pause: '停止',
         resume: '启动',
         selectAll: '全选当前筛选',
         enableMonitor: '启用检测',
+        enableMonitorShort: '启检测',
         disableMonitor: '停用检测',
+        disableMonitorShort: '停检测',
         enableDispatch: '开启分组调度',
+        enableDispatchShort: '启调度',
         disableDispatch: '停用分组调度',
+        disableDispatchShort: '停调度',
         cancel: '取消',
         save: '保存'
       },

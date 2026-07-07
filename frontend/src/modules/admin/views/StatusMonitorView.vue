@@ -38,11 +38,18 @@ import {
 import type { ChannelMonitorChannel, ChannelMonitorRateRule, ChannelMonitorResult, ChannelMonitorStatus, RateGateStatus, UpdateChannelMonitorRuleRequest } from '../types/channelMonitor'
 
 type StatusFilter = 'all' | 'monitor_paused' | 'dispatch_paused' | ChannelMonitorStatus
+type RefreshMode = 'initial' | 'manual' | 'silent'
+type ActionOptions = {
+  actionKey?: string
+  clearSelection?: boolean
+  refresh?: boolean
+}
 
 const { t, locale } = useI18n()
 
 const isLoading = ref(false)
-const isActionLoading = ref(false)
+const isRefreshing = ref(false)
+const activeActionKeys = ref<string[]>([])
 const errorKey = ref('')
 const searchQuery = ref('')
 const statusFilter = ref<StatusFilter>('all')
@@ -74,25 +81,32 @@ const editForm = ref({ enabled: true, checkIntervalMinutes: 10, failureThreshold
 const rateRuleForm = ref({ enabled: false, autoApplyOnCheck: true, updatePriority: true, stopWhenMissingRate: true })
 const priorityDrafts = ref<Record<string, number | null>>({})
 
-const loadSummary = async () => {
-  isLoading.value = true
+const syncSummaryState = (next: Awaited<ReturnType<typeof getChannelMonitorSummary>>) => {
+  summary.value = next
+  selectedRuleIds.value = selectedRuleIds.value.filter(id => next.channels.some(channel => channel.ruleId === id))
+  priorityDrafts.value = Object.fromEntries(next.channels.map(channel => [
+    channel.ruleId,
+    channel.accountPriority ?? channel.recommendedPriority ?? 0,
+  ]))
+}
+
+const loadSummary = async (mode: RefreshMode = 'manual') => {
+  const showInitialLoading = mode === 'initial' || (summary.value.channels.length === 0 && mode !== 'silent')
+  if (showInitialLoading) isLoading.value = true
+  else if (mode === 'manual') isRefreshing.value = true
   errorKey.value = ''
   try {
-    summary.value = await getChannelMonitorSummary()
-    selectedRuleIds.value = selectedRuleIds.value.filter(id => summary.value.channels.some(channel => channel.ruleId === id))
-    priorityDrafts.value = Object.fromEntries(summary.value.channels.map(channel => [
-      channel.ruleId,
-      channel.accountPriority ?? channel.recommendedPriority ?? 0,
-    ]))
+    syncSummaryState(await getChannelMonitorSummary())
   } catch (error: any) {
     errorKey.value = error?.message ?? 'admin.channelMonitor.errors.request'
   } finally {
-    isLoading.value = false
+    if (showInitialLoading) isLoading.value = false
+    isRefreshing.value = false
   }
 }
 
 onMounted(() => {
-  void loadSummary()
+  void loadSummary('initial')
 })
 
 const statCards = computed(() => [
@@ -129,6 +143,8 @@ const visibleRuleIds = computed(() => filteredChannels.value.map(channel => chan
 const selectedCount = computed(() => selectedRuleIds.value.length)
 const allVisibleSelected = computed(() => visibleRuleIds.value.length > 0 && visibleRuleIds.value.every(id => selectedRuleIds.value.includes(id)))
 const selectedChannels = computed(() => summary.value.channels.filter(channel => selectedRuleIds.value.includes(channel.ruleId)))
+const isActionLoading = computed(() => activeActionKeys.value.length > 0)
+const isBulkActionLoading = computed(() => activeActionKeys.value.some(key => key.startsWith('bulk:') || key.startsWith('editor:') || key.startsWith('rate-rule:')))
 
 const statusLabel = (status: StatusFilter): string => t(`admin.channelMonitor.status.${status}`)
 
@@ -216,17 +232,25 @@ const rateGateClass = (status: RateGateStatus): string => {
   }
 }
 
-const runAction = async (action: () => Promise<unknown>, clearSelection = false) => {
-  isActionLoading.value = true
+const isActionActive = (key: string): boolean => activeActionKeys.value.includes(key)
+
+const channelActionKey = (channel: ChannelMonitorChannel, action: string): string => `channel:${channel.ruleId}:${action}`
+
+const isChannelBusy = (channel: ChannelMonitorChannel): boolean => activeActionKeys.value.some(key => key.startsWith(`channel:${channel.ruleId}:`))
+
+const runAction = async (action: () => Promise<unknown>, options: ActionOptions = {}) => {
+  const actionKey = options.actionKey ?? 'global'
+  if (isActionActive(actionKey)) return
+  activeActionKeys.value = [...activeActionKeys.value, actionKey]
   errorKey.value = ''
   try {
     await action()
-    if (clearSelection) selectedRuleIds.value = []
-    await loadSummary()
+    if (options.clearSelection) selectedRuleIds.value = []
+    if (options.refresh !== false) await loadSummary('silent')
   } catch (error: any) {
     errorKey.value = error?.message ?? 'admin.channelMonitor.errors.request'
   } finally {
-    isActionLoading.value = false
+    activeActionKeys.value = activeActionKeys.value.filter(key => key !== actionKey)
   }
 }
 
@@ -294,7 +318,7 @@ const saveRateRule = async (applyAfterSave = false) => {
   await runAction(async () => {
     await updateChannelMonitorRateRule({ ...rateRuleForm.value })
     if (applyAfterSave) await applyChannelMonitorRateRule()
-  })
+  }, { actionKey: applyAfterSave ? 'rate-rule:save-apply' : 'rate-rule:save' })
   closeRateRuleEditor()
 }
 
@@ -306,41 +330,41 @@ const saveEditor = async () => {
     balanceThreshold: Number(editForm.value.balanceThreshold),
   }
   if (editingChannel.value) {
-    await runAction(() => updateChannelMonitorRule(editingChannel.value!.ruleId, payload))
+    await runAction(() => updateChannelMonitorRule(editingChannel.value!.ruleId, payload), { actionKey: `editor:${editingChannel.value.ruleId}` })
   } else if (isBulkEditorOpen.value) {
-    await runAction(() => bulkUpdateChannelMonitorRules({ ...payload, ruleIds: selectedRuleIds.value }), true)
+    await runAction(() => bulkUpdateChannelMonitorRules({ ...payload, ruleIds: selectedRuleIds.value }), { actionKey: 'bulk:edit', clearSelection: true })
   }
   closeEditor()
 }
 
 const setSelectedMonitoring = (enabled: boolean) =>
-  runAction(() => bulkUpdateChannelMonitorRules({ ruleIds: selectedRuleIds.value, enabled }), true)
+  runAction(() => bulkUpdateChannelMonitorRules({ ruleIds: selectedRuleIds.value, enabled }), { actionKey: `bulk:monitor:${enabled}`, clearSelection: true })
 
 const setSelectedSchedulable = (schedulable: boolean) =>
-  runAction(() => bulkSetChannelMonitorRulesSchedulable(selectedRuleIds.value, schedulable), true)
+  runAction(() => bulkSetChannelMonitorRulesSchedulable(selectedRuleIds.value, schedulable), { actionKey: `bulk:dispatch:${schedulable}`, clearSelection: true })
 
 const runSelected = () =>
-  runAction(() => bulkRunChannelMonitorRules(selectedRuleIds.value), false)
+  runAction(() => bulkRunChannelMonitorRules(selectedRuleIds.value), { actionKey: 'bulk:run' })
 
 const previewRateRule = () =>
   runAction(async () => {
     const view = await previewChannelMonitorRateRule()
     summary.value.rateRule = view
-  })
+  }, { actionKey: 'rate-rule:preview', refresh: false })
 
 const applyRateRule = () =>
-  runAction(() => applyChannelMonitorRateRule())
+  runAction(() => applyChannelMonitorRateRule(), { actionKey: 'rate-rule:apply' })
 
 const toggleChannelMonitoring = (channel: ChannelMonitorChannel) =>
-  runAction(() => updateChannelMonitorRule(channel.ruleId, { enabled: !channel.enabled }))
+  runAction(() => updateChannelMonitorRule(channel.ruleId, { enabled: !channel.enabled }), { actionKey: channelActionKey(channel, 'monitor') })
 
 const toggleChannelSchedulable = (channel: ChannelMonitorChannel) =>
-  runAction(() => setChannelMonitorRuleSchedulable(channel.ruleId, channel.schedulable === false))
+  runAction(() => setChannelMonitorRuleSchedulable(channel.ruleId, channel.schedulable === false), { actionKey: channelActionKey(channel, 'dispatch') })
 
 const setChannelPriority = (channel: ChannelMonitorChannel) => {
   const priority = Number(priorityDrafts.value[channel.ruleId])
   if (!Number.isFinite(priority)) return
-  return runAction(() => setChannelMonitorRulePriority(channel.ruleId, Math.round(priority)))
+  return runAction(() => setChannelMonitorRulePriority(channel.ruleId, Math.round(priority)), { actionKey: channelActionKey(channel, 'priority') })
 }
 
 const selectGroup = (groupName: string) => {
@@ -377,28 +401,28 @@ const latestStatusLine = (channel: ChannelMonitorChannel): string => (
 
 const monitorButtonClass = (channel: ChannelMonitorChannel): string => (
   channel.enabled
-    ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-700 hover:bg-emerald-500/15 dark:text-emerald-300'
-    : 'border-sky-500/30 bg-sky-500/10 text-sky-700 hover:bg-sky-500/15 dark:text-sky-300'
+    ? 'border-amber-500/30 bg-amber-500/10 text-amber-700 hover:bg-amber-500/15 dark:text-amber-300'
+    : 'border-emerald-500/30 bg-emerald-500/10 text-emerald-700 hover:bg-emerald-500/15 dark:text-emerald-300'
 )
 
 const dispatchButtonClass = (channel: ChannelMonitorChannel): string => (
   channel.schedulable === false
-    ? 'border-red-500/30 bg-red-500/10 text-red-700 hover:bg-red-500/15 dark:text-red-300'
-    : 'border-emerald-500/30 bg-emerald-500/10 text-emerald-700 hover:bg-emerald-500/15 dark:text-emerald-300'
+    ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-700 hover:bg-emerald-500/15 dark:text-emerald-300'
+    : 'border-red-500/30 bg-red-500/10 text-red-700 hover:bg-red-500/15 dark:text-red-300'
 )
 </script>
 
 <template>
-  <div class="h-[calc(100vh-8rem)] flex flex-col gap-5">
+  <div class="h-[calc(100vh-8rem)] flex flex-col gap-4">
     <div class="grid grid-cols-2 gap-3 lg:grid-cols-3 2xl:grid-cols-6">
-      <div v-for="card in statCards" :key="card.key" class="rounded-lg border border-border/50 bg-surface p-4">
+      <div v-for="card in statCards" :key="card.key" class="rounded-lg border border-border/50 bg-surface p-3">
         <div class="flex items-center justify-between gap-3">
           <div>
             <p class="text-xs font-medium text-muted-foreground">{{ t(`admin.channelMonitor.stats.${card.key}`) }}</p>
-            <p class="mt-2 text-2xl font-semibold text-foreground">{{ card.value }}</p>
+            <p class="mt-1 text-2xl font-semibold text-foreground">{{ card.value }}</p>
           </div>
-          <div :class="['flex h-10 w-10 items-center justify-center rounded-lg border', card.tone]">
-            <component :is="card.icon" class="h-5 w-5" />
+          <div :class="['flex h-9 w-9 items-center justify-center rounded-lg border', card.tone]">
+            <component :is="card.icon" class="h-4 w-4" />
           </div>
         </div>
       </div>
@@ -430,35 +454,35 @@ const dispatchButtonClass = (channel: ChannelMonitorChannel): string => (
           <option value="unsupported">{{ statusLabel('unsupported') }}</option>
         </select>
       </div>
-      <Button variant="secondary" class="h-10 gap-2 rounded-xl" :disabled="isLoading" @click="loadSummary">
-        <RefreshCw :class="['h-4 w-4', isLoading ? 'animate-spin' : '']" />
+      <Button type="button" variant="secondary" class="h-10 gap-2 rounded-xl" :disabled="isLoading || isRefreshing" @click="loadSummary('manual')">
+        <RefreshCw :class="['h-4 w-4', (isLoading || isRefreshing) ? 'animate-spin' : '']" />
         {{ t('admin.channelMonitor.actions.refresh') }}
       </Button>
     </div>
 
     <div v-if="selectedCount > 0" class="flex flex-wrap items-center gap-2 rounded-lg border border-border/50 bg-surface px-4 py-3">
       <span class="mr-2 text-sm font-medium text-foreground">{{ t('admin.channelMonitor.bulk.selected', { count: selectedCount }) }}</span>
-      <Button variant="secondary" size="sm" class="gap-1.5" :disabled="isActionLoading" @click="runSelected">
-        <RefreshCw class="h-3.5 w-3.5" />
+      <Button type="button" variant="secondary" size="sm" class="gap-1.5 border-blue-500/30 bg-blue-500/10 text-blue-700 hover:bg-blue-500/15 dark:text-blue-300" :disabled="isBulkActionLoading" @click="runSelected">
+        <RefreshCw :class="['h-3.5 w-3.5', isActionActive('bulk:run') ? 'animate-spin' : '']" />
         {{ t('admin.channelMonitor.bulk.run') }}
       </Button>
-      <Button variant="secondary" size="sm" class="gap-1.5" :disabled="isActionLoading" @click="setSelectedMonitoring(true)">
+      <Button type="button" variant="secondary" size="sm" class="gap-1.5 border-emerald-500/30 bg-emerald-500/10 text-emerald-700 hover:bg-emerald-500/15 dark:text-emerald-300" :disabled="isBulkActionLoading" @click="setSelectedMonitoring(true)">
         <Play class="h-3.5 w-3.5" />
         {{ t('admin.channelMonitor.bulk.enableMonitor') }}
       </Button>
-      <Button variant="secondary" size="sm" class="gap-1.5" :disabled="isActionLoading" @click="setSelectedMonitoring(false)">
+      <Button type="button" variant="secondary" size="sm" class="gap-1.5 border-amber-500/30 bg-amber-500/10 text-amber-700 hover:bg-amber-500/15 dark:text-amber-300" :disabled="isBulkActionLoading" @click="setSelectedMonitoring(false)">
         <PauseCircle class="h-3.5 w-3.5" />
         {{ t('admin.channelMonitor.bulk.disableMonitor') }}
       </Button>
-      <Button variant="secondary" size="sm" class="gap-1.5" :disabled="isActionLoading" @click="setSelectedSchedulable(true)">
+      <Button type="button" variant="secondary" size="sm" class="gap-1.5 border-emerald-500/30 bg-emerald-500/10 text-emerald-700 hover:bg-emerald-500/15 dark:text-emerald-300" :disabled="isBulkActionLoading" @click="setSelectedSchedulable(true)">
         <Power class="h-3.5 w-3.5" />
         {{ t('admin.channelMonitor.bulk.enableDispatch') }}
       </Button>
-      <Button variant="secondary" size="sm" class="gap-1.5" :disabled="isActionLoading" @click="setSelectedSchedulable(false)">
+      <Button type="button" variant="secondary" size="sm" class="gap-1.5 border-red-500/30 bg-red-500/10 text-red-700 hover:bg-red-500/15 dark:text-red-300" :disabled="isBulkActionLoading" @click="setSelectedSchedulable(false)">
         <PowerOff class="h-3.5 w-3.5" />
         {{ t('admin.channelMonitor.bulk.disableDispatch') }}
       </Button>
-      <Button variant="ghost" size="sm" class="gap-1.5" :disabled="isActionLoading" @click="openBulkEditor">
+      <Button type="button" variant="ghost" size="sm" class="gap-1.5" :disabled="isBulkActionLoading" @click="openBulkEditor">
         <Settings2 class="h-3.5 w-3.5" />
         {{ t('admin.channelMonitor.bulk.editRules') }}
       </Button>
@@ -501,15 +525,15 @@ const dispatchButtonClass = (channel: ChannelMonitorChannel): string => (
           </div>
         </div>
         <div class="flex flex-wrap justify-end gap-2">
-          <Button variant="secondary" size="sm" class="gap-1.5" :disabled="isActionLoading" @click="previewRateRule">
-            <RefreshCw class="h-3.5 w-3.5" />
+          <Button type="button" variant="secondary" size="sm" class="gap-1.5 border-blue-500/30 bg-blue-500/10 text-blue-700 hover:bg-blue-500/15 dark:text-blue-300" :disabled="isBulkActionLoading" @click="previewRateRule">
+            <RefreshCw :class="['h-3.5 w-3.5', isActionActive('rate-rule:preview') ? 'animate-spin' : '']" />
             {{ t('admin.channelMonitor.rateRule.preview') }}
           </Button>
-          <Button variant="secondary" size="sm" class="gap-1.5 border-emerald-500/30 bg-emerald-500/10 text-emerald-700 hover:bg-emerald-500/15 dark:text-emerald-300" :disabled="isActionLoading || !summary.rateRule.rule.enabled" @click="applyRateRule">
+          <Button type="button" variant="secondary" size="sm" class="gap-1.5 border-emerald-500/30 bg-emerald-500/10 text-emerald-700 hover:bg-emerald-500/15 dark:text-emerald-300" :disabled="isBulkActionLoading || !summary.rateRule.rule.enabled" @click="applyRateRule">
             <Play class="h-3.5 w-3.5" />
             {{ t('admin.channelMonitor.rateRule.apply') }}
           </Button>
-          <Button variant="secondary" size="sm" class="gap-1.5" :disabled="isActionLoading" @click="openRateRuleEditor">
+          <Button type="button" variant="secondary" size="sm" class="gap-1.5" :disabled="isBulkActionLoading" @click="openRateRuleEditor">
             <Settings2 class="h-3.5 w-3.5" />
             {{ t('admin.channelMonitor.rateRule.configure') }}
           </Button>
@@ -520,20 +544,20 @@ const dispatchButtonClass = (channel: ChannelMonitorChannel): string => (
       </div>
     </section>
 
-    <div class="grid min-h-0 flex-1 grid-cols-1 gap-5 xl:grid-cols-[minmax(320px,420px)_1fr]">
+    <div class="grid min-h-0 flex-1 grid-cols-1 gap-3 xl:grid-cols-[minmax(260px,340px)_1fr]">
       <section class="min-h-0 overflow-hidden rounded-lg border border-border/50 bg-surface">
-        <div class="border-b border-border/50 px-5 py-4">
+        <div class="border-b border-border/50 px-4 py-3">
           <h2 class="text-sm font-semibold text-foreground">{{ t('admin.channelMonitor.groups.title') }}</h2>
           <p class="mt-1 text-xs text-muted-foreground">{{ t('admin.channelMonitor.groups.subtitle') }}</p>
         </div>
         <div class="max-h-full overflow-auto">
-          <table class="w-full text-left text-sm">
+          <table class="w-full text-left text-xs">
             <thead class="sticky top-0 bg-surface-elevated text-xs text-muted-foreground">
               <tr>
-                <th class="px-4 py-3 font-medium">{{ t('admin.channelMonitor.groups.columns.group') }}</th>
-                <th class="px-4 py-3 font-medium">{{ t('admin.channelMonitor.groups.columns.available') }}</th>
-                <th class="px-4 py-3 font-medium">{{ t('admin.channelMonitor.groups.columns.paused') }}</th>
-                <th class="px-4 py-3 font-medium">{{ t('admin.channelMonitor.groups.columns.last') }}</th>
+                <th class="px-3 py-2 font-medium">{{ t('admin.channelMonitor.groups.columns.group') }}</th>
+                <th class="px-3 py-2 font-medium">{{ t('admin.channelMonitor.groups.columns.available') }}</th>
+                <th class="px-3 py-2 font-medium">{{ t('admin.channelMonitor.groups.columns.paused') }}</th>
+                <th class="px-3 py-2 font-medium">{{ t('admin.channelMonitor.groups.columns.last') }}</th>
               </tr>
             </thead>
             <tbody class="divide-y divide-border/40">
@@ -546,13 +570,13 @@ const dispatchButtonClass = (channel: ChannelMonitorChannel): string => (
                 ]"
                 @click="selectGroup(group.groupName)"
               >
-                <td class="px-4 py-3">
+                <td class="px-3 py-2">
                   <div class="font-medium text-foreground">{{ group.groupName }}</div>
                   <div class="text-xs text-muted-foreground">{{ group.platform || t('admin.channelMonitor.common.unknown') }}</div>
                 </td>
-                <td class="px-4 py-3 font-mono text-foreground">{{ group.available }}/{{ group.total }}</td>
-                <td class="px-4 py-3 text-xs text-muted-foreground">{{ group.monitorPaused }}/{{ group.dispatchPaused }}</td>
-                <td class="px-4 py-3 text-xs text-muted-foreground">{{ formatDateTime(group.lastCheckedAt) }}</td>
+                <td class="px-3 py-2 font-mono text-foreground">{{ group.available }}/{{ group.total }}</td>
+                <td class="px-3 py-2 text-xs text-muted-foreground">{{ group.monitorPaused }}/{{ group.dispatchPaused }}</td>
+                <td class="px-3 py-2 text-xs text-muted-foreground">{{ formatDateTime(group.lastCheckedAt) }}</td>
               </tr>
               <tr v-if="!isLoading && summary.groups.length === 0">
                 <td colspan="4" class="px-4 py-10 text-center text-sm text-muted-foreground">{{ t('admin.channelMonitor.empty') }}</td>
@@ -563,7 +587,7 @@ const dispatchButtonClass = (channel: ChannelMonitorChannel): string => (
       </section>
 
       <section class="min-h-0 overflow-hidden rounded-lg border border-border/50 bg-surface">
-        <div class="flex items-center justify-between gap-3 border-b border-border/50 px-5 py-4">
+        <div class="flex items-center justify-between gap-3 border-b border-border/50 px-4 py-3">
           <div>
             <h2 class="text-sm font-semibold text-foreground">{{ t('admin.channelMonitor.channels.title') }}</h2>
             <p class="mt-1 text-xs text-muted-foreground">{{ t('admin.channelMonitor.channels.subtitle', { count: filteredChannels.length }) }}</p>
@@ -581,30 +605,30 @@ const dispatchButtonClass = (channel: ChannelMonitorChannel): string => (
         </div>
 
         <div v-else class="max-h-full overflow-auto">
-          <table class="w-full min-w-[1180px] text-left text-sm">
+          <table class="w-full min-w-[1040px] text-left text-xs">
             <thead class="sticky top-0 bg-surface-elevated text-xs text-muted-foreground">
               <tr>
-                <th class="w-10 px-4 py-3 font-medium"></th>
-                <th class="px-5 py-3 font-medium">{{ t('admin.channelMonitor.channels.columns.channel') }}</th>
-                <th class="px-5 py-3 font-medium">{{ t('admin.channelMonitor.channels.columns.group') }}</th>
-                <th class="px-5 py-3 font-medium">{{ t('admin.channelMonitor.channels.columns.status') }}</th>
-                <th class="px-5 py-3 font-medium">{{ t('admin.channelMonitor.channels.columns.balance') }}</th>
-                <th class="px-5 py-3 font-medium">{{ t('admin.channelMonitor.channels.columns.last') }}</th>
-                <th class="px-5 py-3 text-right font-medium">{{ t('admin.channelMonitor.channels.columns.actions') }}</th>
+                <th class="w-9 px-3 py-2 font-medium"></th>
+                <th class="px-3 py-2 font-medium">{{ t('admin.channelMonitor.channels.columns.channel') }}</th>
+                <th class="px-3 py-2 font-medium">{{ t('admin.channelMonitor.channels.columns.group') }}</th>
+                <th class="px-3 py-2 font-medium">{{ t('admin.channelMonitor.channels.columns.status') }}</th>
+                <th class="px-3 py-2 font-medium">{{ t('admin.channelMonitor.channels.columns.balance') }}</th>
+                <th class="px-3 py-2 font-medium">{{ t('admin.channelMonitor.channels.columns.last') }}</th>
+                <th class="px-3 py-2 text-right font-medium">{{ t('admin.channelMonitor.channels.columns.actions') }}</th>
               </tr>
             </thead>
             <tbody class="divide-y divide-border/40">
               <tr v-for="channel in filteredChannels" :key="channel.connectionId" class="hover:bg-surface-elevated/60">
-                <td class="px-4 py-4 align-top">
+                <td class="px-3 py-3 align-top">
                   <button type="button" class="mt-1 text-muted-foreground hover:text-primary" @click="toggleSelect(channel.ruleId)">
                     <CheckSquare2 v-if="selectedRuleIds.includes(channel.ruleId)" class="h-4 w-4 text-primary" />
                     <Square v-else class="h-4 w-4" />
                   </button>
                 </td>
-                <td class="px-5 py-4 align-top">
+                <td class="px-3 py-3 align-top">
                   <div class="font-medium text-foreground">{{ channel.adminAccountName || channel.adminAccountId }}</div>
                   <div class="mt-1 text-xs text-muted-foreground">{{ channel.siteName }} · {{ channel.upstreamGroupName }}</div>
-                  <div class="mt-2 flex flex-wrap gap-1.5">
+                  <div class="mt-1.5 flex flex-wrap gap-1">
                     <span :class="['rounded-md border px-2 py-0.5 text-[11px] font-medium', channel.enabled ? 'border-emerald-500/20 bg-emerald-500/10 text-emerald-600' : 'border-sky-500/20 bg-sky-500/10 text-sky-600']">
                       {{ channel.enabled ? t('admin.channelMonitor.flags.monitorOn') : t('admin.channelMonitor.flags.monitorOff') }}
                     </span>
@@ -615,7 +639,7 @@ const dispatchButtonClass = (channel: ChannelMonitorChannel): string => (
                       {{ rateGateLabel(channel.rateGateStatus) }}
                     </span>
                   </div>
-                  <div class="mt-2 grid max-w-[560px] grid-cols-2 gap-2 text-xs text-muted-foreground sm:grid-cols-4">
+                  <div class="mt-2 grid max-w-[420px] grid-cols-2 gap-1.5 text-[11px] text-muted-foreground sm:grid-cols-4">
                     <div>
                       <div>{{ t('admin.channelMonitor.rateRule.upstreamRate') }}</div>
                       <div class="font-mono text-foreground">{{ formatMultiplier(channel.upstreamEffectiveMultiplier) }}</div>
@@ -634,17 +658,19 @@ const dispatchButtonClass = (channel: ChannelMonitorChannel): string => (
                           min="0"
                           max="999"
                           class="h-7 w-16 rounded-md border border-border/50 bg-surface px-2 text-xs font-mono text-foreground outline-none focus:border-primary focus:ring-1 focus:ring-primary"
-                          :disabled="isActionLoading || !channel.supported"
+                          :disabled="isChannelBusy(channel) || !channel.supported"
                           :aria-label="t('admin.channelMonitor.rateRule.manualPriority')"
                         />
                         <Button
+                          type="button"
                           variant="secondary"
                           size="sm"
                           class="h-7 px-2 text-xs border-amber-500/30 bg-amber-500/10 text-amber-700 hover:bg-amber-500/15 dark:text-amber-300"
-                          :disabled="isActionLoading || !channel.supported"
+                          :disabled="isChannelBusy(channel) || !channel.supported"
                           @click="setChannelPriority(channel)"
                         >
-                          {{ t('admin.channelMonitor.rateRule.setPriority') }}
+                          <Loader2 v-if="isActionActive(channelActionKey(channel, 'priority'))" class="h-3 w-3 animate-spin" />
+                          <span v-else>{{ t('admin.channelMonitor.rateRule.setPriority') }}</span>
                         </Button>
                       </div>
                     </div>
@@ -653,19 +679,19 @@ const dispatchButtonClass = (channel: ChannelMonitorChannel): string => (
                       <div class="font-mono text-foreground">{{ formatMultiplier(channel.accountRateMultiplier) }}</div>
                     </div>
                   </div>
-                  <div v-if="channel.rateGateMessage" class="mt-1 max-w-[520px] truncate text-xs" :class="channel.rateGateStatus === 'blocked' ? 'text-red-600 dark:text-red-300' : 'text-muted-foreground'" :title="channel.rateGateMessage">
+                  <div v-if="channel.rateGateMessage" class="mt-1 max-w-[420px] truncate text-xs" :class="channel.rateGateStatus === 'blocked' ? 'text-red-600 dark:text-red-300' : 'text-muted-foreground'" :title="channel.rateGateMessage">
                     {{ channel.rateGateMessage }}
                   </div>
-                  <div class="mt-3 max-w-[560px] rounded-lg border border-border/50 bg-background/60 p-3 shadow-sm">
+                  <div class="mt-2 max-w-[420px] rounded-lg border border-border/50 bg-background/60 p-2 shadow-sm">
                     <div class="flex items-center justify-between gap-3 text-xs font-medium text-muted-foreground">
                       <span>{{ t('admin.channelMonitor.timeline.window') }}</span>
                       <span class="truncate">{{ timelineNextLabel(channel) }}</span>
                     </div>
-                    <div class="mt-2 grid h-7 grid-cols-[repeat(60,minmax(3px,1fr))] gap-0.5">
+                    <div class="mt-1.5 grid h-5 grid-cols-[repeat(60,minmax(2px,1fr))] gap-0.5">
                       <span
                         v-for="(result, index) in timelineItems(channel)"
                         :key="`${channel.ruleId}-${index}-${result?.id ?? 'empty'}`"
-                        :class="['h-7 rounded-[3px]', timelineClass(result)]"
+                        :class="['h-5 rounded-[2px]', timelineClass(result)]"
                         :title="timelineTitle(result)"
                       />
                     </div>
@@ -673,7 +699,7 @@ const dispatchButtonClass = (channel: ChannelMonitorChannel): string => (
                       <span>{{ t('admin.channelMonitor.timeline.past') }}</span>
                       <span>{{ t('admin.channelMonitor.timeline.now') }}</span>
                     </div>
-                    <div class="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
+                    <div class="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
                       <span class="font-mono text-foreground">{{ channel.recentTotal ? `${channel.uptimePercent.toFixed(0)}%` : '-' }}</span>
                       <span>{{ t('admin.channelMonitor.timeline.successCount', { success: channel.recentSuccess, total: channel.recentTotal }) }}</span>
                       <span>{{ latestStatusLine(channel) }}</span>
@@ -683,15 +709,15 @@ const dispatchButtonClass = (channel: ChannelMonitorChannel): string => (
                     </div>
                   </div>
                 </td>
-                <td class="px-5 py-4 align-top">
-                  <div class="flex flex-wrap gap-1.5">
+                <td class="px-3 py-3 align-top">
+                  <div class="flex max-w-[150px] flex-wrap gap-1">
                     <span v-for="group in channel.ownGroups" :key="group" class="rounded-md border border-border/50 bg-surface-elevated px-2 py-0.5 text-xs font-medium text-muted-foreground">
                       {{ group }}
                     </span>
                   </div>
                   <div class="mt-1 text-xs text-muted-foreground">{{ channel.groupType || t('admin.channelMonitor.common.unknown') }}</div>
                 </td>
-                <td class="px-5 py-4 align-top">
+                <td class="px-3 py-3 align-top">
                   <span :class="['inline-flex items-center gap-1.5 rounded-md border px-2 py-1 text-xs font-semibold', statusClass(channel.status)]">
                     <component :is="statusIcon(channel.status)" class="h-3.5 w-3.5" />
                     {{ statusLabel(channel.status) }}
@@ -700,11 +726,11 @@ const dispatchButtonClass = (channel: ChannelMonitorChannel): string => (
                     {{ t('admin.channelMonitor.channels.failures', { count: channel.consecutiveFailures }) }}
                   </div>
                 </td>
-                <td class="px-5 py-4 align-top">
+                <td class="px-3 py-3 align-top">
                   <div class="font-mono text-foreground">{{ formatMoney(channel.balance) }}</div>
                   <div class="text-xs text-muted-foreground">{{ t('admin.channelMonitor.channels.threshold', { value: channel.balanceThreshold }) }}</div>
                 </td>
-                <td class="px-5 py-4 align-top">
+                <td class="px-3 py-3 align-top">
                   <div class="flex items-center gap-1.5 text-xs text-muted-foreground">
                     <Clock3 class="h-3.5 w-3.5" />
                     {{ formatDateTime(channel.lastCheckedAt) }}
@@ -714,25 +740,27 @@ const dispatchButtonClass = (channel: ChannelMonitorChannel): string => (
                     {{ formatLatency(channel.lastLatencyMs) }}
                   </div>
                   <div class="mt-1 text-xs text-muted-foreground">{{ t('admin.channelMonitor.channels.next', { value: timelineNextLabel(channel) }) }}</div>
-                  <div class="mt-1 max-w-[240px] truncate text-xs" :class="channel.status === 'healthy' ? 'text-muted-foreground' : 'text-red-600 dark:text-red-300'" :title="channel.lastMessage">{{ channel.lastMessage || '-' }}</div>
+                  <div class="mt-1 max-w-[200px] truncate text-xs" :class="channel.status === 'healthy' ? 'text-muted-foreground' : 'text-red-600 dark:text-red-300'" :title="channel.lastMessage">{{ channel.lastMessage || '-' }}</div>
                 </td>
-                <td class="px-5 py-4 align-top">
-                  <div class="flex justify-end gap-1.5">
-                    <Button variant="secondary" size="sm" class="gap-1.5 border-blue-500/30 bg-blue-500/10 text-blue-700 hover:bg-blue-500/15 dark:text-blue-300" :disabled="isActionLoading || !channel.supported" @click="runAction(() => runChannelMonitorRule(channel.ruleId))">
-                      <RefreshCw class="h-3.5 w-3.5" />
-                      {{ t('admin.channelMonitor.actions.run') }}
+                <td class="px-3 py-3 align-top">
+                  <div class="flex max-w-[260px] flex-wrap justify-end gap-1">
+                    <Button type="button" variant="secondary" size="sm" class="h-8 gap-1 border-blue-500/30 bg-blue-500/10 px-2 text-xs text-blue-700 hover:bg-blue-500/15 dark:text-blue-300" :disabled="isChannelBusy(channel) || !channel.supported" :title="t('admin.channelMonitor.actions.run')" @click="runAction(() => runChannelMonitorRule(channel.ruleId), { actionKey: channelActionKey(channel, 'run') })">
+                      <RefreshCw :class="['h-3.5 w-3.5', isActionActive(channelActionKey(channel, 'run')) ? 'animate-spin' : '']" />
+                      {{ t('admin.channelMonitor.actions.runShort') }}
                     </Button>
-                    <Button variant="secondary" size="sm" :class="['gap-1.5', monitorButtonClass(channel)]" :disabled="isActionLoading" @click="toggleChannelMonitoring(channel)">
-                      <Play v-if="!channel.enabled" class="h-3.5 w-3.5" />
+                    <Button type="button" variant="secondary" size="sm" :class="['h-8 gap-1 px-2 text-xs', monitorButtonClass(channel)]" :disabled="isChannelBusy(channel)" :title="channel.enabled ? t('admin.channelMonitor.actions.disableMonitor') : t('admin.channelMonitor.actions.enableMonitor')" @click="toggleChannelMonitoring(channel)">
+                      <Loader2 v-if="isActionActive(channelActionKey(channel, 'monitor'))" class="h-3.5 w-3.5 animate-spin" />
+                      <Play v-else-if="!channel.enabled" class="h-3.5 w-3.5" />
                       <PauseCircle v-else class="h-3.5 w-3.5" />
-                      {{ channel.enabled ? t('admin.channelMonitor.actions.disableMonitor') : t('admin.channelMonitor.actions.enableMonitor') }}
+                      {{ channel.enabled ? t('admin.channelMonitor.actions.disableMonitorShort') : t('admin.channelMonitor.actions.enableMonitorShort') }}
                     </Button>
-                    <Button variant="secondary" size="sm" :class="['gap-1.5', dispatchButtonClass(channel)]" :disabled="isActionLoading || !channel.supported" @click="toggleChannelSchedulable(channel)">
-                      <Power v-if="channel.schedulable === false" class="h-3.5 w-3.5" />
+                    <Button type="button" variant="secondary" size="sm" :class="['h-8 gap-1 px-2 text-xs', dispatchButtonClass(channel)]" :disabled="isChannelBusy(channel) || !channel.supported" :title="channel.schedulable === false ? t('admin.channelMonitor.actions.enableDispatch') : t('admin.channelMonitor.actions.disableDispatch')" @click="toggleChannelSchedulable(channel)">
+                      <Loader2 v-if="isActionActive(channelActionKey(channel, 'dispatch'))" class="h-3.5 w-3.5 animate-spin" />
+                      <Power v-else-if="channel.schedulable === false" class="h-3.5 w-3.5" />
                       <PowerOff v-else class="h-3.5 w-3.5" />
-                      {{ channel.schedulable === false ? t('admin.channelMonitor.actions.enableDispatch') : t('admin.channelMonitor.actions.disableDispatch') }}
+                      {{ channel.schedulable === false ? t('admin.channelMonitor.actions.enableDispatchShort') : t('admin.channelMonitor.actions.disableDispatchShort') }}
                     </Button>
-                    <Button variant="ghost" size="sm" :disabled="isActionLoading" @click="openEditor(channel)">
+                    <Button type="button" variant="ghost" size="sm" class="h-8 px-2 text-xs" :disabled="isChannelBusy(channel)" @click="openEditor(channel)">
                       <Settings2 class="h-3.5 w-3.5" />
                     </Button>
                   </div>
