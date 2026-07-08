@@ -238,12 +238,15 @@ export default {
         }
       },
       testModel: {
-        title: 'Check Models',
+        title: 'Check Models and Balance Refresh',
         configure: 'Configure check models',
-        description: 'Active account checks use a model based on channel type, so Claude groups are not tested with an OpenAI model.',
+        configureShort: 'Models/balance',
+        description: 'Active checks use a model based on channel type; stale upstream balances are refreshed and saved before threshold checks.',
         openai: 'OpenAI check model',
         anthropic: 'Anthropic check model',
-        current: 'Current: OpenAI {openai} / Anthropic {anthropic}'
+        balanceRefreshInterval: 'Balance refresh interval',
+        minutes: 'minutes',
+        current: 'Current: OpenAI {openai} / Anthropic {anthropic} / balance every {minutes} min'
       },
       bulk: {
         selected: '{count} selected',

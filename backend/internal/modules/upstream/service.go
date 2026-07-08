@@ -595,6 +595,15 @@ func (s *Service) Sync(ctx context.Context, userID string, id string) (Response,
 	return s.sync(ctx, id)
 }
 
+// RefreshSite refreshes one upstream site for internal schedulers that already
+// operate on trusted site IDs, then returns the newest cached state.
+func (s *Service) RefreshSite(ctx context.Context, id string) (*Site, error) {
+	if _, err := s.sync(ctx, id); err != nil {
+		return nil, err
+	}
+	return s.cache.Get(ctx, id)
+}
+
 // SyncAll 并发同步指定用户当前工作区的所有站点。
 // 有会话的站点并行同步，无会话的直接返回当前状态。
 func (s *Service) SyncAll(ctx context.Context, userID string) ([]Response, error) {

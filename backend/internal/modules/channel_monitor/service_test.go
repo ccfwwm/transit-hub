@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	"transithub/backend/internal/modules/my_sites"
 	"transithub/backend/internal/modules/upstream"
@@ -250,6 +251,92 @@ func TestRunRulePausesWhenBalanceBelowThreshold(t *testing.T) {
 	}
 	if got := service.platform.schedulableCalls; len(got) != 1 || got[0].Schedulable {
 		t.Fatalf("expected one disable call, got %+v", got)
+	}
+}
+
+func TestRunRuleRefreshesStaleBalanceBeforeThresholdCheck(t *testing.T) {
+	ctx := context.Background()
+	repo := newFakeRepository()
+	service := newTestService(repo)
+	oldBalance := 10.0
+	service.upstreams.site.Metrics.Balance.Value = &oldBalance
+	oldSyncedAt := timeNowAdd(-10 * 60 * 1000)
+	service.upstreams.site.LastSyncedAt = &oldSyncedAt
+	newBalance := 0.4
+	service.upstreams.refreshedSite = cloneSite(service.upstreams.site)
+	service.upstreams.refreshedSite.Metrics.Balance.Value = &newBalance
+	nowSyncedAt := timeNowAdd(0)
+	service.upstreams.refreshedSite.LastSyncedAt = &nowSyncedAt
+	rule := repo.mustRule("conn-1")
+
+	result, err := service.RunRule(ctx, rule.ID, "scheduled")
+	if err != nil {
+		t.Fatalf("RunRule returned error: %v", err)
+	}
+
+	if service.upstreams.refreshCount != 1 {
+		t.Fatalf("expected stale upstream balance to refresh once, got %d", service.upstreams.refreshCount)
+	}
+	if result.Status != StatusBalancePaused {
+		t.Fatalf("expected refreshed low balance to pause channel, got %+v", result)
+	}
+	if got := service.platform.schedulableCalls; len(got) != 1 || got[0].Schedulable {
+		t.Fatalf("expected one disable call after refreshed low balance, got %+v", got)
+	}
+}
+
+func TestRunRuleDoesNotRefreshFreshBalance(t *testing.T) {
+	ctx := context.Background()
+	repo := newFakeRepository()
+	service := newTestService(repo)
+	syncedAt := timeNowAdd(-60 * 1000)
+	service.upstreams.site.LastSyncedAt = &syncedAt
+	rule := repo.mustRule("conn-1")
+
+	result, err := service.RunRule(ctx, rule.ID, "scheduled")
+	if err != nil {
+		t.Fatalf("RunRule returned error: %v", err)
+	}
+
+	if service.upstreams.refreshCount != 0 {
+		t.Fatalf("expected fresh upstream balance not to refresh, got %d", service.upstreams.refreshCount)
+	}
+	if result.Status != StatusHealthy {
+		t.Fatalf("expected healthy result, got %+v", result)
+	}
+}
+
+func TestRunRuleAutoPausesAfterBalanceRefreshFailures(t *testing.T) {
+	ctx := context.Background()
+	repo := newFakeRepository()
+	service := newTestService(repo)
+	syncedAt := timeNowAdd(-10 * 60 * 1000)
+	service.upstreams.site.LastSyncedAt = &syncedAt
+	service.upstreams.refreshErr = errors.New("upstream balance timeout")
+	rule := repo.mustRule("conn-1")
+	rule.FailureThreshold = 2
+	repo.rules[rule.ID] = rule
+
+	first, err := service.RunRule(ctx, rule.ID, "scheduled")
+	if err != nil {
+		t.Fatalf("first RunRule returned error: %v", err)
+	}
+	if first.Status != StatusFailed {
+		t.Fatalf("expected first stale balance refresh failure to fail, got %+v", first)
+	}
+	if len(service.platform.schedulableCalls) != 0 {
+		t.Fatalf("first refresh failure should not pause, got %+v", service.platform.schedulableCalls)
+	}
+
+	second, err := service.RunRule(ctx, rule.ID, "scheduled")
+	if err != nil {
+		t.Fatalf("second RunRule returned error: %v", err)
+	}
+	if second.Status != StatusAutoPaused {
+		t.Fatalf("expected second refresh failure to auto pause, got %+v", second)
+	}
+	if got := service.platform.schedulableCalls; len(got) != 1 || got[0].Schedulable {
+		t.Fatalf("expected one disable call after repeated refresh failures, got %+v", got)
 	}
 }
 
@@ -753,10 +840,24 @@ func (f fakeStateStore) Get(context.Context, string, string) (*my_sites.State, e
 }
 
 type fakeUpstreams struct {
-	site *upstream.Site
+	site          *upstream.Site
+	refreshedSite *upstream.Site
+	refreshCount  int
+	refreshErr    error
 }
 
-func (f fakeUpstreams) GetSite(context.Context, string) (*upstream.Site, error) {
+func (f *fakeUpstreams) GetSite(context.Context, string) (*upstream.Site, error) {
+	return f.site, nil
+}
+
+func (f *fakeUpstreams) RefreshSite(context.Context, string) (*upstream.Site, error) {
+	f.refreshCount++
+	if f.refreshErr != nil {
+		return nil, f.refreshErr
+	}
+	if f.refreshedSite != nil {
+		f.site = f.refreshedSite
+	}
 	return f.site, nil
 }
 
@@ -827,7 +928,7 @@ func upstreamAuthError() error {
 type testService struct {
 	*Service
 	platform  *fakeMonitorPlatform
-	upstreams fakeUpstreams
+	upstreams *fakeUpstreams
 	conns     *fakeConnections
 }
 
@@ -844,7 +945,7 @@ func newTestService(repo *fakeRepository) *testService {
 		GroupType:         "openai",
 	}
 	balance := 2.0
-	upstreams := fakeUpstreams{site: &upstream.Site{
+	upstreams := &fakeUpstreams{site: &upstream.Site{
 		ID:             "site-1",
 		UserID:         "user-1",
 		AdminAccountID: "admin-1",
@@ -878,3 +979,19 @@ func (s *testService) state() *my_sites.State {
 func boolPtr(value bool) *bool        { return &value }
 func intPtr(value int) *int           { return &value }
 func floatPtr(value float64) *float64 { return &value }
+
+func timeNowAdd(deltaMS int64) int64 {
+	return timeNow().Add(time.Duration(deltaMS) * time.Millisecond).UnixMilli()
+}
+
+func timeNow() time.Time {
+	return time.Now()
+}
+
+func cloneSite(site *upstream.Site) *upstream.Site {
+	if site == nil {
+		return nil
+	}
+	next := *site
+	return &next
+}

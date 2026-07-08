@@ -48,6 +48,7 @@ type SessionProvider interface {
 
 type UpstreamLookup interface {
 	GetSite(ctx context.Context, siteID string) (*upstream.Site, error)
+	RefreshSite(ctx context.Context, siteID string) (*upstream.Site, error)
 }
 
 type MonitorPlatform interface {
@@ -493,6 +494,9 @@ func (s *Service) UpdateTestModelConfig(ctx context.Context, userID string, req 
 	if req.AnthropicModelID != nil {
 		config.AnthropicModelID = defaultIfBlank(*req.AnthropicModelID, DefaultAnthropicTestModel)
 	}
+	if req.BalanceRefreshIntervalMinutes != nil {
+		config.BalanceRefreshIntervalMinutes = clampInt(*req.BalanceRefreshIntervalMinutes, 1, 24*60)
+	}
 	config.UpdatedAt = time.Now()
 	if err := s.store.SaveTestModelConfig(ctx, config); err != nil {
 		return TestModelConfig{}, err
@@ -703,12 +707,33 @@ func (s *Service) runRule(ctx context.Context, rule Rule, reason string) (Result
 		rule.ConsecutiveFailures = 0
 		return finish(StatusUnsupported, false, "当前 admin 平台暂不支持主动监控", nil, "")
 	}
+	testModelConfig, err := s.ensureTestModelConfig(ctx, rule.UserID, rule.AdminAccountID)
+	if err != nil {
+		return Result{}, err
+	}
 	site, err := s.upstreams.GetSite(ctx, conn.UpstreamSiteID)
 	if err != nil {
 		return Result{}, err
 	}
 	if site == nil {
 		return finish(StatusFailed, false, "上游站点不存在", nil, "")
+	}
+	if refreshedSite, refreshErr := s.refreshSiteBalanceIfStale(ctx, site, testModelConfig.BalanceRefreshIntervalMinutes); refreshErr != nil {
+		message := "余额刷新失败：" + refreshErr.Error()
+		rule.ConsecutiveFailures++
+		if rule.ConsecutiveFailures >= rule.FailureThreshold {
+			if strings.TrimSpace(conn.AdminAccountID) != "" {
+				if err := s.platform.SetSub2APIAdminAccountSchedulable(state.Session, conn.AdminAccountID, false); err != nil {
+					return finish(StatusFailed, false, message+"；自动停止失败："+err.Error(), nil, "")
+				}
+				rule.DesiredSchedulable = schedulablePtr(false)
+			}
+			rule.ConsecutiveFailures = 0
+			return finish(StatusAutoPaused, false, fmt.Sprintf("%s；连续失败达到 %d 次，已自动停止", message, rule.FailureThreshold), nil, "")
+		}
+		return finish(StatusFailed, false, message, nil, "")
+	} else if refreshedSite != nil {
+		site = refreshedSite
 	}
 	if balance := convertedBalance(site); balance != nil && *balance < rule.BalanceThreshold {
 		rule.ConsecutiveFailures = 0
@@ -721,10 +746,6 @@ func (s *Service) runRule(ctx context.Context, rule Rule, reason string) (Result
 		return finish(StatusBalancePaused, false, fmt.Sprintf("余额 %.2f 低于阈值 %.2f，已自动停止", *balance, rule.BalanceThreshold), nil, "")
 	}
 
-	testModelConfig, err := s.ensureTestModelConfig(ctx, rule.UserID, rule.AdminAccountID)
-	if err != nil {
-		return Result{}, err
-	}
 	testModel := testModelForGroupType(conn.GroupType, testModelConfig)
 	testResult, testErr := s.platform.TestSub2APIAdminAccount(state.Session, conn.AdminAccountID, AccountTestOptions{ModelID: testModel})
 	if strings.TrimSpace(testResult.Model) == "" {
@@ -939,6 +960,7 @@ func (s *Service) ensureTestModelConfig(ctx context.Context, userID, adminAccoun
 	if config != nil {
 		config.OpenAIModelID = defaultIfBlank(config.OpenAIModelID, DefaultOpenAITestModel)
 		config.AnthropicModelID = defaultIfBlank(config.AnthropicModelID, DefaultAnthropicTestModel)
+		config.BalanceRefreshIntervalMinutes = clampInt(config.BalanceRefreshIntervalMinutes, 1, 24*60)
 		return *config, nil
 	}
 	defaultConfig := DefaultTestModelConfig(userID, adminAccountID)
@@ -1197,6 +1219,28 @@ func effectiveMultiplier(multiplier *float64, rechargeRate float64) *float64 {
 		return nil
 	}
 	return &value
+}
+
+func (s *Service) refreshSiteBalanceIfStale(ctx context.Context, site *upstream.Site, intervalMinutes int) (*upstream.Site, error) {
+	if site == nil || s.upstreams == nil {
+		return site, nil
+	}
+	intervalMinutes = clampInt(intervalMinutes, 1, 24*60)
+	if !isSiteBalanceStale(site, intervalMinutes) {
+		return site, nil
+	}
+	return s.upstreams.RefreshSite(ctx, site.ID)
+}
+
+func isSiteBalanceStale(site *upstream.Site, intervalMinutes int) bool {
+	if site == nil || site.LastSyncedAt == nil {
+		return true
+	}
+	lastSynced := time.UnixMilli(*site.LastSyncedAt)
+	if lastSynced.After(time.Now()) {
+		return false
+	}
+	return time.Since(lastSynced) >= time.Duration(clampInt(intervalMinutes, 1, 24*60))*time.Minute
 }
 
 func shouldProtectPausedRule(rule Rule) bool {

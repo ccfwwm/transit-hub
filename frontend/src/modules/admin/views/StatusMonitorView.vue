@@ -81,6 +81,7 @@ const summary = ref({
   testModelConfig: {
     openaiModelId: 'gpt-5.4',
     anthropicModelId: 'claude-sonnet-4-6',
+    balanceRefreshIntervalMinutes: 5,
     updatedAt: '',
   },
 } as Awaited<ReturnType<typeof getChannelMonitorSummary>>)
@@ -94,7 +95,7 @@ const disconnectMode = ref<RealDisconnectRequest['mode']>('unlink')
 const disconnectError = ref('')
 const editForm = ref({ enabled: true, checkIntervalMinutes: 10, failureThreshold: 3, balanceThreshold: 1 })
 const rateRuleForm = ref({ enabled: false, autoApplyOnCheck: true, updatePriority: true, stopWhenMissingRate: true })
-const testModelForm = ref({ openaiModelId: 'gpt-5.4', anthropicModelId: 'claude-sonnet-4-6' })
+const testModelForm = ref({ openaiModelId: 'gpt-5.4', anthropicModelId: 'claude-sonnet-4-6', balanceRefreshIntervalMinutes: 5 })
 const priorityDrafts = ref<Record<string, number | null>>({})
 
 const syncSummaryState = (next: Awaited<ReturnType<typeof getChannelMonitorSummary>>) => {
@@ -370,6 +371,7 @@ const openTestModelEditor = () => {
   testModelForm.value = {
     openaiModelId: summary.value.testModelConfig.openaiModelId || 'gpt-5.4',
     anthropicModelId: summary.value.testModelConfig.anthropicModelId || 'claude-sonnet-4-6',
+    balanceRefreshIntervalMinutes: summary.value.testModelConfig.balanceRefreshIntervalMinutes || 5,
   }
   isTestModelEditorOpen.value = true
 }
@@ -383,6 +385,7 @@ const saveTestModelConfig = async () => {
     const config = await updateChannelMonitorTestModelConfig({
       openaiModelId: testModelForm.value.openaiModelId,
       anthropicModelId: testModelForm.value.anthropicModelId,
+      balanceRefreshIntervalMinutes: Number(testModelForm.value.balanceRefreshIntervalMinutes),
     })
     summary.value.testModelConfig = config
   }, { actionKey: 'test-model:save', refresh: false })
@@ -567,13 +570,6 @@ const dispatchButtonClass = (channel: ChannelMonitorChannel): string => (
         </select>
       </div>
       <div class="flex flex-wrap items-center gap-2">
-        <Button type="button" variant="secondary" class="h-10 gap-2 rounded-xl !border-violet-500/30 !bg-violet-500/10 !text-violet-700 hover:!bg-violet-500/15 dark:!text-violet-300" :disabled="isLoading || isBulkActionLoading" @click="openTestModelEditor">
-          <Settings2 class="h-4 w-4" />
-          <span>{{ t('admin.channelMonitor.testModel.configure') }}</span>
-          <span class="hidden max-w-[260px] truncate font-mono text-[11px] opacity-80 2xl:inline">
-            {{ summary.testModelConfig.openaiModelId }} / {{ summary.testModelConfig.anthropicModelId }}
-          </span>
-        </Button>
         <Button type="button" variant="secondary" class="h-10 gap-2 rounded-xl" :disabled="isLoading || isBulkActionLoading || allRuleIds.length === 0" @click="openBulkEditor('all')">
           <Settings2 class="h-4 w-4" />
           {{ t('admin.channelMonitor.bulk.editAllRules') }}
@@ -650,6 +646,10 @@ const dispatchButtonClass = (channel: ChannelMonitorChannel): string => (
           </div>
         </div>
         <div class="flex flex-wrap justify-end gap-2">
+          <Button type="button" variant="secondary" size="sm" class="gap-1.5 !border-violet-500/30 !bg-violet-500/10 !text-violet-700 hover:!bg-violet-500/15 dark:!text-violet-300" :disabled="isBulkActionLoading" @click="openTestModelEditor">
+            <Settings2 class="h-3.5 w-3.5" />
+            {{ t('admin.channelMonitor.testModel.configureShort') }}
+          </Button>
           <Button type="button" variant="secondary" size="sm" class="gap-1.5 !border-blue-500/30 !bg-blue-500/10 !text-blue-700 hover:!bg-blue-500/15 dark:!text-blue-300" :disabled="isBulkActionLoading" @click="previewRateRule">
             <RefreshCw :class="['h-3.5 w-3.5', isActionActive('rate-rule:preview') ? 'animate-spin' : '']" />
             {{ t('admin.channelMonitor.rateRule.preview') }}
@@ -971,8 +971,15 @@ const dispatchButtonClass = (channel: ChannelMonitorChannel): string => (
             <span class="text-sm font-medium text-foreground">{{ t('admin.channelMonitor.testModel.anthropic') }}</span>
             <input v-model.trim="testModelForm.anthropicModelId" type="text" class="h-10 w-full rounded-xl border border-border/50 bg-surface px-3 font-mono text-sm outline-none focus:border-primary focus:ring-1 focus:ring-primary" placeholder="claude-sonnet-4-6" />
           </label>
+          <label class="block space-y-2">
+            <span class="text-sm font-medium text-foreground">{{ t('admin.channelMonitor.testModel.balanceRefreshInterval') }}</span>
+            <div class="flex items-center gap-2">
+              <input v-model.number="testModelForm.balanceRefreshIntervalMinutes" type="number" min="1" max="1440" class="h-10 w-28 rounded-xl border border-border/50 bg-surface px-3 text-sm outline-none focus:border-primary focus:ring-1 focus:ring-primary" />
+              <span class="text-sm text-muted-foreground">{{ t('admin.channelMonitor.testModel.minutes') }}</span>
+            </div>
+          </label>
           <div class="rounded-lg border border-border/50 bg-surface-elevated px-3 py-2 text-xs text-muted-foreground">
-            {{ t('admin.channelMonitor.testModel.current', { openai: summary.testModelConfig.openaiModelId, anthropic: summary.testModelConfig.anthropicModelId }) }}
+            {{ t('admin.channelMonitor.testModel.current', { openai: summary.testModelConfig.openaiModelId, anthropic: summary.testModelConfig.anthropicModelId, minutes: summary.testModelConfig.balanceRefreshIntervalMinutes }) }}
           </div>
         </div>
         <div class="mt-6 flex justify-end gap-2">

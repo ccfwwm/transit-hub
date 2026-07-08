@@ -188,10 +188,12 @@ export interface UpdateChannelMonitorRateRuleRequest {
 export interface ChannelMonitorTestModelConfig {
   openaiModelId: string
   anthropicModelId: string
+  balanceRefreshIntervalMinutes: number
   updatedAt: string
 }
 
 export interface UpdateChannelMonitorTestModelConfigRequest {
   openaiModelId?: string
   anthropicModelId?: string
+  balanceRefreshIntervalMinutes?: number
 }

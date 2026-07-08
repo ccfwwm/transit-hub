@@ -238,12 +238,15 @@ export default {
         }
       },
       testModel: {
-        title: '检测模型',
+        title: '检测模型与余额刷新',
         configure: '统一设置检测模型',
-        description: '主动检测账号时会按渠道类型使用对应模型，避免 Claude 分组被 OpenAI 模型误判。',
+        configureShort: '检测模型/余额',
+        description: '主动检测账号时会按渠道类型使用对应模型；余额缓存超过间隔后会先刷新上游并写回数据库。',
         openai: 'OpenAI 检测模型',
         anthropic: 'Anthropic 检测模型',
-        current: '当前：OpenAI {openai} / Anthropic {anthropic}'
+        balanceRefreshInterval: '余额刷新间隔',
+        minutes: '分钟',
+        current: '当前：OpenAI {openai} / Anthropic {anthropic} / 余额 {minutes} 分钟刷新'
       },
       bulk: {
         selected: '已选 {count} 个',
