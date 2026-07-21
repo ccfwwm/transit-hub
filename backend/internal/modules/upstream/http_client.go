@@ -2,6 +2,7 @@ package upstream
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"io"
 	"log"
@@ -16,6 +17,7 @@ type HTTPClient struct {
 }
 
 type requestOptions struct {
+	Context     context.Context
 	Method      string
 	Body        any
 	Cookie      string
@@ -50,7 +52,11 @@ func (c *HTTPClient) requestJSON(reqURL string, options requestOptions) (jsonRes
 		return jsonResponse{}, err
 	}
 
-	req, err := http.NewRequest(method, reqURL, body)
+	ctx := options.Context
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	req, err := http.NewRequestWithContext(ctx, method, reqURL, body)
 	if err != nil {
 		return jsonResponse{}, newRequestError(ErrorInvalidURL, "")
 	}
@@ -107,7 +113,11 @@ func (c *HTTPClient) requestText(reqURL string, options requestOptions) (textRes
 		return textResponse{}, err
 	}
 
-	req, err := http.NewRequest(method, reqURL, body)
+	ctx := options.Context
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	req, err := http.NewRequestWithContext(ctx, method, reqURL, body)
 	if err != nil {
 		return textResponse{}, newRequestError(ErrorInvalidURL, "")
 	}

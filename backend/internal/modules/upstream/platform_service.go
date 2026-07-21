@@ -1,6 +1,7 @@
 package upstream
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -815,11 +816,17 @@ func (s *PlatformService) FetchNewAPIGroupDailyStats(session Session, groups []G
 // FetchKeyUsageToday 按平台分发获取上游站点今天各 key 的消费统计。
 // 返回值为上游平台原始金额，未乘以站点 rechargeRate；由 upstream.Service 层完成 CNY 换算和跨站点聚合。
 func (s *PlatformService) FetchKeyUsageToday(session Session, groups []GroupInfo) ([]KeyUsageTodayStat, error) {
+	return s.FetchKeyUsageTodayWithContext(context.Background(), session, groups)
+}
+
+// FetchKeyUsageTodayWithContext lets drill-down callers stop a slow upstream
+// request without changing the timeout policy of normal site synchronization.
+func (s *PlatformService) FetchKeyUsageTodayWithContext(ctx context.Context, session Session, groups []GroupInfo) ([]KeyUsageTodayStat, error) {
 	switch session.Platform {
 	case PlatformSub2API:
-		return s.fetchSub2APIKeyUsageToday(session)
+		return s.fetchSub2APIKeyUsageToday(ctx, session)
 	case PlatformNewAPI:
-		return s.fetchNewAPIKeyUsageToday(session, groups)
+		return s.fetchNewAPIKeyUsageToday(ctx, session, groups)
 	default:
 		return nil, newRequestError(ErrorNotFound, "")
 	}
@@ -834,11 +841,11 @@ type sub2APIKeyRecord struct {
 
 // fetchSub2APIKeyUsageToday 分页拉取 sub2api 站点全部 key（不能只取第一页），
 // 再并发查询每个 key 的今日 usage stats（并发上限 maxKeyConcurrency），只保留消费 > 0 的 key。
-func (s *PlatformService) fetchSub2APIKeyUsageToday(session Session) ([]KeyUsageTodayStat, error) {
+func (s *PlatformService) fetchSub2APIKeyUsageToday(ctx context.Context, session Session) ([]KeyUsageTodayStat, error) {
 	if session.Platform != PlatformSub2API || strings.TrimSpace(session.AccessToken) == "" {
 		return nil, newRequestError(ErrorAuth, PlatformSub2API)
 	}
-	authOptions := requestOptions{AccessToken: session.AccessToken, TokenType: session.TokenType}
+	authOptions := requestOptions{Context: ctx, AccessToken: session.AccessToken, TokenType: session.TokenType}
 
 	const pageSize = 100
 	const maxPages = 100 // 安全上限，防止上游分页字段异常导致死循环
@@ -932,11 +939,11 @@ func (s *PlatformService) fetchSub2APIKeyUsageToday(session Session) ([]KeyUsage
 // token 记录自带分组字段时直接按 token_name+group 查询；否则仅按 token_name 查询自助统计接口
 // （沿用已验证的 self 统计能力，不做 token×全部分组的穷举以控制并发/请求量）。
 // 并发上限 maxKeyConcurrency，只保留今日 quota 换算金额 > 0 的 token。
-func (s *PlatformService) fetchNewAPIKeyUsageToday(session Session, groups []GroupInfo) ([]KeyUsageTodayStat, error) {
+func (s *PlatformService) fetchNewAPIKeyUsageToday(ctx context.Context, session Session, groups []GroupInfo) ([]KeyUsageTodayStat, error) {
 	if session.Platform != PlatformNewAPI || strings.TrimSpace(session.Cookie) == "" {
 		return nil, newRequestError(ErrorAuth, PlatformNewAPI)
 	}
-	cookieOptions := requestOptions{Cookie: session.Cookie, UserID: session.UserID}
+	cookieOptions := requestOptions{Context: ctx, Cookie: session.Cookie, UserID: session.UserID}
 
 	const pageSize = 100
 	const maxPages = 100

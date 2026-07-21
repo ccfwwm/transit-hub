@@ -234,7 +234,7 @@ func (s *Service) FetchGroupDailyStats(ctx context.Context, userID string, id st
 // KeyUsageToday 返回当前工作区所有上游站点中，今天有消费的 key 明细（仪表盘「今日成本」下钻数据源）。
 // 只处理有 session 且 rechargeRate > 0 的站点：这与 dashboard.MetricsService.LiveMetrics() 中
 // todayPurchase 的统计口径完全一致（rechargeRate <= 0 的站点被整体跳过），确保弹窗总额与卡片数值一致。
-// 站点级并发限制 4；任一站点请求上游平台失败即让整个方法返回错误，不允许把失败站点当 0 处理。
+// 站点级并发限制 4。明细仅用于展示，单个上游异常会被记录并跳过，避免一个失效站点阻断全部成本分析。
 func (s *Service) KeyUsageToday(ctx context.Context, userID string) ([]KeyUsageTodayItem, error) {
 	adminAccountID, err := s.requireCurrentAdminAccountID(ctx, userID)
 	if err != nil {
@@ -247,7 +247,7 @@ func (s *Service) KeyUsageToday(ctx context.Context, userID string) ([]KeyUsageT
 
 	targets := make([]*Site, 0, len(sites))
 	for _, site := range sites {
-		if site.AdminAccountID != adminAccountID || site.Session == nil || site.RechargeRate <= 0 {
+		if site.AdminAccountID != adminAccountID || site.Session == nil || site.RechargeRate <= 0 || site.Status != StatusConnected {
 			continue
 		}
 		targets = append(targets, site)
@@ -258,8 +258,6 @@ func (s *Service) KeyUsageToday(ctx context.Context, userID string) ([]KeyUsageT
 	var wg sync.WaitGroup
 	var mu sync.Mutex
 	items := make([]KeyUsageTodayItem, 0)
-	var firstErr error
-
 	for _, site := range targets {
 		wg.Add(1)
 		sem <- struct{}{}
@@ -272,21 +270,15 @@ func (s *Service) KeyUsageToday(ctx context.Context, userID string) ([]KeyUsageT
 
 			refreshedSession, refreshErr := s.platformService.RefreshSession(session)
 			if refreshErr != nil {
-				mu.Lock()
-				if firstErr == nil {
-					firstErr = refreshErr
-				}
-				mu.Unlock()
+				log.Printf("[upstream-key-usage] skip site_id=%s site=%s stage=refresh err=%v", site.ID, site.Name, refreshErr)
 				return
 			}
 
-			stats, fetchErr := s.platformService.FetchKeyUsageToday(refreshedSession, groups)
+			keyUsageCtx, cancel := context.WithTimeout(ctx, 8*time.Second)
+			stats, fetchErr := s.platformService.FetchKeyUsageTodayWithContext(keyUsageCtx, refreshedSession, groups)
+			cancel()
 			if fetchErr != nil {
-				mu.Lock()
-				if firstErr == nil {
-					firstErr = fetchErr
-				}
-				mu.Unlock()
+				log.Printf("[upstream-key-usage] skip site_id=%s site=%s stage=key-usage err=%v", site.ID, site.Name, fetchErr)
 				return
 			}
 
@@ -323,9 +315,6 @@ func (s *Service) KeyUsageToday(ctx context.Context, userID string) ([]KeyUsageT
 	}
 	wg.Wait()
 
-	if firstErr != nil {
-		return nil, firstErr
-	}
 	return items, nil
 }
 

@@ -192,23 +192,27 @@ func TestServiceKeyUsageToday_FiltersZeroCostAndAppliesRechargeRate(t *testing.T
 	}
 }
 
-// TestServiceKeyUsageToday_ExternalErrorFailsClosed 覆盖测试要求 9：
-// 外部平台请求失败时整个方法返回错误，不能把失败站点悄悄当 0 处理。
-func TestServiceKeyUsageToday_ExternalErrorFailsClosed(t *testing.T) {
+func TestServiceKeyUsageToday_SkipsExternalErrorsAndKeepsHealthySites(t *testing.T) {
 	failingServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusInternalServerError)
 	}))
 	defer failingServer.Close()
+	healthyServer := sub2APIKeyServer(t, "good-key", "healthy-key", "vip", 10)
+	defer healthyServer.Close()
 
 	cache := newFakeSiteCache()
-	cache.add(newTestSite("site-a", "user-1", "acc-1", 2, &Session{Platform: PlatformSub2API, BaseURL: failingServer.URL, AccessToken: "token"}))
+	cache.add(newTestSite("site-failed", "user-1", "acc-1", 2, &Session{Platform: PlatformSub2API, BaseURL: failingServer.URL, AccessToken: "token"}))
+	cache.add(newTestSite("site-healthy", "user-1", "acc-1", 2, &Session{Platform: PlatformSub2API, BaseURL: healthyServer.URL, AccessToken: "token"}))
 
 	svc := NewService(NewPlatformService(NewHTTPClient(http.DefaultClient)), nil, nil, cache)
 	svc.SetAdminAccountResolver(&fakeAccountResolver{current: map[string]string{"user-1": "acc-1"}})
 
-	_, err := svc.KeyUsageToday(context.Background(), "user-1")
-	if err == nil {
-		t.Fatal("expected error when upstream platform request fails, got nil (silently treated as 0)")
+	items, err := svc.KeyUsageToday(context.Background(), "user-1")
+	if err != nil {
+		t.Fatalf("KeyUsageToday returned error for one failed upstream: %v", err)
+	}
+	if len(items) != 1 || items[0].SiteID != "site-healthy" || items[0].TodayAmount != 20 {
+		t.Fatalf("expected only healthy site usage, got %+v", items)
 	}
 }
 
