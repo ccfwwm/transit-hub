@@ -138,7 +138,7 @@ func (r *Repository) SaveSite(ctx context.Context, site Site) error {
 			recharge_rate, status, error_key, metrics, session, settings, last_synced_at, can_relogin,
 			created_at, updated_at
 		)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13::jsonb, $14::jsonb, $15::jsonb, $16, $17, $17, $18)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13::jsonb, $14::jsonb, $15::jsonb, $16, $17, $18, $18)
 		ON CONFLICT (id) DO UPDATE SET
 			user_id = EXCLUDED.user_id,
 			admin_account_id = EXCLUDED.admin_account_id,
@@ -158,7 +158,7 @@ func (r *Repository) SaveSite(ctx context.Context, site Site) error {
 			can_relogin = EXCLUDED.can_relogin,
 			updated_at = EXCLUDED.updated_at
 	`, site.ID, site.UserID, site.AdminAccountID, site.Name, site.BaseURL, site.Platform, site.RequestedPlatform, site.Account, site.Remark,
-		site.RechargeRate, site.Status, site.ErrorKey, string(metricsJSON), nullableJSONString(sessionJSON), string(settingsJSON), site.LastSyncedAt, now, site.CanRelogin)
+		site.RechargeRate, site.Status, site.ErrorKey, string(metricsJSON), nullableJSONString(sessionJSON), string(settingsJSON), site.LastSyncedAt, site.CanRelogin, now)
 	return err
 }
 
