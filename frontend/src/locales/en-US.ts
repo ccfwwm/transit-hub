@@ -622,7 +622,13 @@ export default {
           action: 'Refresh Data',
           refreshing: 'Refreshing...',
           countdown: 'Refresh in {seconds}s',
-          disabled: 'Auto refresh disabled'
+          disabled: 'Auto refresh disabled',
+          settings: 'Refresh settings',
+          auto: 'Auto refresh',
+          interval: 'Refresh interval',
+          seconds: 'seconds',
+          cancel: 'Cancel',
+          save: 'Save'
         },
       modal: {
         title: 'Add Upstream Site',

@@ -5,9 +5,10 @@ import { Search, Plus, CheckCircle2, XCircle, X, Loader2, AlertCircle, Trash2, E
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Tooltip } from '@/components/ui/tooltip'
-import { getStrategySettings } from '../api/settings'
+import { getStrategySettings, saveStrategySettings } from '../api/settings'
 import { useUpstreamSites } from '../composables/useUpstreamSites'
 import SiteSettingsModal from '../components/upstream/SiteSettingsModal.vue'
+import type { StrategySettings } from '../types/settings'
 import type { UpstreamGroupInfo, UpstreamMetricValue, UpstreamSite, UpstreamSiteForm, UpstreamStatus } from '../types/upstream'
 
 const { t } = useI18n()
@@ -20,8 +21,15 @@ const deleteErrorKey = ref<string | null>(null)
 const editingSiteId = ref<string | null>(null)
 const refreshIntervalSeconds = ref<number | null>(null)
 const remainingSeconds = ref(0)
+const refreshSettings = ref<StrategySettings | null>(null)
+const isRefreshSettingsOpen = ref(false)
+const refreshSettingsEnabled = ref(false)
+const refreshSettingsInterval = ref('60')
+const isSavingRefreshSettings = ref(false)
+const refreshSettingsError = ref('')
 let countdownTimer: ReturnType<typeof window.setInterval> | null = null
 const nextRefreshAtStorageKey = 'transit-hub:upstream-next-refresh-at'
+const minimumRefreshInterval = 60
 
 const viewMode = ref<'card' | 'list'>('card')
 
@@ -58,6 +66,7 @@ const runRefresh = async () => {
 }
 
 const startCountdown = (seconds: number) => {
+  stopCountdown()
   refreshIntervalSeconds.value = seconds
   const nextRefreshAt = readNextRefreshAt()
   if (!nextRefreshAt || nextRefreshAt > Date.now() + seconds * 1000) scheduleNextRefresh()
@@ -74,13 +83,51 @@ const stopCountdown = () => {
   countdownTimer = null
 }
 
+const applyRefreshSettings = (settings: StrategySettings) => {
+  refreshSettings.value = settings
+  refreshSettingsEnabled.value = settings.enableRefreshInterval
+  refreshSettingsInterval.value = String(Math.max(settings.refreshInterval, minimumRefreshInterval))
+  stopCountdown()
+  if (settings.enableRefreshInterval) {
+    startCountdown(Math.max(settings.refreshInterval, minimumRefreshInterval))
+    return
+  }
+  refreshIntervalSeconds.value = null
+  remainingSeconds.value = 0
+  window.localStorage.removeItem(nextRefreshAtStorageKey)
+}
+
 const loadRefreshSettings = async () => {
   try {
     const settings = await getStrategySettings()
-    if (!settings.enableRefreshInterval) return
-    startCountdown(Math.max(settings.refreshInterval, 60))
+    applyRefreshSettings(settings)
   } catch (error) {
     refreshIntervalSeconds.value = null
+  }
+}
+
+const openRefreshSettings = () => {
+  refreshSettingsError.value = ''
+  isRefreshSettingsOpen.value = true
+}
+
+const saveRefreshSettings = async () => {
+  if (isSavingRefreshSettings.value) return
+  isSavingRefreshSettings.value = true
+  refreshSettingsError.value = ''
+  try {
+    const base = refreshSettings.value ?? await getStrategySettings()
+    const settings = await saveStrategySettings({
+      ...base,
+      enableRefreshInterval: refreshSettingsEnabled.value,
+      refreshInterval: Math.max(Number.parseInt(refreshSettingsInterval.value, 10) || minimumRefreshInterval, minimumRefreshInterval),
+    })
+    applyRefreshSettings(settings)
+    isRefreshSettingsOpen.value = false
+  } catch (error) {
+    refreshSettingsError.value = error instanceof Error ? error.message : 'admin.settings.errors.request'
+  } finally {
+    isSavingRefreshSettings.value = false
   }
 }
 
@@ -283,6 +330,15 @@ onBeforeUnmount(() => {
         <div class="hidden md:flex h-10 items-center rounded-xl border border-border/50 bg-surface px-3 text-xs text-muted-foreground whitespace-nowrap">
           {{ countdownDisplay }}
         </div>
+        <Tooltip :text="t('admin.upstream.refresh.settings')">
+          <button
+            type="button"
+            class="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-border/50 bg-surface text-muted-foreground transition-colors hover:border-primary/60 hover:bg-primary/10 hover:text-primary"
+            @click="openRefreshSettings"
+          >
+            <Settings2 class="h-4 w-4" />
+          </button>
+        </Tooltip>
         <Button :disabled="isRefreshing" @click="runRefresh" variant="secondary" class="w-full sm:w-auto h-10 rounded-xl px-4 gap-2">
           <Loader2 v-if="isRefreshing" class="w-4 h-4 animate-spin" />
           <RefreshCw v-else class="w-4 h-4" />
@@ -661,6 +717,42 @@ onBeforeUnmount(() => {
         </div>
       </div>
     </div>
+
+    <Teleport defer to="body">
+      <div v-if="isRefreshSettingsOpen" class="fixed inset-0 z-[100] flex items-center justify-center p-4">
+        <div class="absolute inset-0 bg-background/80 backdrop-blur-sm" @click="isRefreshSettingsOpen = false" />
+        <div class="relative w-full max-w-sm rounded-2xl border border-border/70 bg-card p-5 shadow-2xl">
+          <div class="flex items-center justify-between gap-4">
+            <h3 class="text-base font-semibold text-foreground">{{ t('admin.upstream.refresh.settings') }}</h3>
+            <button type="button" class="rounded-md p-1 text-muted-foreground transition-colors hover:bg-surface-elevated hover:text-foreground" @click="isRefreshSettingsOpen = false">
+              <X class="h-5 w-5" />
+            </button>
+          </div>
+          <div class="mt-5 flex items-center justify-between gap-4">
+            <span class="text-sm text-foreground">{{ t('admin.upstream.refresh.auto') }}</span>
+            <label class="relative inline-flex cursor-pointer items-center">
+              <input v-model="refreshSettingsEnabled" type="checkbox" class="peer sr-only">
+              <span class="h-6 w-11 rounded-full bg-surface-elevated transition-colors after:absolute after:left-0.5 after:top-0.5 after:h-5 after:w-5 after:rounded-full after:border after:border-border after:bg-white after:transition-transform after:content-[''] peer-checked:bg-primary peer-checked:after:translate-x-5 peer-focus-visible:ring-2 peer-focus-visible:ring-primary" />
+            </label>
+          </div>
+          <div class="mt-4">
+            <label class="mb-2 block text-sm text-foreground" for="upstream-refresh-interval">{{ t('admin.upstream.refresh.interval') }}</label>
+            <div class="flex items-center gap-2">
+              <Input id="upstream-refresh-interval" v-model="refreshSettingsInterval" :disabled="!refreshSettingsEnabled" type="number" :min="minimumRefreshInterval" step="10" class="h-10" />
+              <span class="shrink-0 text-sm text-muted-foreground">{{ t('admin.upstream.refresh.seconds') }}</span>
+            </div>
+          </div>
+          <p v-if="refreshSettingsError" class="mt-3 text-sm text-destructive">{{ t(refreshSettingsError) }}</p>
+          <div class="mt-6 flex justify-end gap-2">
+            <Button type="button" variant="secondary" @click="isRefreshSettingsOpen = false">{{ t('admin.upstream.refresh.cancel') }}</Button>
+            <Button type="button" :disabled="isSavingRefreshSettings" @click="saveRefreshSettings">
+              <Loader2 v-if="isSavingRefreshSettings" class="h-4 w-4 animate-spin" />
+              {{ t('admin.upstream.refresh.save') }}
+            </Button>
+          </div>
+        </div>
+      </div>
+    </Teleport>
 
     <!-- Groups Modal -->
     <Teleport defer to="body">

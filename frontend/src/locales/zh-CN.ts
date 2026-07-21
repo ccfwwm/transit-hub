@@ -622,7 +622,13 @@ export default {
           action: '刷新数据',
           refreshing: '刷新中...',
           countdown: '{seconds} 秒后刷新',
-          disabled: '未开启自动刷新'
+          disabled: '未开启自动刷新',
+          settings: '刷新设置',
+          auto: '自动刷新',
+          interval: '刷新间隔',
+          seconds: '秒',
+          cancel: '取消',
+          save: '保存'
         },
       modal: {
         title: '新增上游站点',
