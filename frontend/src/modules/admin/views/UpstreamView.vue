@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { Search, Plus, CheckCircle2, XCircle, X, Loader2, AlertCircle, Trash2, Edit2, LayoutGrid, List, RefreshCw, Settings2 } from 'lucide-vue-next'
+import { Search, Plus, CheckCircle2, XCircle, X, Loader2, AlertCircle, Trash2, Edit2, LayoutGrid, List, RefreshCw, Settings2, LogIn } from 'lucide-vue-next'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Tooltip } from '@/components/ui/tooltip'
@@ -14,7 +14,7 @@ const { t } = useI18n()
 
 const searchQuery = ref('')
 const isAddModalOpen = ref(false)
-const { sites: upstreamSites, isAdding, isRefreshing, addErrorKey, connectedCount, siteSyncStates, syncingSiteIds, addSite, updateSite, deleteSite, streamRefreshSites, refreshSingleSite } = useUpstreamSites()
+const { sites: upstreamSites, isAdding, isRefreshing, addErrorKey, connectedCount, siteSyncStates, syncingSiteIds, reloggingSiteIds, addSite, updateSite, deleteSite, streamRefreshSites, refreshSingleSite, reloginSingleSite } = useUpstreamSites()
 const deletingSiteId = ref<string | null>(null)
 const deleteErrorKey = ref<string | null>(null)
 const editingSiteId = ref<string | null>(null)
@@ -414,6 +414,17 @@ onBeforeUnmount(() => {
                   <RefreshCw v-else class="h-4 w-4" />
                 </button>
               </Tooltip>
+              <Tooltip :text="site.canRelogin ? (reloggingSiteIds.has(site.id) ? t('admin.upstream.action.relogging') : t('admin.upstream.action.relogin')) : t('admin.upstream.action.reloginUnavailable')">
+                <button
+                  type="button"
+                  :class="['inline-flex h-8 w-8 items-center justify-center rounded-lg border transition-colors disabled:cursor-not-allowed disabled:opacity-40', site.status === 'error' && site.canRelogin ? 'border-warning/50 bg-warning/10 text-warning hover:bg-warning/20' : 'border-border/60 text-muted-foreground hover:border-primary/60 hover:bg-primary/10 hover:text-primary']"
+                  :disabled="!site.canRelogin || syncingSiteIds.has(site.id) || reloggingSiteIds.has(site.id)"
+                  @click="reloginSingleSite(site.id)"
+                >
+                  <Loader2 v-if="reloggingSiteIds.has(site.id)" class="h-4 w-4 animate-spin" />
+                  <LogIn v-else class="h-4 w-4" />
+                </button>
+              </Tooltip>
               <Tooltip :text="t('admin.upstream.action.settings')">
                 <button
                   type="button"
@@ -560,6 +571,16 @@ onBeforeUnmount(() => {
                     >
                       <Loader2 v-if="syncingSiteIds.has(site.id)" class="w-4 h-4 animate-spin" />
                       <RefreshCw v-else class="w-4 h-4" />
+                    </button>
+                  </Tooltip>
+                  <Tooltip :text="site.canRelogin ? (reloggingSiteIds.has(site.id) ? t('admin.upstream.action.relogging') : t('admin.upstream.action.relogin')) : t('admin.upstream.action.reloginUnavailable')">
+                    <button
+                      :class="['p-1.5 rounded-md transition-colors disabled:cursor-not-allowed disabled:opacity-40', site.status === 'error' && site.canRelogin ? 'bg-warning/10 text-warning hover:bg-warning/20' : 'text-muted-foreground hover:bg-primary/10 hover:text-primary']"
+                      :disabled="!site.canRelogin || syncingSiteIds.has(site.id) || reloggingSiteIds.has(site.id)"
+                      @click="reloginSingleSite(site.id)"
+                    >
+                      <Loader2 v-if="reloggingSiteIds.has(site.id)" class="w-4 h-4 animate-spin" />
+                      <LogIn v-else class="w-4 h-4" />
                     </button>
                   </Tooltip>
                   <Tooltip :text="t('admin.upstream.siteSettings.title')">

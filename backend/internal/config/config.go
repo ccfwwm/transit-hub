@@ -25,6 +25,9 @@ type Config struct {
 	// 初始化管理员
 	AdminEmail    string
 	AdminPassword string
+	// UpstreamCredentialEncryptionKey encrypts saved upstream login passwords.
+	// It must be a base64-encoded 32-byte key and is never returned by APIs.
+	UpstreamCredentialEncryptionKey string
 
 	// 公开注册开关，false 时禁用 /api/auth/register 和 /api/auth/email-code
 	AllowPublicRegister bool
@@ -55,8 +58,9 @@ func Load() Config {
 		CORSOrigins: splitOrigins(os.Getenv("CORS_ORIGINS")),
 		PublicDir:   envOrDefault("PUBLIC_DIR", defaultPublicDir),
 
-		AdminEmail:    os.Getenv("ADMIN_EMAIL"),
-		AdminPassword: os.Getenv("ADMIN_PASSWORD"),
+		AdminEmail:                      os.Getenv("ADMIN_EMAIL"),
+		AdminPassword:                   os.Getenv("ADMIN_PASSWORD"),
+		UpstreamCredentialEncryptionKey: os.Getenv("UPSTREAM_CREDENTIAL_ENCRYPTION_KEY"),
 
 		AllowPublicRegister: envOrDefault("ALLOW_PUBLIC_REGISTER", "true") == "true",
 

@@ -58,6 +58,7 @@ type sitePayload struct {
 	ErrorKey          *string  `json:"errorKey"`
 	Metrics           Metrics  `json:"metrics"`
 	LastSyncedAt      *int64   `json:"lastSyncedAt"`
+	CanRelogin        bool     `json:"canRelogin"`
 	Session           *Session `json:"session,omitempty"`
 }
 
@@ -77,6 +78,7 @@ func toPayload(site *Site) sitePayload {
 		ErrorKey:          site.ErrorKey,
 		Metrics:           site.Metrics,
 		LastSyncedAt:      site.LastSyncedAt,
+		CanRelogin:        site.CanRelogin,
 		Session:           site.Session,
 	}
 }
@@ -97,6 +99,7 @@ func fromPayload(p sitePayload) *Site {
 		ErrorKey:          p.ErrorKey,
 		Metrics:           p.Metrics,
 		LastSyncedAt:      p.LastSyncedAt,
+		CanRelogin:        p.CanRelogin,
 		Session:           p.Session,
 	}
 }

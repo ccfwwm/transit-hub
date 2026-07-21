@@ -28,10 +28,25 @@ func RegisterRoutes(mux *http.ServeMux, service *Service, accounts HandlerAccoun
 	mux.HandleFunc("POST /api/upstream-sites", handler.create)
 	mux.HandleFunc("POST /api/upstream-sites/sync-all", handler.syncAll)
 	mux.HandleFunc("GET /api/upstream-sites/sync-stream", handler.syncStream)
+	mux.HandleFunc("POST /api/upstream-sites/{id}/relogin", handler.relogin)
 	mux.HandleFunc("PUT /api/upstream-sites/", handler.update)
 	mux.HandleFunc("PATCH /api/upstream-sites/", handler.update)
 	mux.HandleFunc("POST /api/upstream-sites/", handler.sync)
 	mux.HandleFunc("DELETE /api/upstream-sites/", handler.remove)
+}
+
+func (h *Handler) relogin(w http.ResponseWriter, r *http.Request) {
+	userID, ok := authctx.UserID(r.Context())
+	if !ok {
+		httpjson.WriteError(w, http.StatusUnauthorized, "auth.errors.unauthorized")
+		return
+	}
+	response, err := h.service.Relogin(r.Context(), userID, r.PathValue("id"))
+	if err != nil {
+		writeUpstreamError(w, err)
+		return
+	}
+	httpjson.Write(w, http.StatusOK, response)
 }
 
 func (h *Handler) syncAll(w http.ResponseWriter, r *http.Request) {
@@ -256,6 +271,10 @@ func writeUpstreamError(w http.ResponseWriter, err error) {
 	var requestErr *RequestError
 	if errors.As(err, &requestErr) && requestErr.MessageKey == ErrorNotFound {
 		httpjson.WriteError(w, http.StatusNotFound, requestErr.MessageKey)
+		return
+	}
+	if errors.As(err, &requestErr) && requestErr.MessageKey == ErrorCredentialsUnavailable {
+		httpjson.WriteError(w, http.StatusConflict, requestErr.MessageKey)
 		return
 	}
 	httpjson.WriteError(w, http.StatusInternalServerError, errorKey(err))

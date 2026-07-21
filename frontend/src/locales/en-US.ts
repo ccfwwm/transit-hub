@@ -152,7 +152,10 @@ export default {
         monitorOn: 'Monitor on',
         monitorOff: 'Monitor off',
         dispatchOn: 'Dispatch on',
-        dispatchOff: 'Dispatch off'
+        dispatchOff: 'Dispatch off',
+        autoManaged: 'Auto managed',
+        manualOverride: 'Manual override',
+        manualOverrideHelp: 'The remote value was changed manually, so automatic rules will not overwrite it.'
       },
       groups: {
         title: 'Group Overview',
@@ -711,6 +714,9 @@ export default {
       action: {
         sync: 'Sync',
         syncing: 'Syncing',
+        relogin: 'Re-login',
+        relogging: 'Re-logging in',
+        reloginUnavailable: 'Edit this site and enter its password once to enable re-login.',
         edit: 'Edit Site',
         settings: 'Site Settings',
         actions: 'Actions'
@@ -738,6 +744,7 @@ export default {
         invalidUrl: 'The site URL is invalid. Check it and try again.',
         network: 'Network or CORS request failed. Check the site URL and cross-origin settings.',
         auth: 'Login failed. Check the account or password.',
+        credentialsUnavailable: 'No saved password is available. Edit this site and enter its password again.',
         request: 'The upstream API request failed. Try again later.',
         invalidResponse: 'The upstream response could not be parsed.',
         tokenMissing: 'Login succeeded but no access token was returned.',

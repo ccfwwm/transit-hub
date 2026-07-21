@@ -76,6 +76,10 @@ export const syncUpstreamSite = async (id: string): Promise<UpstreamSiteResponse
   requestJson<UpstreamSiteResponse>(`/upstream-sites/${id}/sync`, { method: 'POST' })
 )
 
+export const reloginUpstreamSite = async (id: string): Promise<UpstreamSiteResponse> => (
+  requestJson<UpstreamSiteResponse>(`/upstream-sites/${id}/relogin`, { method: 'POST' })
+)
+
 export const syncAllUpstreamSites = async (): Promise<UpstreamSiteResponse[]> => (
   requestJson<UpstreamSiteResponse[]>('/upstream-sites/sync-all', { method: 'POST' })
 )

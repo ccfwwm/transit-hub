@@ -152,7 +152,10 @@ export default {
         monitorOn: '检测开',
         monitorOff: '检测停',
         dispatchOn: '调度开',
-        dispatchOff: '调度停'
+        dispatchOff: '调度停',
+        autoManaged: '自动管理',
+        manualOverride: '人工覆盖',
+        manualOverrideHelp: '远端状态已被手动修改，自动规则不会再次覆盖。'
       },
       groups: {
         title: '分组概览',
@@ -711,6 +714,9 @@ export default {
       action: {
         sync: '刷新',
         syncing: '刷新中',
+        relogin: '重新登录',
+        relogging: '重新登录中',
+        reloginUnavailable: '请编辑站点并重新输入一次密码以启用重新登录',
         edit: '修改站点',
         settings: '站点设置',
         actions: '操作'
@@ -738,6 +744,7 @@ export default {
         invalidUrl: '站点 URL 无效，请检查后重试。',
         network: '网络或 CORS 请求失败，请检查站点地址与跨域配置。',
         auth: '登录失败，请检查账号或密码。',
+        credentialsUnavailable: '未保存可用的登录密码，请编辑站点并重新输入密码。',
         request: '上游接口请求失败，请稍后重试。',
         invalidResponse: '上游返回内容无法解析。',
         tokenMissing: '登录成功但未返回访问令牌。',

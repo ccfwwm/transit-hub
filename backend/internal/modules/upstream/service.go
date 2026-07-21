@@ -40,6 +40,7 @@ type Service struct {
 	snapshotWriter  SnapshotWriter
 	repository      SiteRepository
 	cache           SiteCache
+	credentials     CredentialStore
 	accounts        AdminAccountResolver
 	refreshConfig   RefreshConfig
 	timers          map[string]*time.Timer
@@ -51,6 +52,10 @@ type Service struct {
 
 func (s *Service) SetAdminAccountResolver(accounts AdminAccountResolver) {
 	s.accounts = accounts
+}
+
+func (s *Service) SetCredentialStore(credentials CredentialStore) {
+	s.credentials = credentials
 }
 
 // requireCurrentAdminAccountID 解析当前工作区 ID，解析失败时返回错误（fail-closed）。
@@ -422,6 +427,9 @@ func (s *Service) Create(ctx context.Context, userID string, dto CreateRequest) 
 	}
 
 	// 登录成功：更新站点状态。
+	if err := s.savePasswordCredential(ctx, site, dto.AuthMode, dto.Password); err != nil {
+		return Response{}, err
+	}
 	now := time.Now().UnixMilli()
 	site.BaseURL = result.Session.BaseURL
 	site.Platform = result.Platform
@@ -509,6 +517,10 @@ func (s *Service) Update(ctx context.Context, userID string, id string, dto Upda
 			return response, nil
 		}
 
+		if err := s.savePasswordCredential(ctx, site, dto.AuthMode, dto.Password); err != nil {
+			s.restoreSite(ctx, id, &previousSite)
+			return Response{}, err
+		}
 		now := time.Now().UnixMilli()
 		site.BaseURL = result.Session.BaseURL
 		site.Platform = result.Platform
@@ -533,6 +545,12 @@ func (s *Service) Update(ctx context.Context, userID string, id string, dto Upda
 	}
 
 	// 无需重新登录：仅更新基本字段。
+	if previousSite.Account != site.Account || normalizedAuthMode(dto.AuthMode) == AuthModeToken {
+		if err := s.clearPasswordCredential(ctx, site); err != nil {
+			s.restoreSite(ctx, id, &previousSite)
+			return Response{}, err
+		}
+	}
 	_ = s.cache.Set(ctx, site)
 	if err := s.saveSite(ctx, site); err != nil {
 		s.restoreSite(ctx, id, &previousSite)
@@ -657,6 +675,26 @@ func (s *Service) SyncAll(ctx context.Context, userID string) ([]Response, error
 	return responses, nil
 }
 
+// Relogin explicitly starts a password login using the server-only stored
+// credential. It never returns the password or session to the caller.
+func (s *Service) Relogin(ctx context.Context, userID, id string) (Response, error) {
+	site, err := s.cache.Get(ctx, id)
+	if err != nil {
+		return Response{}, err
+	}
+	if site == nil || site.UserID != userID {
+		return Response{}, newRequestError(ErrorNotFound, "")
+	}
+	adminAccountID, err := s.requireCurrentAdminAccountID(ctx, userID)
+	if err != nil {
+		return Response{}, err
+	}
+	if site.AdminAccountID != adminAccountID {
+		return Response{}, newRequestError(ErrorNotFound, "")
+	}
+	return s.relogin(ctx, site, false)
+}
+
 // SyncAllStream 以 SSE 流方式并发同步所有站点，完成一个推送一个。
 // 并发上限 5，每个站点独立同步，结果实时推送给前端。
 func (s *Service) SyncAllStream(ctx context.Context, userID string, emit SyncEventCallback) error {
@@ -753,6 +791,11 @@ func (s *Service) sync(ctx context.Context, id string) (Response, error) {
 	if refreshErr == nil {
 		metrics, refreshErr = s.platformService.FetchMetrics(refreshedSession)
 	}
+	if errorKey(refreshErr) == ErrorAuth {
+		if response, attempted, reloginErr := s.tryAutomaticRelogin(ctx, site); attempted {
+			return response, reloginErr
+		}
+	}
 
 	// 重新读取站点确认仍存在（可能在同步期间被删除）。
 	site, err = s.cache.Get(ctx, id)
@@ -791,6 +834,72 @@ func (s *Service) sync(ctx context.Context, id string) (Response, error) {
 		if s.AfterSync != nil {
 			go s.AfterSync(context.Background(), site.UserID, site.AdminAccountID, site.ID, site.Name, oldMetrics, metrics)
 		}
+	}
+	return response, nil
+}
+
+func (s *Service) tryAutomaticRelogin(ctx context.Context, site *Site) (Response, bool, error) {
+	if s.credentials == nil || site == nil || !site.CanRelogin {
+		return Response{}, false, nil
+	}
+	credential, ok, err := s.credentials.LoadPassword(ctx, site.UserID, site.AdminAccountID, site.ID)
+	if err != nil || !ok {
+		return Response{}, false, err
+	}
+	now := time.Now().UnixMilli()
+	if credential.LastAutomaticReloginAtUnixMilli > 0 && now-credential.LastAutomaticReloginAtUnixMilli < automaticReloginCooldownMS {
+		return Response{}, false, nil
+	}
+	if err := s.credentials.MarkAutomaticReloginAttempt(ctx, site.UserID, site.AdminAccountID, site.ID, now); err != nil {
+		return Response{}, false, err
+	}
+	response, err := s.relogin(ctx, site, true)
+	return response, true, err
+}
+
+func (s *Service) relogin(ctx context.Context, site *Site, automatic bool) (Response, error) {
+	if s.credentials == nil || site == nil {
+		return Response{}, newRequestError(ErrorCredentialsUnavailable, "")
+	}
+	credential, ok, err := s.credentials.LoadPassword(ctx, site.UserID, site.AdminAccountID, site.ID)
+	if err != nil {
+		return Response{}, err
+	}
+	if !ok || strings.TrimSpace(credential.Password) == "" {
+		return Response{}, newRequestError(ErrorCredentialsUnavailable, "")
+	}
+	oldMetrics := site.Metrics
+	result, loginErr := s.platformService.Login(site.BaseURL, site.RequestedPlatform, site.Account, credential.Password)
+	if loginErr != nil {
+		key := errorKey(loginErr)
+		site.Status = StatusError
+		site.ErrorKey = &key
+		_ = s.cache.Set(ctx, site)
+		s.mu.Lock()
+		s.scheduleSyncLocked(site.ID, site)
+		s.mu.Unlock()
+		_ = s.saveSite(ctx, site)
+		return toResponse(site), nil
+	}
+	now := time.Now().UnixMilli()
+	site.BaseURL = result.Session.BaseURL
+	site.Platform = result.Platform
+	site.Session = &result.Session
+	site.Metrics = result.Metrics
+	site.Status = StatusConnected
+	site.ErrorKey = nil
+	site.LastSyncedAt = &now
+	_ = s.cache.Set(ctx, site)
+	s.mu.Lock()
+	s.scheduleSyncLocked(site.ID, site)
+	s.mu.Unlock()
+	response := toResponse(site)
+	if err := s.saveSite(ctx, site); err != nil {
+		return response, err
+	}
+	s.saveSnapshot(ctx, site)
+	if s.AfterSync != nil {
+		go s.AfterSync(context.Background(), site.UserID, site.AdminAccountID, site.ID, site.Name, oldMetrics, result.Metrics)
 	}
 	return response, nil
 }
@@ -856,6 +965,41 @@ func (s *Service) Remove(ctx context.Context, userID string, id string) error {
 		s.restoreSite(ctx, id, &removedSite)
 		return err
 	}
+	if err := s.clearPasswordCredential(ctx, &removedSite); err != nil {
+		// The site is already deleted and its credential is no longer reachable.
+		// Keep deletion successful while logging the orphan cleanup for operators.
+		log.Printf("[upstream] delete stored credential failed site_id=%s err=%v", id, err)
+	}
+	return nil
+}
+
+func (s *Service) savePasswordCredential(ctx context.Context, site *Site, authMode AuthMode, password string) error {
+	if site == nil || normalizedAuthMode(authMode) != AuthModePassword || strings.TrimSpace(password) == "" {
+		return nil
+	}
+	if s.credentials == nil {
+		site.CanRelogin = false
+		return nil
+	}
+	if err := s.credentials.SavePassword(ctx, StoredSiteCredential{
+		SiteID: site.ID, UserID: site.UserID, AdminAccountID: site.AdminAccountID, Password: password,
+	}); err != nil {
+		return err
+	}
+	site.CanRelogin = true
+	return nil
+}
+
+func (s *Service) clearPasswordCredential(ctx context.Context, site *Site) error {
+	if site == nil {
+		return nil
+	}
+	if s.credentials != nil {
+		if err := s.credentials.Delete(ctx, site.UserID, site.AdminAccountID, site.ID); err != nil {
+			return err
+		}
+	}
+	site.CanRelogin = false
 	return nil
 }
 
@@ -1003,6 +1147,7 @@ func toResponse(site *Site) Response {
 		Metrics:           site.Metrics,
 		Settings:          site.Settings,
 		LastSyncedAt:      site.LastSyncedAt,
+		CanRelogin:        site.CanRelogin,
 	}
 }
 

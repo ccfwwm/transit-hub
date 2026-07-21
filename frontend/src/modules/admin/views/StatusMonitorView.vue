@@ -781,12 +781,18 @@ const dispatchButtonClass = (channel: ChannelMonitorChannel): string => (
                         <span :class="['rounded-md border px-2 py-0.5 text-[11px] font-medium', channel.schedulable === false ? 'border-zinc-500/20 bg-zinc-500/10 text-zinc-600' : 'border-emerald-500/20 bg-emerald-500/10 text-emerald-600']">
                           {{ channel.schedulable === false ? t('admin.channelMonitor.flags.dispatchOff') : t('admin.channelMonitor.flags.dispatchOn') }}
                         </span>
+                        <span v-if="channel.schedulableManaged || channel.priorityManaged" :class="['rounded-md border px-2 py-0.5 text-[11px] font-medium', channel.schedulableConflict || channel.priorityConflict ? 'border-amber-500/30 bg-amber-500/10 text-amber-700 dark:text-amber-300' : 'border-blue-500/30 bg-blue-500/10 text-blue-700 dark:text-blue-300']">
+                          {{ channel.schedulableConflict || channel.priorityConflict ? t('admin.channelMonitor.flags.manualOverride') : t('admin.channelMonitor.flags.autoManaged') }}
+                        </span>
                         <span :class="['rounded-md border px-2 py-0.5 text-[11px] font-medium', rateGateClass(channel.rateGateStatus)]">
                           {{ rateGateLabel(channel.rateGateStatus) }}
                         </span>
                       </div>
                       <div v-if="channel.rateGateMessage" class="mt-1 max-w-[390px] truncate text-xs" :class="channel.rateGateStatus === 'blocked' ? 'text-red-600 dark:text-red-300' : 'text-muted-foreground'" :title="channel.rateGateMessage">
                         {{ channel.rateGateMessage }}
+                      </div>
+                      <div v-if="channel.schedulableConflict || channel.priorityConflict" class="mt-1 text-xs text-amber-700 dark:text-amber-300">
+                        {{ t('admin.channelMonitor.flags.manualOverrideHelp') }}
                       </div>
                     </div>
 

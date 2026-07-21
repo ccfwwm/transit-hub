@@ -38,6 +38,10 @@ export interface ChannelMonitorChannel {
   supported: boolean
   manualPaused: boolean
   schedulable: boolean | null
+  schedulableManaged: boolean
+  schedulableConflict: boolean
+  priorityManaged: boolean
+  priorityConflict: boolean
   status: ChannelMonitorStatus
   siteId: string
   siteName: string

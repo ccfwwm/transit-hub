@@ -76,6 +76,16 @@ func New(cfg config.Config, db *pgxpool.Pool, redisClient *redis.Client) *Server
 	platformService := upstream.NewPlatformService(upstream.NewHTTPClient(upstreamHTTPClient))
 	upstreamCache := upstream.NewRedisSiteCache(redisClient)
 	upstreamService := upstream.NewService(platformService, upstreamRepository, groupRateSnapshotWriter{service: groupRatesService}, upstreamCache)
+	credentialRepository, err := upstream.NewCredentialRepository(db, cfg.UpstreamCredentialEncryptionKey)
+	if err != nil {
+		panic(err)
+	}
+	if credentialRepository != nil {
+		if err := credentialRepository.EnsureSchema(context.Background()); err != nil {
+			panic(err)
+		}
+		upstreamService.SetCredentialStore(credentialRepository)
+	}
 	upstreamService.SetAdminAccountResolver(adminAccountsService)
 	upstream.RegisterRoutes(server.mux, upstreamService, adminAccountsService)
 	mySitesService := my_sites.NewService(my_sites.NewRepository(db), platformService, upstreamService)

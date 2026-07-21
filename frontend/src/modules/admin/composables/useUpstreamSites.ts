@@ -3,6 +3,7 @@ import {
   createUpstreamSite,
   listUpstreamSites,
   removeUpstreamSite,
+  reloginUpstreamSite,
   streamSyncAllUpstreamSites,
   syncAllUpstreamSites,
   syncUpstreamSite,
@@ -36,6 +37,7 @@ const normalizeMetrics = (metrics: UpstreamSiteResponse['metrics'] | null | unde
 
 const normalizeSite = (site: UpstreamSiteResponse, logoBg: string): UpstreamSite => ({
   ...site,
+  canRelogin: Boolean(site.canRelogin),
   metrics: normalizeMetrics(site.metrics),
   settings: site.settings ?? { balanceThreshold: null },
   logo: siteLogo(site.name),
@@ -112,6 +114,7 @@ export const useUpstreamSites = () => {
   // 逐站流式同步状态：每个站点 ID 映射到当前同步阶段。
   const siteSyncStates = ref(new Map<string, SiteSyncState>())
   const syncingSiteIds = ref(new Set<string>())
+  const reloggingSiteIds = ref(new Set<string>())
 
   const refreshSingleSite = async (id: string) => {
     if (syncingSiteIds.value.has(id)) return
@@ -122,6 +125,21 @@ export const useUpstreamSites = () => {
       const next = new Set(syncingSiteIds.value)
       next.delete(id)
       syncingSiteIds.value = next
+    }
+  }
+
+  const reloginSingleSite = async (id: string) => {
+    if (reloggingSiteIds.value.has(id)) return
+    reloggingSiteIds.value = new Set([...reloggingSiteIds.value, id])
+    try {
+      const site = sites.value.find((item) => item.id === id)
+      if (!site) return
+      const nextSite = await reloginUpstreamSite(id)
+      Object.assign(site, normalizeSite(nextSite, site.logoBg))
+    } finally {
+      const next = new Set(reloggingSiteIds.value)
+      next.delete(id)
+      reloggingSiteIds.value = next
     }
   }
 
@@ -191,10 +209,12 @@ export const useUpstreamSites = () => {
     connectedCount,
     siteSyncStates,
     syncingSiteIds,
+    reloggingSiteIds,
     addSite,
     updateSite,
     syncSite,
     refreshSingleSite,
+    reloginSingleSite,
     refreshSites,
     streamRefreshSites,
     deleteSite,

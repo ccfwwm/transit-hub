@@ -679,6 +679,126 @@ func TestApplyRateRuleEnablesCheapChannelsAndWritesPriority(t *testing.T) {
 	}
 }
 
+func TestApplyRateRuleDoesNotOverwriteManualPriorityOverride(t *testing.T) {
+	ctx := context.Background()
+	repo := newFakeRepository()
+	service := newTestService(repo)
+	service.state().OwnGroups = []my_sites.GroupOption{{Name: "PLUS", Multiplier: 1.2}}
+	service.upstreams.site.Metrics.Groups = []upstream.GroupInfo{{ID: "g-upstream", Name: "GPT-4o", Multiplier: floatPtr(0.7)}}
+	// The rule last wrote priority 1, but the administrator changed it to 7 on Sub2API.
+	rule := repo.mustRule("conn-1")
+	rule.PriorityManaged = true
+	rule.LastAppliedPriority = intPtr(1)
+	rule.OriginalPriority = intPtr(9)
+	repo.rules[rule.ID] = rule
+	service.platform.accounts = []AdminAccountStatus{{ID: "123", Name: "A-【site】-GPT-4o", Schedulable: boolPtr(true), Priority: intPtr(7)}}
+	if _, err := service.UpdateRateRule(ctx, "user-1", UpdateRateRuleRequest{Enabled: boolPtr(true), UpdatePriority: boolPtr(true)}); err != nil {
+		t.Fatalf("UpdateRateRule returned error: %v", err)
+	}
+
+	if _, err := service.ApplyRateRule(ctx, "user-1", "scheduled"); err != nil {
+		t.Fatalf("ApplyRateRule returned error: %v", err)
+	}
+	if len(service.platform.priorityCalls) != 0 {
+		t.Fatalf("automatic rule overwrote manual priority: %+v", service.platform.priorityCalls)
+	}
+	updated := repo.mustRule("conn-1")
+	if !updated.PriorityConflict {
+		t.Fatalf("expected manual priority conflict to be recorded, got %+v", updated)
+	}
+}
+
+func TestApplyRateRuleDoesNotOverwriteManualSchedulableOverride(t *testing.T) {
+	ctx := context.Background()
+	repo := newFakeRepository()
+	service := newTestService(repo)
+	service.state().OwnGroups = []my_sites.GroupOption{{Name: "PLUS", Multiplier: 1.2}}
+	service.upstreams.site.Metrics.Groups = []upstream.GroupInfo{{ID: "g-upstream", Name: "GPT-4o", Multiplier: floatPtr(1.5)}}
+	// The rule last disabled this account, then the administrator re-enabled it remotely.
+	rule := repo.mustRule("conn-1")
+	rule.SchedulableManaged = true
+	rule.LastAppliedSchedulable = boolPtr(false)
+	rule.OriginalSchedulable = boolPtr(true)
+	repo.rules[rule.ID] = rule
+	service.platform.accounts = []AdminAccountStatus{{ID: "123", Name: "A-【site】-GPT-4o", Schedulable: boolPtr(true), Priority: intPtr(9)}}
+	if _, err := service.UpdateRateRule(ctx, "user-1", UpdateRateRuleRequest{Enabled: boolPtr(true), UpdatePriority: boolPtr(false)}); err != nil {
+		t.Fatalf("UpdateRateRule returned error: %v", err)
+	}
+
+	if _, err := service.ApplyRateRule(ctx, "user-1", "scheduled"); err != nil {
+		t.Fatalf("ApplyRateRule returned error: %v", err)
+	}
+	if len(service.platform.schedulableCalls) != 0 {
+		t.Fatalf("automatic rule overwrote manual schedulable value: %+v", service.platform.schedulableCalls)
+	}
+	if !repo.mustRule("conn-1").SchedulableConflict {
+		t.Fatalf("expected manual schedulable conflict to be recorded")
+	}
+}
+
+func TestApplyRateRuleKeepsManualOverrideAfterRemoteValueMatchesPreviousWrite(t *testing.T) {
+	ctx := context.Background()
+	repo := newFakeRepository()
+	service := newTestService(repo)
+	service.state().OwnGroups = []my_sites.GroupOption{{Name: "PLUS", Multiplier: 1.2}}
+	service.upstreams.site.Metrics.Groups = []upstream.GroupInfo{{ID: "g-upstream", Name: "GPT-4o", Multiplier: floatPtr(1.5)}}
+
+	// The remote value happens to match our previous write again, but the
+	// recorded conflict still means the administrator owns this field.
+	rule := repo.mustRule("conn-1")
+	rule.SchedulableManaged = true
+	rule.SchedulableConflict = true
+	rule.LastAppliedSchedulable = boolPtr(true)
+	rule.OriginalSchedulable = boolPtr(false)
+	repo.rules[rule.ID] = rule
+	service.platform.accounts = []AdminAccountStatus{{ID: "123", Name: "A-【site】-GPT-4o", Schedulable: boolPtr(true), Priority: intPtr(9)}}
+
+	if _, err := service.ApplyRateRule(ctx, "user-1", "scheduled"); err != nil {
+		t.Fatalf("ApplyRateRule returned error: %v", err)
+	}
+	if len(service.platform.schedulableCalls) != 0 {
+		t.Fatalf("automatic rule reclaimed an administrator override: %+v", service.platform.schedulableCalls)
+	}
+}
+
+func TestUpstreamGroupMultiplierUsesStableIDAfterRename(t *testing.T) {
+	site := &upstream.Site{Metrics: upstream.Metrics{Groups: []upstream.GroupInfo{{
+		ID: "group-1", Name: "renamed-group", Multiplier: floatPtr(0.8),
+	}}}}
+	connection := my_sites.RealConnection{UpstreamGroupID: "group-1", UpstreamGroupName: "legacy-group"}
+
+	multiplier := upstreamGroupMultiplier(site, connection)
+	if multiplier == nil || *multiplier != 0.8 {
+		t.Fatalf("expected renamed group multiplier to resolve by ID, got %v", multiplier)
+	}
+}
+
+func TestDisablingRateRuleRestoresOnlySystemManagedPriority(t *testing.T) {
+	ctx := context.Background()
+	repo := newFakeRepository()
+	service := newTestService(repo)
+	rule := repo.mustRule("conn-1")
+	rule.PriorityManaged = true
+	rule.OriginalPriority = intPtr(9)
+	rule.LastAppliedPriority = intPtr(1)
+	repo.rules[rule.ID] = rule
+	service.platform.accounts = []AdminAccountStatus{{ID: "123", Name: "A-【site】-GPT-4o", Schedulable: boolPtr(true), Priority: intPtr(1)}}
+	if _, err := service.UpdateRateRule(ctx, "user-1", UpdateRateRuleRequest{Enabled: boolPtr(true)}); err != nil {
+		t.Fatalf("enable UpdateRateRule returned error: %v", err)
+	}
+
+	if _, err := service.UpdateRateRule(ctx, "user-1", UpdateRateRuleRequest{Enabled: boolPtr(false)}); err != nil {
+		t.Fatalf("disable UpdateRateRule returned error: %v", err)
+	}
+	if got := service.platform.priorityCalls; len(got) != 1 || got[0].Priority != 9 {
+		t.Fatalf("expected original priority restore, got %+v", got)
+	}
+	updated := repo.mustRule("conn-1")
+	if updated.PriorityManaged || updated.LastAppliedPriority != nil || updated.OriginalPriority != nil {
+		t.Fatalf("expected ownership to clear after restore, got %+v", updated)
+	}
+}
+
 func TestRateRuleDoesNotReEnableBalancePausedChannel(t *testing.T) {
 	ctx := context.Background()
 	repo := newFakeRepository()

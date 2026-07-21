@@ -29,24 +29,32 @@ const (
 )
 
 type Rule struct {
-	ID                   string     `json:"id"`
-	UserID               string     `json:"-"`
-	AdminAccountID       string     `json:"-"`
-	ConnectionID         string     `json:"connectionId"`
-	Enabled              bool       `json:"enabled"`
-	CheckIntervalMinutes int        `json:"checkIntervalMinutes"`
-	FailureThreshold     int        `json:"failureThreshold"`
-	BalanceThreshold     float64    `json:"balanceThreshold"`
-	DesiredSchedulable   *bool      `json:"desiredSchedulable"`
-	ManualPaused         bool       `json:"manualPaused"`
-	ConsecutiveFailures  int        `json:"consecutiveFailures"`
-	LastStatus           string     `json:"lastStatus"`
-	LastMessage          string     `json:"lastMessage"`
-	LastLatencyMS        *int       `json:"lastLatencyMs"`
-	LastCheckedAt        *time.Time `json:"lastCheckedAt"`
-	NextCheckAt          *time.Time `json:"nextCheckAt"`
-	CreatedAt            time.Time  `json:"createdAt"`
-	UpdatedAt            time.Time  `json:"updatedAt"`
+	ID                     string     `json:"id"`
+	UserID                 string     `json:"-"`
+	AdminAccountID         string     `json:"-"`
+	ConnectionID           string     `json:"connectionId"`
+	Enabled                bool       `json:"enabled"`
+	CheckIntervalMinutes   int        `json:"checkIntervalMinutes"`
+	FailureThreshold       int        `json:"failureThreshold"`
+	BalanceThreshold       float64    `json:"balanceThreshold"`
+	DesiredSchedulable     *bool      `json:"desiredSchedulable"`
+	SchedulableManaged     bool       `json:"schedulableManaged"`
+	OriginalSchedulable    *bool      `json:"originalSchedulable"`
+	LastAppliedSchedulable *bool      `json:"lastAppliedSchedulable"`
+	SchedulableConflict    bool       `json:"schedulableConflict"`
+	PriorityManaged        bool       `json:"priorityManaged"`
+	OriginalPriority       *int       `json:"originalPriority"`
+	LastAppliedPriority    *int       `json:"lastAppliedPriority"`
+	PriorityConflict       bool       `json:"priorityConflict"`
+	ManualPaused           bool       `json:"manualPaused"`
+	ConsecutiveFailures    int        `json:"consecutiveFailures"`
+	LastStatus             string     `json:"lastStatus"`
+	LastMessage            string     `json:"lastMessage"`
+	LastLatencyMS          *int       `json:"lastLatencyMs"`
+	LastCheckedAt          *time.Time `json:"lastCheckedAt"`
+	NextCheckAt            *time.Time `json:"nextCheckAt"`
+	CreatedAt              time.Time  `json:"createdAt"`
+	UpdatedAt              time.Time  `json:"updatedAt"`
 }
 
 type Result struct {
@@ -123,6 +131,10 @@ type ChannelStatus struct {
 	Supported                   bool       `json:"supported"`
 	ManualPaused                bool       `json:"manualPaused"`
 	Schedulable                 *bool      `json:"schedulable"`
+	SchedulableManaged          bool       `json:"schedulableManaged"`
+	SchedulableConflict         bool       `json:"schedulableConflict"`
+	PriorityManaged             bool       `json:"priorityManaged"`
+	PriorityConflict            bool       `json:"priorityConflict"`
 	Status                      string     `json:"status"`
 	SiteID                      string     `json:"siteId"`
 	SiteName                    string     `json:"siteName"`

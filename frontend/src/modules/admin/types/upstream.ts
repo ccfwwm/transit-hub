@@ -85,6 +85,7 @@ export interface UpstreamSite {
   settings: SiteSettings
   session?: UpstreamSession | null
   lastSyncedAt: number | null
+  canRelogin: boolean
 }
 
 export type UpstreamSiteResponse = Omit<UpstreamSite, 'session' | 'logo' | 'logoBg'>

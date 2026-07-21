@@ -23,13 +23,14 @@ const (
 )
 
 const (
-	ErrorNotFound        = "admin.upstream.errors.notFound"
-	ErrorInvalidURL      = "admin.upstream.errors.invalidUrl"
-	ErrorAuth            = "admin.upstream.errors.auth"
-	ErrorNetwork         = "admin.upstream.errors.network"
-	ErrorRequest         = "admin.upstream.errors.request"
-	ErrorInvalidResponse = "admin.upstream.errors.invalidResponse"
-	ErrorUnknown         = "admin.upstream.errors.unknown"
+	ErrorNotFound               = "admin.upstream.errors.notFound"
+	ErrorInvalidURL             = "admin.upstream.errors.invalidUrl"
+	ErrorAuth                   = "admin.upstream.errors.auth"
+	ErrorNetwork                = "admin.upstream.errors.network"
+	ErrorRequest                = "admin.upstream.errors.request"
+	ErrorInvalidResponse        = "admin.upstream.errors.invalidResponse"
+	ErrorUnknown                = "admin.upstream.errors.unknown"
+	ErrorCredentialsUnavailable = "admin.upstream.errors.credentialsUnavailable"
 )
 
 // SSE 同步流事件类型。
@@ -155,6 +156,7 @@ type Site struct {
 	Metrics           Metrics      `json:"metrics"`
 	Settings          SiteSettings `json:"settings"`
 	LastSyncedAt      *int64       `json:"lastSyncedAt"`
+	CanRelogin        bool         `json:"canRelogin"`
 	Session           *Session     `json:"-"`
 }
 
@@ -174,6 +176,7 @@ type Response struct {
 	Metrics           Metrics      `json:"metrics"`
 	Settings          SiteSettings `json:"settings"`
 	LastSyncedAt      *int64       `json:"lastSyncedAt"`
+	CanRelogin        bool         `json:"canRelogin"`
 }
 
 type Session struct {

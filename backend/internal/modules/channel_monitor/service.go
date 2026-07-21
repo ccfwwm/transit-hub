@@ -245,6 +245,10 @@ func (s *Service) PauseRule(ctx context.Context, userID, ruleID string) (Rule, e
 	now := time.Now()
 	next := now.Add(time.Duration(rule.CheckIntervalMinutes) * time.Minute)
 	rule.ManualPaused = true
+	rule.SchedulableManaged = false
+	rule.OriginalSchedulable = nil
+	rule.LastAppliedSchedulable = nil
+	rule.SchedulableConflict = false
 	rule.LastStatus = StatusManualPaused
 	rule.LastMessage = "手动停止"
 	rule.LastCheckedAt = &now
@@ -280,6 +284,10 @@ func (s *Service) ResumeRule(ctx context.Context, userID, ruleID string) (Result
 		rule.DesiredSchedulable = schedulablePtr(true)
 	}
 	rule.ManualPaused = false
+	rule.SchedulableManaged = false
+	rule.OriginalSchedulable = nil
+	rule.LastAppliedSchedulable = nil
+	rule.SchedulableConflict = false
 	rule.LastStatus = StatusManualPaused
 	rule.LastMessage = "手动启动检测"
 	if err := s.store.UpdateRule(ctx, rule); err != nil {
@@ -366,6 +374,10 @@ func (s *Service) SetRuleSchedulable(ctx context.Context, userID, ruleID string,
 	}
 	now := time.Now()
 	rule.DesiredSchedulable = schedulablePtr(schedulable)
+	rule.SchedulableManaged = false
+	rule.OriginalSchedulable = nil
+	rule.LastAppliedSchedulable = nil
+	rule.SchedulableConflict = false
 	rule.LastMessage = "手动停用分组调度"
 	if schedulable {
 		rule.LastMessage = "手动开启分组调度"
@@ -399,6 +411,10 @@ func (s *Service) SetRulePriority(ctx context.Context, userID, ruleID string, pr
 		return err
 	}
 	now := time.Now()
+	rule.PriorityManaged = false
+	rule.OriginalPriority = nil
+	rule.LastAppliedPriority = nil
+	rule.PriorityConflict = false
 	rule.LastMessage = fmt.Sprintf("手动设置优先级为 %d", priority)
 	rule.UpdatedAt = now
 	return s.store.UpdateRule(ctx, rule)
@@ -460,6 +476,7 @@ func (s *Service) UpdateRateRule(ctx context.Context, userID string, req UpdateR
 	if err != nil {
 		return RateRule{}, err
 	}
+	disableRequested := req.Enabled != nil && !*req.Enabled && rule.Enabled
 	if req.Enabled != nil {
 		rule.Enabled = *req.Enabled
 	}
@@ -472,11 +489,75 @@ func (s *Service) UpdateRateRule(ctx context.Context, userID string, req UpdateR
 	if req.StopWhenMissingRate != nil {
 		rule.StopWhenMissingRate = *req.StopWhenMissingRate
 	}
+	if disableRequested {
+		if err := s.restoreManagedRateOverrides(ctx, userID, adminAccountID); err != nil {
+			return RateRule{}, err
+		}
+	}
 	rule.UpdatedAt = time.Now()
 	if err := s.store.SaveRateRule(ctx, rule); err != nil {
 		return RateRule{}, err
 	}
 	return rule, nil
+}
+
+func (s *Service) restoreManagedRateOverrides(ctx context.Context, userID, adminAccountID string) error {
+	connections, rulesByConnection, state, accountsByID, err := s.rateRuleContext(ctx, userID, adminAccountID, true)
+	if err != nil {
+		return err
+	}
+	if state == nil || state.Session.Platform != upstream.PlatformSub2API {
+		return requestError("admin.channelMonitor.errors.unsupported")
+	}
+	for _, conn := range connections {
+		monitorRule, ok := rulesByConnection[conn.ID]
+		if !ok || (!monitorRule.SchedulableManaged && !monitorRule.PriorityManaged) {
+			continue
+		}
+		account, ok := accountsByID[strings.TrimSpace(conn.AdminAccountID)]
+		if !ok {
+			continue
+		}
+		changed := false
+		if monitorRule.SchedulableManaged {
+			if monitorRule.LastAppliedSchedulable == nil || account.Schedulable == nil || *account.Schedulable != *monitorRule.LastAppliedSchedulable {
+				monitorRule.SchedulableConflict = true
+			} else if monitorRule.OriginalSchedulable != nil && *account.Schedulable != *monitorRule.OriginalSchedulable {
+				if err := s.platform.SetSub2APIAdminAccountSchedulable(state.Session, conn.AdminAccountID, *monitorRule.OriginalSchedulable); err != nil {
+					return err
+				}
+				monitorRule.SchedulableManaged = false
+				monitorRule.OriginalSchedulable = nil
+				monitorRule.LastAppliedSchedulable = nil
+				monitorRule.SchedulableConflict = false
+				changed = true
+			}
+		}
+		if monitorRule.PriorityManaged {
+			if monitorRule.LastAppliedPriority == nil || account.Priority == nil || *account.Priority != *monitorRule.LastAppliedPriority {
+				monitorRule.PriorityConflict = true
+			} else if monitorRule.OriginalPriority != nil && *account.Priority != *monitorRule.OriginalPriority {
+				if err := s.platform.UpdateSub2APIAdminAccountPriority(state.Session, conn.AdminAccountID, *monitorRule.OriginalPriority); err != nil {
+					return err
+				}
+				monitorRule.PriorityManaged = false
+				monitorRule.OriginalPriority = nil
+				monitorRule.LastAppliedPriority = nil
+				monitorRule.PriorityConflict = false
+				changed = true
+			}
+		}
+		if changed || monitorRule.SchedulableConflict || monitorRule.PriorityConflict {
+			monitorRule.UpdatedAt = time.Now()
+			if monitorRule.SchedulableConflict || monitorRule.PriorityConflict {
+				monitorRule.LastMessage = "远端状态已被手动修改，自动规则未覆盖"
+			}
+			if err := s.store.UpdateRule(ctx, monitorRule); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
 }
 
 func (s *Service) UpdateTestModelConfig(ctx context.Context, userID string, req UpdateTestModelConfigRequest) (TestModelConfig, error) {
@@ -562,7 +643,16 @@ func (s *Service) applyRateRuleForWorkspace(ctx context.Context, userID, adminAc
 		}
 		target := row.SuggestedSchedulable
 		current := row.CurrentSchedulable
-		if current == nil || *current != target {
+		monitorRule, hasMonitorRule := rulesByConnection[row.ConnectionID]
+		if hasMonitorRule && monitorRule.SchedulableConflict {
+			// A direct change in Sub2API always wins until the user explicitly
+			// changes the channel state in TransitHub.
+		} else if monitorRule.SchedulableManaged && monitorRule.LastAppliedSchedulable != nil && current != nil && *current != *monitorRule.LastAppliedSchedulable {
+			monitorRule.SchedulableConflict = true
+			monitorRule.LastMessage = "检测到远端手动调整分组调度，自动规则已停止覆盖"
+			monitorRule.UpdatedAt = now
+			_ = s.store.UpdateRule(ctx, monitorRule)
+		} else if current == nil || *current != target {
 			if err := s.platform.SetSub2APIAdminAccountSchedulable(state.Session, row.AdminAccountID, target); err != nil {
 				result.Success = false
 				result.Message = err.Error()
@@ -573,7 +663,13 @@ func (s *Service) applyRateRuleForWorkspace(ctx context.Context, userID, adminAc
 			} else {
 				result.DisabledCount++
 			}
-			if monitorRule, ok := rulesByConnection[row.ConnectionID]; ok {
+			if hasMonitorRule {
+				if !monitorRule.SchedulableManaged {
+					monitorRule.OriginalSchedulable = cloneBool(current)
+				}
+				monitorRule.SchedulableManaged = true
+				monitorRule.LastAppliedSchedulable = schedulablePtr(target)
+				monitorRule.SchedulableConflict = false
 				monitorRule.DesiredSchedulable = schedulablePtr(target)
 				monitorRule.LastMessage = row.RateGateMessage
 				monitorRule.UpdatedAt = now
@@ -581,13 +677,30 @@ func (s *Service) applyRateRuleForWorkspace(ctx context.Context, userID, adminAc
 			}
 		}
 		if rule.UpdatePriority && target && row.SuggestedPriority != nil {
-			if row.CurrentPriority == nil || *row.CurrentPriority != *row.SuggestedPriority {
+			if hasMonitorRule && monitorRule.PriorityConflict {
+				// Preserve the administrator's direct priority override.
+			} else if monitorRule.PriorityManaged && monitorRule.LastAppliedPriority != nil && row.CurrentPriority != nil && *row.CurrentPriority != *monitorRule.LastAppliedPriority {
+				monitorRule.PriorityConflict = true
+				monitorRule.LastMessage = "检测到远端手动调整优先级，自动规则已停止覆盖"
+				monitorRule.UpdatedAt = now
+				_ = s.store.UpdateRule(ctx, monitorRule)
+			} else if row.CurrentPriority == nil || *row.CurrentPriority != *row.SuggestedPriority {
 				if err := s.platform.UpdateSub2APIAdminAccountPriority(state.Session, row.AdminAccountID, *row.SuggestedPriority); err != nil {
 					result.Success = false
 					result.Message = err.Error()
 					continue
 				}
 				result.PriorityUpdated++
+				if hasMonitorRule {
+					if !monitorRule.PriorityManaged {
+						monitorRule.OriginalPriority = cloneInt(row.CurrentPriority)
+					}
+					monitorRule.PriorityManaged = true
+					monitorRule.LastAppliedPriority = cloneInt(row.SuggestedPriority)
+					monitorRule.PriorityConflict = false
+					monitorRule.UpdatedAt = now
+					_ = s.store.UpdateRule(ctx, monitorRule)
+				}
 			}
 		}
 	}
@@ -862,6 +975,10 @@ func (s *Service) channelStatus(ctx context.Context, conn my_sites.RealConnectio
 		ConnectionID:         conn.ID,
 		Enabled:              rule.Enabled,
 		ManualPaused:         rule.ManualPaused,
+		SchedulableManaged:   rule.SchedulableManaged,
+		SchedulableConflict:  rule.SchedulableConflict,
+		PriorityManaged:      rule.PriorityManaged,
+		PriorityConflict:     rule.PriorityConflict,
 		Status:               normalizedStatus(rule.LastStatus),
 		UpstreamGroupID:      conn.UpstreamGroupID,
 		UpstreamGroupName:    conn.UpstreamGroupName,
@@ -1369,6 +1486,22 @@ func uniqueRuleIDs(ruleIDs []string) []string {
 }
 
 func schedulablePtr(value bool) *bool { return &value }
+
+func cloneBool(value *bool) *bool {
+	if value == nil {
+		return nil
+	}
+	next := *value
+	return &next
+}
+
+func cloneInt(value *int) *int {
+	if value == nil {
+		return nil
+	}
+	next := *value
+	return &next
+}
 
 func normalizedStatus(status string) string {
 	if strings.TrimSpace(status) == "" {

@@ -22,6 +22,8 @@ services:
       # 首次空库启动时自动创建的管理员账号。已有用户时不会覆盖密码。
       ADMIN_EMAIL: admin@example.com
       ADMIN_PASSWORD: transithub
+      # Set a base64-encoded 32-byte value in production to enable saved-password re-login.
+      # UPSTREAM_CREDENTIAL_ENCRYPTION_KEY: <generated-secret>
       # 生产环境建议关闭公开注册，只允许使用初始化管理员登录。
       ALLOW_PUBLIC_REGISTER: "false"
       # 当前运行版本号，仅用于后台纯展示。
