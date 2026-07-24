@@ -146,6 +146,7 @@ func (r *Repository) EnsureSchema(ctx context.Context) error {
 			admin_account_id text NOT NULL,
 			openai_model_id text NOT NULL DEFAULT 'gpt-5.4',
 			anthropic_model_id text NOT NULL DEFAULT 'claude-sonnet-4-6',
+			grok_model_id text NOT NULL DEFAULT 'grok-4.5',
 			balance_refresh_interval_minutes integer NOT NULL DEFAULT 5,
 			updated_at timestamptz NOT NULL DEFAULT now(),
 			PRIMARY KEY (user_id, admin_account_id)
@@ -156,6 +157,12 @@ func (r *Repository) EnsureSchema(ctx context.Context) error {
 	if _, err := r.db.Exec(ctx, `
 		ALTER TABLE channel_monitor_test_model_configs
 		ADD COLUMN IF NOT EXISTS balance_refresh_interval_minutes integer NOT NULL DEFAULT 5
+	`); err != nil {
+		return err
+	}
+	if _, err := r.db.Exec(ctx, `
+		ALTER TABLE channel_monitor_test_model_configs
+		ADD COLUMN IF NOT EXISTS grok_model_id text NOT NULL DEFAULT 'grok-4.5'
 	`); err != nil {
 		return err
 	}
@@ -412,7 +419,7 @@ func (r *Repository) GetLastRateApplyResult(ctx context.Context, userID, adminAc
 
 func (r *Repository) GetTestModelConfig(ctx context.Context, userID, adminAccountID string) (*TestModelConfig, error) {
 	rows, err := r.db.Query(ctx, `
-		SELECT user_id, admin_account_id, openai_model_id, anthropic_model_id, balance_refresh_interval_minutes, updated_at
+		SELECT user_id, admin_account_id, openai_model_id, anthropic_model_id, grok_model_id, balance_refresh_interval_minutes, updated_at
 		FROM channel_monitor_test_model_configs
 		WHERE user_id = $1 AND admin_account_id = $2
 	`, userID, adminAccountID)
@@ -429,6 +436,7 @@ func (r *Repository) GetTestModelConfig(ctx context.Context, userID, adminAccoun
 		&config.AdminAccountID,
 		&config.OpenAIModelID,
 		&config.AnthropicModelID,
+		&config.GrokModelID,
 		&config.BalanceRefreshIntervalMinutes,
 		&config.UpdatedAt,
 	); err != nil {
@@ -440,15 +448,16 @@ func (r *Repository) GetTestModelConfig(ctx context.Context, userID, adminAccoun
 func (r *Repository) SaveTestModelConfig(ctx context.Context, config TestModelConfig) error {
 	_, err := r.db.Exec(ctx, `
 		INSERT INTO channel_monitor_test_model_configs (
-			user_id, admin_account_id, openai_model_id, anthropic_model_id, balance_refresh_interval_minutes, updated_at
+			user_id, admin_account_id, openai_model_id, anthropic_model_id, grok_model_id, balance_refresh_interval_minutes, updated_at
 		)
-		VALUES ($1, $2, $3, $4, $5, now())
+		VALUES ($1, $2, $3, $4, $5, $6, now())
 		ON CONFLICT (user_id, admin_account_id) DO UPDATE SET
 			openai_model_id = EXCLUDED.openai_model_id,
 			anthropic_model_id = EXCLUDED.anthropic_model_id,
+			grok_model_id = EXCLUDED.grok_model_id,
 			balance_refresh_interval_minutes = EXCLUDED.balance_refresh_interval_minutes,
 			updated_at = now()
-	`, config.UserID, config.AdminAccountID, config.OpenAIModelID, config.AnthropicModelID, config.BalanceRefreshIntervalMinutes)
+	`, config.UserID, config.AdminAccountID, config.OpenAIModelID, config.AnthropicModelID, config.GrokModelID, config.BalanceRefreshIntervalMinutes)
 	return err
 }
 

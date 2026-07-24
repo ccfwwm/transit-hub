@@ -247,9 +247,10 @@ export default {
         description: '主动检测账号时会按渠道类型使用对应模型；余额缓存超过间隔后会先刷新上游并写回数据库。',
         openai: 'OpenAI 检测模型',
         anthropic: 'Anthropic 检测模型',
+        grok: 'Grok 检测模型',
         balanceRefreshInterval: '余额刷新间隔',
         minutes: '分钟',
-        current: '当前：OpenAI {openai} / Anthropic {anthropic} / 余额 {minutes} 分钟刷新'
+        current: '当前：OpenAI {openai} / Anthropic {anthropic} / Grok {grok} / 余额 {minutes} 分钟刷新'
       },
       bulk: {
         selected: '已选 {count} 个',

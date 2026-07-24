@@ -81,6 +81,7 @@ const summary = ref({
   testModelConfig: {
     openaiModelId: 'gpt-5.4',
     anthropicModelId: 'claude-sonnet-4-6',
+    grokModelId: 'grok-4.5',
     balanceRefreshIntervalMinutes: 5,
     updatedAt: '',
   },
@@ -95,7 +96,7 @@ const disconnectMode = ref<RealDisconnectRequest['mode']>('unlink')
 const disconnectError = ref('')
 const editForm = ref({ enabled: true, checkIntervalMinutes: 10, failureThreshold: 3, balanceThreshold: 1 })
 const rateRuleForm = ref({ enabled: false, autoApplyOnCheck: true, updatePriority: true, stopWhenMissingRate: true })
-const testModelForm = ref({ openaiModelId: 'gpt-5.4', anthropicModelId: 'claude-sonnet-4-6', balanceRefreshIntervalMinutes: 5 })
+const testModelForm = ref({ openaiModelId: 'gpt-5.4', anthropicModelId: 'claude-sonnet-4-6', grokModelId: 'grok-4.5', balanceRefreshIntervalMinutes: 5 })
 const priorityDrafts = ref<Record<string, number | null>>({})
 
 const syncSummaryState = (next: Awaited<ReturnType<typeof getChannelMonitorSummary>>) => {
@@ -371,6 +372,7 @@ const openTestModelEditor = () => {
   testModelForm.value = {
     openaiModelId: summary.value.testModelConfig.openaiModelId || 'gpt-5.4',
     anthropicModelId: summary.value.testModelConfig.anthropicModelId || 'claude-sonnet-4-6',
+    grokModelId: summary.value.testModelConfig.grokModelId || 'grok-4.5',
     balanceRefreshIntervalMinutes: summary.value.testModelConfig.balanceRefreshIntervalMinutes || 5,
   }
   isTestModelEditorOpen.value = true
@@ -385,6 +387,7 @@ const saveTestModelConfig = async () => {
     const config = await updateChannelMonitorTestModelConfig({
       openaiModelId: testModelForm.value.openaiModelId,
       anthropicModelId: testModelForm.value.anthropicModelId,
+      grokModelId: testModelForm.value.grokModelId,
       balanceRefreshIntervalMinutes: Number(testModelForm.value.balanceRefreshIntervalMinutes),
     })
     summary.value.testModelConfig = config
@@ -978,6 +981,10 @@ const dispatchButtonClass = (channel: ChannelMonitorChannel): string => (
             <input v-model.trim="testModelForm.anthropicModelId" type="text" class="h-10 w-full rounded-xl border border-border/50 bg-surface px-3 font-mono text-sm outline-none focus:border-primary focus:ring-1 focus:ring-primary" placeholder="claude-sonnet-4-6" />
           </label>
           <label class="block space-y-2">
+            <span class="text-sm font-medium text-foreground">{{ t('admin.channelMonitor.testModel.grok') }}</span>
+            <input v-model.trim="testModelForm.grokModelId" type="text" class="h-10 w-full rounded-xl border border-border/50 bg-surface px-3 font-mono text-sm outline-none focus:border-primary focus:ring-1 focus:ring-primary" placeholder="grok-4.5" />
+          </label>
+          <label class="block space-y-2">
             <span class="text-sm font-medium text-foreground">{{ t('admin.channelMonitor.testModel.balanceRefreshInterval') }}</span>
             <div class="flex items-center gap-2">
               <input v-model.number="testModelForm.balanceRefreshIntervalMinutes" type="number" min="1" max="1440" class="h-10 w-28 rounded-xl border border-border/50 bg-surface px-3 text-sm outline-none focus:border-primary focus:ring-1 focus:ring-primary" />
@@ -985,7 +992,7 @@ const dispatchButtonClass = (channel: ChannelMonitorChannel): string => (
             </div>
           </label>
           <div class="rounded-lg border border-border/50 bg-surface-elevated px-3 py-2 text-xs text-muted-foreground">
-            {{ t('admin.channelMonitor.testModel.current', { openai: summary.testModelConfig.openaiModelId, anthropic: summary.testModelConfig.anthropicModelId, minutes: summary.testModelConfig.balanceRefreshIntervalMinutes }) }}
+            {{ t('admin.channelMonitor.testModel.current', { openai: summary.testModelConfig.openaiModelId, anthropic: summary.testModelConfig.anthropicModelId, grok: summary.testModelConfig.grokModelId, minutes: summary.testModelConfig.balanceRefreshIntervalMinutes }) }}
           </div>
         </div>
         <div class="mt-6 flex justify-end gap-2">

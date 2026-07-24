@@ -575,6 +575,9 @@ func (s *Service) UpdateTestModelConfig(ctx context.Context, userID string, req 
 	if req.AnthropicModelID != nil {
 		config.AnthropicModelID = defaultIfBlank(*req.AnthropicModelID, DefaultAnthropicTestModel)
 	}
+	if req.GrokModelID != nil {
+		config.GrokModelID = defaultIfBlank(*req.GrokModelID, DefaultGrokTestModel)
+	}
 	if req.BalanceRefreshIntervalMinutes != nil {
 		config.BalanceRefreshIntervalMinutes = clampInt(*req.BalanceRefreshIntervalMinutes, 1, 24*60)
 	}
@@ -1077,6 +1080,7 @@ func (s *Service) ensureTestModelConfig(ctx context.Context, userID, adminAccoun
 	if config != nil {
 		config.OpenAIModelID = defaultIfBlank(config.OpenAIModelID, DefaultOpenAITestModel)
 		config.AnthropicModelID = defaultIfBlank(config.AnthropicModelID, DefaultAnthropicTestModel)
+		config.GrokModelID = defaultIfBlank(config.GrokModelID, DefaultGrokTestModel)
 		config.BalanceRefreshIntervalMinutes = clampInt(config.BalanceRefreshIntervalMinutes, 1, 24*60)
 		return *config, nil
 	}
@@ -1397,6 +1401,8 @@ func testModelForGroupType(groupType string, config TestModelConfig) string {
 	switch strings.ToLower(strings.TrimSpace(groupType)) {
 	case "anthropic", "claude":
 		return defaultIfBlank(config.AnthropicModelID, DefaultAnthropicTestModel)
+	case "grok", "xai":
+		return defaultIfBlank(config.GrokModelID, DefaultGrokTestModel)
 	default:
 		return defaultIfBlank(config.OpenAIModelID, DefaultOpenAITestModel)
 	}

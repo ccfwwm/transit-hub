@@ -151,6 +151,27 @@ func TestRunRuleUsesDefaultAnthropicTestModel(t *testing.T) {
 	}
 }
 
+func TestRunRuleUsesDefaultGrokTestModel(t *testing.T) {
+	ctx := context.Background()
+	repo := newFakeRepository()
+	service := newTestService(repo)
+	conn := service.conns.connections[0]
+	conn.GroupType = "grok"
+	service.conns.connections[0] = conn
+	rule := repo.mustRule("conn-1")
+
+	_, err := service.RunRule(ctx, rule.ID, "manual")
+	if err != nil {
+		t.Fatalf("RunRule returned error: %v", err)
+	}
+	if len(service.platform.testOptions) != 1 {
+		t.Fatalf("expected one test option, got %d", len(service.platform.testOptions))
+	}
+	if service.platform.testOptions[0].ModelID != DefaultGrokTestModel {
+		t.Fatalf("expected default grok model %q, got %q", DefaultGrokTestModel, service.platform.testOptions[0].ModelID)
+	}
+}
+
 func TestRunRuleUsesSavedTestModelConfig(t *testing.T) {
 	ctx := context.Background()
 	repo := newFakeRepository()
@@ -159,6 +180,7 @@ func TestRunRuleUsesSavedTestModelConfig(t *testing.T) {
 		AdminAccountID:   "admin-1",
 		OpenAIModelID:    "gpt-custom",
 		AnthropicModelID: "claude-custom",
+		GrokModelID:      "grok-custom",
 	}
 	service := newTestService(repo)
 	rule := repo.mustRule("conn-1")
@@ -172,6 +194,25 @@ func TestRunRuleUsesSavedTestModelConfig(t *testing.T) {
 	}
 	if service.platform.testOptions[0].ModelID != "gpt-custom" {
 		t.Fatalf("expected saved model, got %q", service.platform.testOptions[0].ModelID)
+	}
+}
+
+func TestRunRuleUsesSavedGrokTestModelForXAI(t *testing.T) {
+	ctx := context.Background()
+	repo := newFakeRepository()
+	repo.testModelConfig = &TestModelConfig{UserID: "user-1", AdminAccountID: "admin-1", GrokModelID: "grok-custom"}
+	service := newTestService(repo)
+	conn := service.conns.connections[0]
+	conn.GroupType = "xai"
+	service.conns.connections[0] = conn
+	rule := repo.mustRule("conn-1")
+
+	_, err := service.RunRule(ctx, rule.ID, "manual")
+	if err != nil {
+		t.Fatalf("RunRule returned error: %v", err)
+	}
+	if len(service.platform.testOptions) != 1 || service.platform.testOptions[0].ModelID != "grok-custom" {
+		t.Fatalf("expected saved grok model, got %#v", service.platform.testOptions)
 	}
 }
 

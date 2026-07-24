@@ -247,9 +247,10 @@ export default {
         description: 'Active checks use a model based on channel type; stale upstream balances are refreshed and saved before threshold checks.',
         openai: 'OpenAI check model',
         anthropic: 'Anthropic check model',
+        grok: 'Grok check model',
         balanceRefreshInterval: 'Balance refresh interval',
         minutes: 'minutes',
-        current: 'Current: OpenAI {openai} / Anthropic {anthropic} / balance every {minutes} min'
+        current: 'Current: OpenAI {openai} / Anthropic {anthropic} / Grok {grok} / balance every {minutes} min'
       },
       bulk: {
         selected: '{count} selected',

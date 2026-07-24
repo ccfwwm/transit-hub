@@ -192,6 +192,7 @@ export interface UpdateChannelMonitorRateRuleRequest {
 export interface ChannelMonitorTestModelConfig {
   openaiModelId: string
   anthropicModelId: string
+  grokModelId: string
   balanceRefreshIntervalMinutes: number
   updatedAt: string
 }
@@ -199,5 +200,6 @@ export interface ChannelMonitorTestModelConfig {
 export interface UpdateChannelMonitorTestModelConfigRequest {
   openaiModelId?: string
   anthropicModelId?: string
+  grokModelId?: string
   balanceRefreshIntervalMinutes?: number
 }

@@ -8,6 +8,7 @@ const (
 	DefaultBalanceThreshold      = 1.0
 	DefaultOpenAITestModel       = "gpt-5.4"
 	DefaultAnthropicTestModel    = "claude-sonnet-4-6"
+	DefaultGrokTestModel         = "grok-4.5"
 	DefaultBalanceRefreshMinutes = 5
 )
 
@@ -205,6 +206,7 @@ type TestModelConfig struct {
 	AdminAccountID                string    `json:"-"`
 	OpenAIModelID                 string    `json:"openaiModelId"`
 	AnthropicModelID              string    `json:"anthropicModelId"`
+	GrokModelID                   string    `json:"grokModelId"`
 	BalanceRefreshIntervalMinutes int       `json:"balanceRefreshIntervalMinutes"`
 	UpdatedAt                     time.Time `json:"updatedAt"`
 }
@@ -212,6 +214,7 @@ type TestModelConfig struct {
 type UpdateTestModelConfigRequest struct {
 	OpenAIModelID                 *string `json:"openaiModelId"`
 	AnthropicModelID              *string `json:"anthropicModelId"`
+	GrokModelID                   *string `json:"grokModelId"`
 	BalanceRefreshIntervalMinutes *int    `json:"balanceRefreshIntervalMinutes"`
 }
 
@@ -316,6 +319,7 @@ func DefaultTestModelConfig(userID, adminAccountID string) TestModelConfig {
 		AdminAccountID:                adminAccountID,
 		OpenAIModelID:                 DefaultOpenAITestModel,
 		AnthropicModelID:              DefaultAnthropicTestModel,
+		GrokModelID:                   DefaultGrokTestModel,
 		BalanceRefreshIntervalMinutes: DefaultBalanceRefreshMinutes,
 		UpdatedAt:                     time.Now(),
 	}
