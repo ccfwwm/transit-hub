@@ -83,12 +83,17 @@ const mappedOwnGroupsForRate = (rate: GroupRate): string[] => {
 
 const firstMappedOwnGroupForRate = (rate: GroupRate): string => mappedOwnGroupsForRate(rate)[0] ?? ''
 
+const normalizeGroupType = (value: string | null | undefined): string => {
+  const normalized = (value || '').trim().toLowerCase()
+  return normalized === 'xai' ? 'grok' : normalized
+}
+
 const filteredOwnGroups = computed(() => {
   // new-api admin 不按渠道类型筛选，直接显示全部自有分组
   if (isAdminNewAPI.value) return ownGroups.value
-  const upstreamType = (connectingRate.value?.type || selectedGroupType.value).toLowerCase()
+  const upstreamType = normalizeGroupType(connectingRate.value?.type || selectedGroupType.value)
   if (upstreamType) {
-    return ownGroups.value.filter(g => g.platform.toLowerCase() === upstreamType)
+    return ownGroups.value.filter(g => normalizeGroupType(g.platform) === upstreamType)
   }
   return ownGroups.value
 })
@@ -169,6 +174,8 @@ const groupTypeToChannelIds: Record<string, number[]> = {
   anthropic: [14],
   gemini: [24],
   deepseek: [43],
+  grok: [48],
+  xai: [48],
 }
 const filteredChannelTypes = computed(() => {
   const groupType = (connectingRate.value?.type || '').toLowerCase()
@@ -900,6 +907,7 @@ const historyRowKey = (row: GroupRateHistoryRow, index: number): string => (
                 <option value="anthropic">{{ t('admin.groupRates.connect.groupTypeAnthropic') }}</option>
                 <option value="gemini">{{ t('admin.groupRates.connect.groupTypeGemini') }}</option>
                 <option value="antigravity">{{ t('admin.groupRates.connect.groupTypeAntigravity') }}</option>
+                <option value="grok">{{ t('admin.groupRates.connect.groupTypeGrok') }}</option>
               </select>
               <div class="absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none text-muted-foreground">
                 <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg>

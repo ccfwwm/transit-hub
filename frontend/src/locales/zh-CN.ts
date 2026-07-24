@@ -881,6 +881,7 @@ export default {
         groupTypeAnthropic: 'Anthropic',
         groupTypeGemini: 'Gemini',
         groupTypeAntigravity: 'Antigravity',
+        groupTypeGrok: 'Grok',
         channelTypeLabel: '渠道类型',
         channelTypePlaceholder: '请选择渠道类型',
         realNotSupported: '当前平台不支持真实对接',

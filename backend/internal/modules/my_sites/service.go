@@ -487,6 +487,8 @@ func groupTypeToNewAPIChannelType(groupType string) int {
 		return 24
 	case "deepseek":
 		return 43
+	case "grok", "xai":
+		return 48
 	default:
 		return 1
 	}
@@ -909,7 +911,7 @@ func randomKeyPrefix() string {
 	return keyPrefixes[int(b[0])%len(keyPrefixes)]
 }
 
-// groupTypePrefix 根据分组类型返回账号名称前缀（A=OpenAI, B=Anthropic, C=Gemini, D=Antigravity）。
+// groupTypePrefix 根据分组类型返回账号名称前缀（A=OpenAI, B=Anthropic, C=Gemini, D=Antigravity, G=Grok）。
 func groupTypePrefix(groupType string) string {
 	switch strings.ToLower(groupType) {
 	case "openai":
@@ -920,6 +922,8 @@ func groupTypePrefix(groupType string) string {
 		return "C"
 	case "antigravity":
 		return "D"
+	case "grok", "xai":
+		return "G"
 	default:
 		return "X"
 	}
@@ -988,6 +992,11 @@ func buildAccountPayload(groupType, baseURL, apiKey string, ownGroupIDs []int, a
 	case "antigravity":
 		payload["platform"] = "antigravity"
 		payload["concurrency"] = 10
+	case "grok", "xai":
+		payload["platform"] = "grok"
+		credentials["pool_mode"] = true
+		payload["extra"] = map[string]any{"openai_passthrough": true}
+		payload["concurrency"] = 1000
 	default:
 		payload["platform"] = groupType
 		payload["concurrency"] = 100

@@ -881,6 +881,7 @@ export default {
         groupTypeAnthropic: 'Anthropic',
         groupTypeGemini: 'Gemini',
         groupTypeAntigravity: 'Antigravity',
+        groupTypeGrok: 'Grok',
         channelTypeLabel: 'Channel Type',
         channelTypePlaceholder: 'Select channel type',
         realNotSupported: 'Real connect is not supported for this platform',
