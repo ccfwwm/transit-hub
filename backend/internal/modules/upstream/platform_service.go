@@ -103,7 +103,10 @@ func (s *PlatformService) LoginWithToken(baseURL string, platform Platform, acco
 
 func (s *PlatformService) RefreshSession(session Session) (Session, error) {
 	if session.Platform == PlatformNewAPI {
-		return session, nil
+		if strings.TrimSpace(session.AccessToken) == "" || session.ExpiresAt == nil || *session.ExpiresAt-time.Now().UnixMilli() > refreshSkewMS {
+			return session, nil
+		}
+		return s.refreshNewAPISession(session)
 	}
 	now := time.Now().UnixMilli()
 	if session.RefreshToken == "" || (session.ExpiresAt != nil && *session.ExpiresAt-now > refreshSkewMS) {
@@ -120,6 +123,24 @@ func (s *PlatformService) RefreshSession(session Session) (Session, error) {
 		return session, nil
 	}
 	return Session{}, err
+}
+
+func (s *PlatformService) refreshNewAPISession(session Session) (Session, error) {
+	if strings.TrimSpace(session.Cookie) == "" {
+		return Session{}, newRequestError(ErrorAuth, PlatformNewAPI)
+	}
+	response, err := s.httpClient.requestJSON(session.BaseURL+"/api/user/auth/refresh", requestOptions{
+		Method: http.MethodPost,
+		Cookie: session.Cookie,
+	})
+	if err != nil {
+		return Session{}, err
+	}
+	refreshed, err := newAPISessionFromResponse(session.BaseURL, response, session)
+	if err != nil {
+		return Session{}, err
+	}
+	return refreshed, nil
 }
 
 func (s *PlatformService) refreshSub2APISession(session Session) (Session, error) {
@@ -227,10 +248,10 @@ func (s *PlatformService) LoginNewAPIAdmin(baseURL string, username string, pass
 
 // VerifyNewAPIAdmin 调用 /api/user/self 校验 new-api 用户是否为 admin（role >= 10）。
 func (s *PlatformService) VerifyNewAPIAdmin(session Session) error {
-	if session.Platform != PlatformNewAPI || strings.TrimSpace(session.Cookie) == "" {
+	if session.Platform != PlatformNewAPI || !session.IsAuthenticated() {
 		return newRequestError(ErrorAuth, PlatformNewAPI)
 	}
-	cookieOptions := requestOptions{Cookie: session.Cookie, UserID: session.UserID}
+	cookieOptions := newAPIRequestOptions(session)
 	response, err := s.httpClient.requestJSON(session.BaseURL+"/api/user/self", cookieOptions)
 	if err != nil {
 		return err
@@ -248,7 +269,7 @@ func (s *PlatformService) VerifyNewAPIAdmin(session Session) error {
 // 失败时返回默认值 500000。
 func (s *PlatformService) fetchNewAPIQuotaPerUnit(session Session) float64 {
 	const defaultQuotaPerUnit = 500000
-	cookieOptions := requestOptions{Cookie: session.Cookie, UserID: session.UserID}
+	cookieOptions := newAPIRequestOptions(session)
 	response, err := s.httpClient.requestJSON(session.BaseURL+"/api/status", cookieOptions)
 	if err != nil {
 		log.Printf("new-api /api/status fetch failed base_url=%s err=%v, using default quota_per_unit", session.BaseURL, err)
@@ -793,10 +814,10 @@ func sub2APIGroupDailyCost(item any) float64 {
 }
 
 func (s *PlatformService) FetchNewAPIGroupDailyStats(session Session, groups []GroupInfo) ([]GroupDailyStat, error) {
-	if session.Platform != PlatformNewAPI || strings.TrimSpace(session.Cookie) == "" {
+	if session.Platform != PlatformNewAPI || !session.IsAuthenticated() {
 		return nil, newRequestError(ErrorAuth, PlatformNewAPI)
 	}
-	cookieOptions := requestOptions{Cookie: session.Cookie, UserID: session.UserID}
+	cookieOptions := newAPIRequestOptions(session)
 	stats := make([]GroupDailyStat, 0, len(groups))
 	for _, group := range groups {
 		name := strings.TrimSpace(group.Name)
@@ -940,10 +961,11 @@ func (s *PlatformService) fetchSub2APIKeyUsageToday(ctx context.Context, session
 // （沿用已验证的 self 统计能力，不做 token×全部分组的穷举以控制并发/请求量）。
 // 并发上限 maxKeyConcurrency，只保留今日 quota 换算金额 > 0 的 token。
 func (s *PlatformService) fetchNewAPIKeyUsageToday(ctx context.Context, session Session, groups []GroupInfo) ([]KeyUsageTodayStat, error) {
-	if session.Platform != PlatformNewAPI || strings.TrimSpace(session.Cookie) == "" {
+	if session.Platform != PlatformNewAPI || !session.IsAuthenticated() {
 		return nil, newRequestError(ErrorAuth, PlatformNewAPI)
 	}
-	cookieOptions := requestOptions{Context: ctx, Cookie: session.Cookie, UserID: session.UserID}
+	cookieOptions := newAPIRequestOptions(session)
+	cookieOptions.Context = ctx
 
 	const pageSize = 100
 	const maxPages = 100
@@ -1061,13 +1083,9 @@ func (s *PlatformService) loginNewAPI(baseURL string, username string, password 
 		}
 	}
 	loginData := dataRecord(response.Payload)
-	userID := newAPIUserID(loginData)
-	session := Session{Platform: PlatformNewAPI, BaseURL: baseURL, Cookie: cookieHeader(response.Header), UserID: userID}
-	if strings.TrimSpace(session.Cookie) == "" {
-		return LoginResult{}, newRequestError(ErrorAuth, PlatformNewAPI)
-	}
-	if strings.TrimSpace(session.UserID) == "" {
-		return LoginResult{}, newRequestError(ErrorAuth, PlatformNewAPI)
+	session, err := newAPISessionFromResponse(baseURL, response)
+	if err != nil {
+		return LoginResult{}, err
 	}
 	session.QuotaPerUnit = s.fetchNewAPIQuotaPerUnit(session)
 	metrics, err := s.fetchNewAPIMetrics(session, loginData)
@@ -1076,6 +1094,48 @@ func (s *PlatformService) loginNewAPI(baseURL string, username string, password 
 		metrics = defaultMetrics()
 	}
 	return LoginResult{Platform: PlatformNewAPI, Session: session, Metrics: metrics}, nil
+}
+
+func newAPISessionFromResponse(baseURL string, response jsonResponse, previous ...Session) (Session, error) {
+	data := dataRecord(response.Payload)
+	session := Session{
+		Platform: PlatformNewAPI,
+		BaseURL:  baseURL,
+		Cookie:   cookieHeader(response.Header),
+		UserID:   newAPIUserID(data),
+	}
+	if accessToken := firstString(data, []string{"access_token", "accessToken"}); accessToken != nil {
+		session.AccessToken = strings.TrimSpace(*accessToken)
+	}
+	if tokenType := firstString(data, []string{"token_type", "tokenType"}); tokenType != nil {
+		session.TokenType = strings.TrimSpace(*tokenType)
+	}
+	if session.AccessToken != "" && session.TokenType == "" {
+		session.TokenType = "Bearer"
+	}
+	if expiresAt := firstNumber(data, []string{"access_expires_at", "accessExpiresAt", "expires_at", "expiresAt"}); expiresAt != nil {
+		value := int64(*expiresAt)
+		if value > 0 && value < 1_000_000_000_000 {
+			value *= 1000
+		}
+		session.ExpiresAt = &value
+	} else if expiresIn := firstNumber(data, []string{"expires_in", "expiresIn"}); expiresIn != nil {
+		value := time.Now().UnixMilli() + int64(*expiresIn*1000)
+		session.ExpiresAt = &value
+	}
+	if len(previous) > 0 {
+		if session.Cookie == "" {
+			session.Cookie = previous[0].Cookie
+		}
+		if session.UserID == "" {
+			session.UserID = previous[0].UserID
+		}
+		session.QuotaPerUnit = previous[0].QuotaPerUnit
+	}
+	if !session.IsAuthenticated() {
+		return Session{}, newRequestError(ErrorAuth, PlatformNewAPI)
+	}
+	return session, nil
 }
 
 func (s *PlatformService) loginSub2API(baseURL string, email string, password string) (LoginResult, error) {
@@ -1113,7 +1173,7 @@ func (s *PlatformService) loginSub2API(baseURL string, email string, password st
 }
 
 func (s *PlatformService) fetchNewAPIMetrics(session Session, loginData map[string]any) (Metrics, error) {
-	cookieOptions := requestOptions{Cookie: session.Cookie, UserID: session.UserID}
+	cookieOptions := newAPIRequestOptions(session)
 	self, err := s.httpClient.requestJSON(session.BaseURL+"/api/user/self", cookieOptions)
 	if err != nil {
 		return Metrics{}, err
@@ -1228,7 +1288,37 @@ func newAPIUserID(loginData map[string]any) string {
 	if value := firstNumber(loginData, []string{"id", "user_id", "userId"}); value != nil {
 		return strconv.FormatInt(int64(*value), 10)
 	}
+	for _, key := range []string{"user", "session"} {
+		nested, ok := loginData[key].(map[string]any)
+		if !ok {
+			continue
+		}
+		if value := firstNumber(nested, []string{"id", "user_id", "userId"}); value != nil {
+			return strconv.FormatInt(int64(*value), 10)
+		}
+		if user, ok := nested["user"].(map[string]any); ok {
+			if value := firstNumber(user, []string{"id", "user_id", "userId"}); value != nil {
+				return strconv.FormatInt(int64(*value), 10)
+			}
+		}
+	}
 	return ""
+}
+
+func newAPIRequestOptions(session Session) requestOptions {
+	return requestOptions{
+		Cookie:      session.Cookie,
+		UserID:      session.UserID,
+		AccessToken: session.AccessToken,
+		TokenType:   session.TokenType,
+	}
+}
+
+func newAPIRequestOptionsWith(session Session, method string, body any) requestOptions {
+	options := newAPIRequestOptions(session)
+	options.Method = method
+	options.Body = body
+	return options
 }
 
 func todayStart() int64 {
@@ -1537,7 +1627,7 @@ func (s *PlatformService) fetchNewAPIAdminUsageStats(session Session, startDate,
 	startTS := start.Unix()
 	endTS := time.Date(end.Year(), end.Month(), end.Day(), 23, 59, 59, 0, end.Location()).Unix()
 	statURL := session.BaseURL + "/api/log/self/stat?type=2&start_timestamp=" + strconvInt(startTS) + "&end_timestamp=" + strconvInt(endTS)
-	cookieOptions := requestOptions{Cookie: session.Cookie, UserID: session.UserID}
+	cookieOptions := newAPIRequestOptions(session)
 	response, err := s.httpClient.requestJSON(statURL, cookieOptions)
 	if err != nil {
 		return 0, err
@@ -1566,7 +1656,7 @@ func (s *PlatformService) fetchNewAPIAdminSiteBalanceFiltered(session Session, f
 
 	const pageSize = 100
 	const maxConcurrency = 5
-	cookieOptions := requestOptions{Cookie: session.Cookie, UserID: session.UserID}
+	cookieOptions := newAPIRequestOptions(session)
 
 	firstURL := session.BaseURL + "/api/user/?p=1&page_size=" + strconvInt(int64(pageSize))
 	firstResponse, err := s.httpClient.requestJSON(firstURL, cookieOptions)
@@ -1684,7 +1774,7 @@ func (s *PlatformService) fetchNewAPIAdminGroups(session Session) ([]GroupInfo, 
 	if !session.IsAuthenticated() {
 		return nil, newRequestError(ErrorAuth, PlatformNewAPI)
 	}
-	cookieOptions := requestOptions{Cookie: session.Cookie, UserID: session.UserID}
+	cookieOptions := newAPIRequestOptions(session)
 	groupsPayload, err := s.httpClient.requestJSON(session.BaseURL+"/api/user/self/groups", cookieOptions)
 	if err != nil {
 		groupsPayload, err = s.httpClient.requestJSON(session.BaseURL+"/api/user/groups", cookieOptions)
@@ -1727,7 +1817,7 @@ func (s *PlatformService) fetchNewAPIAdminAllGroups(session Session) ([]AdminGro
 	if !session.IsAuthenticated() {
 		return nil, newRequestError(ErrorAuth, PlatformNewAPI)
 	}
-	cookieOptions := requestOptions{Cookie: session.Cookie, UserID: session.UserID}
+	cookieOptions := newAPIRequestOptions(session)
 	// 获取分组名列表
 	groupListPayload, err := s.httpClient.requestJSON(session.BaseURL+"/api/group/", cookieOptions)
 	if err != nil {
@@ -1814,27 +1904,22 @@ func strconvInt(value int64) string {
 //  2. 按 name 搜索回查 token ID；
 //  3. 调用 /api/token/:id/key 获取完整 key。
 func (s *PlatformService) CreateNewAPIToken(session Session, name string, group string) (string, string, error) {
-	if session.Platform != PlatformNewAPI {
+	if session.Platform != PlatformNewAPI || !session.IsAuthenticated() {
 		return "", "", newRequestError(ErrorAuth, PlatformNewAPI)
 	}
 
 	// 步骤 1：创建 token
-	_, err := s.httpClient.requestJSON(session.BaseURL+"/api/token/", requestOptions{
-		Cookie: session.Cookie,
-		UserID: session.UserID,
-		Method: http.MethodPost,
-		Body: map[string]any{
-			"name":                 name,
-			"remain_quota":         0,
-			"unlimited_quota":      true,
-			"expired_time":         -1,
-			"model_limits_enabled": false,
-			"model_limits":         "",
-			"allow_ips":            "",
-			"group":                group,
-			"cross_group_retry":    false,
-		},
-	})
+	_, err := s.httpClient.requestJSON(session.BaseURL+"/api/token/", newAPIRequestOptionsWith(session, http.MethodPost, map[string]any{
+		"name":                 name,
+		"remain_quota":         0,
+		"unlimited_quota":      true,
+		"expired_time":         -1,
+		"model_limits_enabled": false,
+		"model_limits":         "",
+		"allow_ips":            "",
+		"group":                group,
+		"cross_group_retry":    false,
+	}))
 	if err != nil {
 		return "", "", err
 	}
@@ -1858,10 +1943,7 @@ func (s *PlatformService) CreateNewAPIToken(session Session, name string, group 
 func (s *PlatformService) searchNewAPITokenByName(session Session, name string) (string, error) {
 	for page := 1; page <= 10; page++ {
 		endpoint := session.BaseURL + "/api/token/?p=" + strconv.Itoa(page) + "&page_size=100"
-		response, err := s.httpClient.requestJSON(endpoint, requestOptions{
-			Cookie: session.Cookie,
-			UserID: session.UserID,
-		})
+		response, err := s.httpClient.requestJSON(endpoint, newAPIRequestOptions(session))
 		if err != nil {
 			return "", err
 		}
@@ -1891,11 +1973,7 @@ func (s *PlatformService) searchNewAPITokenByName(session Session, name string) 
 
 // FetchNewAPITokenKey 调用 /api/token/:id/key 获取完整的 token key。
 func (s *PlatformService) FetchNewAPITokenKey(session Session, tokenID string) (string, error) {
-	response, err := s.httpClient.requestJSON(session.BaseURL+"/api/token/"+tokenID+"/key", requestOptions{
-		Cookie: session.Cookie,
-		UserID: session.UserID,
-		Method: http.MethodPost,
-	})
+	response, err := s.httpClient.requestJSON(session.BaseURL+"/api/token/"+tokenID+"/key", newAPIRequestOptionsWith(session, http.MethodPost, nil))
 	if err != nil {
 		return "", err
 	}
@@ -1909,13 +1987,10 @@ func (s *PlatformService) FetchNewAPITokenKey(session Session, tokenID string) (
 // ListNewAPITokens 列出上游 new-api 站点的 token 列表。
 // 返回与 Sub2APIKeyItem 相同的结构，便于前端统一使用。
 func (s *PlatformService) ListNewAPITokens(session Session) ([]Sub2APIKeyItem, error) {
-	if session.Platform != PlatformNewAPI {
+	if session.Platform != PlatformNewAPI || !session.IsAuthenticated() {
 		return nil, newRequestError(ErrorAuth, PlatformNewAPI)
 	}
-	response, err := s.httpClient.requestJSON(session.BaseURL+"/api/token/?p=1&page_size=100", requestOptions{
-		Cookie: session.Cookie,
-		UserID: session.UserID,
-	})
+	response, err := s.httpClient.requestJSON(session.BaseURL+"/api/token/?p=1&page_size=100", newAPIRequestOptions(session))
 	if err != nil {
 		return nil, err
 	}
@@ -1949,54 +2024,45 @@ func (s *PlatformService) ListNewAPITokens(session Session) ([]Sub2APIKeyItem, e
 
 // DeleteNewAPIToken 删除上游 new-api 站点的指定 token。
 func (s *PlatformService) DeleteNewAPIToken(session Session, tokenID string) error {
-	if session.Platform != PlatformNewAPI {
+	if session.Platform != PlatformNewAPI || !session.IsAuthenticated() {
 		return newRequestError(ErrorAuth, PlatformNewAPI)
 	}
-	_, err := s.httpClient.requestJSON(session.BaseURL+"/api/token/"+tokenID, requestOptions{
-		Cookie: session.Cookie,
-		UserID: session.UserID,
-		Method: http.MethodDelete,
-	})
+	_, err := s.httpClient.requestJSON(session.BaseURL+"/api/token/"+tokenID, newAPIRequestOptionsWith(session, http.MethodDelete, nil))
 	return err
 }
 
 // CreateNewAPIChannel 在 admin new-api 站点创建 channel，回查 channel ID。
 // new-api 创建 channel 不返回 ID，因此按唯一 name 搜索回查。
 func (s *PlatformService) CreateNewAPIChannel(session Session, name string, baseURL string, key string, channelType int, groupIDs []string) (string, error) {
-	if session.Platform != PlatformNewAPI {
+	if session.Platform != PlatformNewAPI || !session.IsAuthenticated() {
 		return "", newRequestError(ErrorAuth, PlatformNewAPI)
 	}
 
 	groupStr := strings.Join(groupIDs, ",")
 
 	// 步骤 1：创建 channel
-	_, err := s.httpClient.requestJSON(session.BaseURL+"/api/channel/", requestOptions{
-		Cookie: session.Cookie,
-		UserID: session.UserID,
-		Method: http.MethodPost,
-		Body: map[string]any{
-			"mode":                            "single",
-			"multi_key_mode":                  "",
-			"batch_add_set_key_prefix_2_name": false,
-			"channel": map[string]any{
-				"type":            channelType,
-				"key":             key,
-				"name":            name,
-				"base_url":        baseURL,
-				"models":          "",
-				"group":           groupStr,
-				"status":          1,
-				"weight":          0,
-				"priority":        0,
-				"auto_ban":        1,
-				"model_mapping":   "",
-				"tag":             "",
-				"setting":         "",
-				"param_override":  "",
-				"header_override": "",
-			},
+	_, err := s.httpClient.requestJSON(session.BaseURL+"/api/channel/", newAPIRequestOptionsWith(session, http.MethodPost, map[string]any{
+		"mode":                            "single",
+		"multi_key_mode":                  "",
+		"batch_add_set_key_prefix_2_name": false,
+		"channel": map[string]any{
+			"type":            channelType,
+			"key":             key,
+			"name":            name,
+			"base_url":        baseURL,
+			"models":          "",
+			"group":           groupStr,
+			"status":          1,
+			"weight":          0,
+			"priority":        0,
+			"auto_ban":        1,
+			"model_mapping":   "",
+			"tag":             "",
+			"setting":         "",
+			"param_override":  "",
+			"header_override": "",
 		},
-	})
+	}))
 	if err != nil {
 		return "", err
 	}
@@ -2013,10 +2079,7 @@ func (s *PlatformService) CreateNewAPIChannel(session Session, name string, base
 func (s *PlatformService) searchNewAPIChannelByName(session Session, name string) (string, error) {
 	for page := 1; page <= 10; page++ {
 		endpoint := session.BaseURL + "/api/channel/?p=" + strconv.Itoa(page) + "&page_size=100"
-		response, err := s.httpClient.requestJSON(endpoint, requestOptions{
-			Cookie: session.Cookie,
-			UserID: session.UserID,
-		})
+		response, err := s.httpClient.requestJSON(endpoint, newAPIRequestOptions(session))
 		if err != nil {
 			return "", err
 		}
@@ -2046,14 +2109,10 @@ func (s *PlatformService) searchNewAPIChannelByName(session Session, name string
 
 // DeleteNewAPIChannel 删除 admin new-api 站点的指定 channel。
 func (s *PlatformService) DeleteNewAPIChannel(session Session, channelID string) error {
-	if session.Platform != PlatformNewAPI {
+	if session.Platform != PlatformNewAPI || !session.IsAuthenticated() {
 		return newRequestError(ErrorAuth, PlatformNewAPI)
 	}
-	_, err := s.httpClient.requestJSON(session.BaseURL+"/api/channel/"+channelID, requestOptions{
-		Cookie: session.Cookie,
-		UserID: session.UserID,
-		Method: http.MethodDelete,
-	})
+	_, err := s.httpClient.requestJSON(session.BaseURL+"/api/channel/"+channelID, newAPIRequestOptionsWith(session, http.MethodDelete, nil))
 	return err
 }
 
@@ -2111,7 +2170,7 @@ func (s *PlatformService) updateNewAPIGroupRatio(session Session, groupName stri
 	if !session.IsAuthenticated() {
 		return newRequestError(ErrorAuth, PlatformNewAPI)
 	}
-	cookieOptions := requestOptions{Cookie: session.Cookie, UserID: session.UserID}
+	cookieOptions := newAPIRequestOptions(session)
 
 	// GET 当前 options
 	response, err := s.httpClient.requestJSON(session.BaseURL+"/api/option/", cookieOptions)
@@ -2139,15 +2198,10 @@ func (s *PlatformService) updateNewAPIGroupRatio(session Session, groupName stri
 	}
 
 	// PUT 更新 GroupRatio，需要 root option 权限（RootAuth）
-	_, err = s.httpClient.requestJSON(session.BaseURL+"/api/option/", requestOptions{
-		Cookie: session.Cookie,
-		UserID: session.UserID,
-		Method: http.MethodPut,
-		Body: map[string]any{
-			"key":   "GroupRatio",
-			"value": string(ratioBytes),
-		},
-	})
+	_, err = s.httpClient.requestJSON(session.BaseURL+"/api/option/", newAPIRequestOptionsWith(session, http.MethodPut, map[string]any{
+		"key":   "GroupRatio",
+		"value": string(ratioBytes),
+	}))
 	if err != nil {
 		if reqErr, ok := err.(*RequestError); ok && (reqErr.MessageKey == ErrorAuth || reqErr.MessageKey == ErrorRequest) {
 			return fmt.Errorf("new-api requires root option permission to update GroupRatio: %w", err)

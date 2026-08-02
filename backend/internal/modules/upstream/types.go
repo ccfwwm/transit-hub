@@ -196,11 +196,11 @@ type Session struct {
 }
 
 // IsAuthenticated 按平台判断会话是否有效（已持有登录凭证）。
-// sub2api 需要 AccessToken，new-api 需要 Cookie + UserID。
+// sub2api 需要 AccessToken；new-api 支持旧版 Cookie 会话和新版 AccessToken 会话。
 func (s Session) IsAuthenticated() bool {
 	switch s.Platform {
 	case PlatformNewAPI:
-		return strings.TrimSpace(s.Cookie) != "" && strings.TrimSpace(s.UserID) != ""
+		return strings.TrimSpace(s.UserID) != "" && (strings.TrimSpace(s.AccessToken) != "" || strings.TrimSpace(s.Cookie) != "")
 	case PlatformSub2API:
 		return strings.TrimSpace(s.AccessToken) != ""
 	default:
