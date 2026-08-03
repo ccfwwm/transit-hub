@@ -921,8 +921,8 @@ onBeforeUnmount(() => {
                   <label class="flex cursor-pointer items-start gap-3 rounded-xl border border-border/50 bg-surface p-3 text-sm transition-colors hover:border-primary/50">
                     <input v-model="newSiteForm.authMode" type="radio" value="token" :disabled="isAdding" class="mt-1" />
                     <span class="space-y-1">
-                      <span class="block font-medium text-foreground">{{ t('admin.upstream.modal.form.authModes.token') }}</span>
-                      <span class="block text-xs leading-5 text-muted-foreground">{{ t('admin.upstream.modal.form.authModes.tokenHelp') }}</span>
+                      <span class="block font-medium text-foreground">{{ t(newSiteForm.platform === 'newapi' ? 'admin.upstream.modal.form.authModes.newApiToken' : 'admin.upstream.modal.form.authModes.token') }}</span>
+                      <span class="block text-xs leading-5 text-muted-foreground">{{ t(newSiteForm.platform === 'newapi' ? 'admin.upstream.modal.form.authModes.newApiTokenHelp' : 'admin.upstream.modal.form.authModes.tokenHelp') }}</span>
                     </span>
                   </label>
                 </div>
@@ -965,15 +965,19 @@ onBeforeUnmount(() => {
               <template v-else>
                 <div class="space-y-2 sm:col-span-2">
                   <label class="text-sm font-medium text-foreground flex items-center gap-1">
-                    {{ t('admin.upstream.modal.form.accessToken') }}
+                    <span v-if="newSiteForm.platform === 'newapi'" class="text-red-500">*</span>
+                    {{ t(newSiteForm.platform === 'newapi' ? 'admin.upstream.modal.form.newApiAccessToken' : 'admin.upstream.modal.form.accessToken') }}
                   </label>
                   <Input
                     v-model="newSiteForm.accessToken"
-                    :placeholder="t('admin.upstream.modal.form.accessTokenPlaceholder')"
+                    :placeholder="t(newSiteForm.platform === 'newapi' ? 'admin.upstream.modal.form.newApiAccessTokenPlaceholder' : 'admin.upstream.modal.form.accessTokenPlaceholder')"
                     :disabled="isAdding"
                     :required="newSiteForm.platform === 'newapi'"
                     class="bg-surface border-border/50 focus:border-primary h-10"
                   />
+                  <p v-if="newSiteForm.platform === 'newapi'" class="text-xs leading-5 text-muted-foreground">
+                    {{ t('admin.upstream.modal.form.tokenHelpNewApi') }}
+                  </p>
                 </div>
                 <div v-if="newSiteForm.platform !== 'newapi'" class="space-y-2">
                   <label class="text-sm font-medium text-foreground flex items-center gap-1">
@@ -986,7 +990,7 @@ onBeforeUnmount(() => {
                     class="bg-surface border-border/50 focus:border-primary h-10"
                   />
                 </div>
-                <div class="space-y-2">
+                <div v-if="newSiteForm.platform !== 'newapi'" class="space-y-2">
                   <label class="text-sm font-medium text-foreground flex items-center gap-1">
                     {{ t('admin.upstream.modal.form.tokenType') }}
                   </label>
@@ -997,7 +1001,7 @@ onBeforeUnmount(() => {
                     class="bg-surface border-border/50 focus:border-primary h-10"
                   />
                   <p class="text-xs leading-5 text-muted-foreground">
-                    {{ t(newSiteForm.platform === 'newapi' ? 'admin.upstream.modal.form.tokenHelpNewApi' : 'admin.upstream.modal.form.tokenHelp') }}
+                    {{ t('admin.upstream.modal.form.tokenHelp') }}
                   </p>
                 </div>
               </template>

@@ -77,6 +77,10 @@ func (s *PlatformService) LoginWithToken(baseURL string, platform Platform, acco
 	accessToken = strings.TrimSpace(accessToken)
 	refreshToken = strings.TrimSpace(refreshToken)
 	tokenType = strings.TrimSpace(tokenType)
+	if parts := strings.Fields(accessToken); len(parts) == 2 && strings.EqualFold(parts[0], "Bearer") {
+		accessToken = parts[1]
+		tokenType = "Bearer"
+	}
 	if tokenType == "" {
 		tokenType = "Bearer"
 	}

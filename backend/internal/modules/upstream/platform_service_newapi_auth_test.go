@@ -133,6 +133,39 @@ func TestLoginWithTokenSupportsNewAPISystemAccessToken(t *testing.T) {
 	}
 }
 
+func TestLoginWithTokenAcceptsBearerPrefixedNewAPISystemAccessToken(t *testing.T) {
+	const accessToken = "new-api-system-access-token"
+	const userID = "935"
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assertNewAPIAccessTokenHeaders(t, r, accessToken, userID)
+		switch r.URL.Path {
+		case "/api/status":
+			writeJSON(w, map[string]any{"success": true, "data": map[string]any{"quota_per_unit": 500000}})
+		case "/api/user/self":
+			writeJSON(w, map[string]any{"success": true, "data": map[string]any{"id": 935, "quota": 500000, "used_quota": 0}})
+		case "/api/log/self/stat":
+			writeJSON(w, map[string]any{"success": true, "data": map[string]any{"quota": 0}})
+		case "/api/user/self/groups":
+			writeJSON(w, map[string]any{"success": true, "data": map[string]any{}})
+		case "/api/pricing":
+			writeJSON(w, map[string]any{"success": true, "data": []any{}})
+		default:
+			t.Fatalf("unexpected request: %s %s", r.Method, r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	service := NewPlatformService(NewHTTPClient(server.Client()))
+	result, err := service.LoginWithToken(server.URL, PlatformNewAPI, userID, "Bearer "+accessToken, "", "Bearer")
+	if err != nil {
+		t.Fatalf("LoginWithToken returned error for a Bearer-prefixed token: %v", err)
+	}
+	if result.Session.AccessToken != accessToken || result.Session.TokenType != "Bearer" {
+		t.Fatalf("unexpected normalized token session: %+v", result.Session)
+	}
+}
+
 func TestNewAPIAccessTokenSessionSupportsGroupStats(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		assertNewAPIAccessTokenHeaders(t, r, "access-token", "808")
