@@ -1037,10 +1037,10 @@ func validateCreate(dto CreateRequest) error {
 	if dto.AuthMode != "" && dto.AuthMode != AuthModePassword && dto.AuthMode != AuthModeToken {
 		fields = append(fields, "authMode")
 	}
-	if normalizedAuthMode(dto.AuthMode) == AuthModeToken && dto.Platform == PlatformNewAPI {
-		fields = append(fields, "platform")
-	}
 	if normalizedAuthMode(dto.AuthMode) == AuthModePassword && strings.TrimSpace(dto.Account) == "" {
+		fields = append(fields, "account")
+	}
+	if normalizedAuthMode(dto.AuthMode) == AuthModeToken && dto.Platform == PlatformNewAPI && strings.TrimSpace(dto.Account) == "" {
 		fields = append(fields, "account")
 	}
 	if normalizedAuthMode(dto.AuthMode) == AuthModePassword && strings.TrimSpace(dto.Password) == "" {
@@ -1072,10 +1072,10 @@ func validateUpdate(dto UpdateRequest) error {
 	if dto.AuthMode != "" && dto.AuthMode != AuthModePassword && dto.AuthMode != AuthModeToken {
 		fields = append(fields, "authMode")
 	}
-	if normalizedAuthMode(dto.AuthMode) == AuthModeToken && dto.Platform == PlatformNewAPI {
-		fields = append(fields, "platform")
-	}
 	if normalizedAuthMode(dto.AuthMode) == AuthModePassword && strings.TrimSpace(dto.Account) == "" {
+		fields = append(fields, "account")
+	}
+	if normalizedAuthMode(dto.AuthMode) == AuthModeToken && dto.Platform == PlatformNewAPI && strings.TrimSpace(dto.Account) == "" {
 		fields = append(fields, "account")
 	}
 	if normalizedAuthMode(dto.AuthMode) == AuthModeToken && strings.TrimSpace(dto.AccessToken) == "" && strings.TrimSpace(dto.RefreshToken) == "" {

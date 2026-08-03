@@ -929,14 +929,14 @@ onBeforeUnmount(() => {
               </div>
 
               <!-- Account -->
-              <div v-if="newSiteForm.authMode === 'password'" class="space-y-2">
+              <div v-if="newSiteForm.authMode === 'password' || newSiteForm.platform === 'newapi'" class="space-y-2">
                 <label class="text-sm font-medium text-foreground flex items-center gap-1">
                   <span class="text-red-500">*</span>
-                  {{ t('admin.upstream.modal.form.account') }}
+                  {{ t(newSiteForm.authMode === 'token' ? 'admin.upstream.modal.form.newApiUserId' : 'admin.upstream.modal.form.account') }}
                 </label>
                 <Input
                   v-model="newSiteForm.account"
-                  :placeholder="t('admin.upstream.modal.form.accountPlaceholder')"
+                  :placeholder="t(newSiteForm.authMode === 'token' ? 'admin.upstream.modal.form.newApiUserIdPlaceholder' : 'admin.upstream.modal.form.accountPlaceholder')"
                   :disabled="isAdding"
                   required
                   class="bg-surface border-border/50 focus:border-primary h-10"
@@ -971,10 +971,11 @@ onBeforeUnmount(() => {
                     v-model="newSiteForm.accessToken"
                     :placeholder="t('admin.upstream.modal.form.accessTokenPlaceholder')"
                     :disabled="isAdding"
+                    :required="newSiteForm.platform === 'newapi'"
                     class="bg-surface border-border/50 focus:border-primary h-10"
                   />
                 </div>
-                <div class="space-y-2">
+                <div v-if="newSiteForm.platform !== 'newapi'" class="space-y-2">
                   <label class="text-sm font-medium text-foreground flex items-center gap-1">
                     {{ t('admin.upstream.modal.form.refreshToken') }}
                   </label>
@@ -996,7 +997,7 @@ onBeforeUnmount(() => {
                     class="bg-surface border-border/50 focus:border-primary h-10"
                   />
                   <p class="text-xs leading-5 text-muted-foreground">
-                    {{ t('admin.upstream.modal.form.tokenHelp') }}
+                    {{ t(newSiteForm.platform === 'newapi' ? 'admin.upstream.modal.form.tokenHelpNewApi' : 'admin.upstream.modal.form.tokenHelp') }}
                   </p>
                 </div>
               </template>

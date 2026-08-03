@@ -654,10 +654,12 @@ export default {
             password: '账号密码登录',
             passwordHelp: '使用站点账号密码登录，并自动保存会话。',
             token: 'Access Token / Refresh Token',
-            tokenHelp: '适用于 Cloudflare 或二次验证导致账号密码无法直连的 Sub2API 站点。'
+            tokenHelp: '适用于 Cloudflare 或二次验证导致账号密码无法直连的 Sub2API 和 New-API 站点。'
           },
           account: '登录账号',
           accountPlaceholder: '输入账号',
+          newApiUserId: 'New-API 用户 ID',
+          newApiUserIdPlaceholder: '输入个人资料中的数字用户 ID',
           password: '登录密码',
           passwordPlaceholder: '输入密码',
           passwordEditPlaceholder: '不修改密码请留空',
@@ -669,6 +671,7 @@ export default {
           tokenType: 'Token Type',
           tokenTypePlaceholder: '默认 Bearer',
           tokenHelp: '如果提供 refresh_token，系统会优先调用刷新接口换取新的 access_token 和过期时间。',
+          tokenHelpNewApi: '填写个人资料中的用户 ID 和系统访问令牌，可绕过 Cloudflare Turnstile 密码登录。',
           rechargeRate: '充值倍率',
           rechargeRatePlaceholder: '输入 USD 转 CNY 的倍率，如 7',
           rechargeRateHelp: '必填。人民币金额 = USD 金额 × 此倍率。',

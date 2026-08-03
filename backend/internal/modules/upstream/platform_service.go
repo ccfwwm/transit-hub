@@ -70,9 +70,6 @@ func (s *PlatformService) Login(baseURL string, platform Platform, account strin
 }
 
 func (s *PlatformService) LoginWithToken(baseURL string, platform Platform, account string, accessToken string, refreshToken string, tokenType string) (LoginResult, error) {
-	if platform == PlatformNewAPI {
-		return LoginResult{}, newRequestError(ErrorAuth, PlatformSub2API)
-	}
 	normalizedURL, err := s.NormalizeURL(baseURL)
 	if err != nil {
 		return LoginResult{}, err
@@ -82,6 +79,24 @@ func (s *PlatformService) LoginWithToken(baseURL string, platform Platform, acco
 	tokenType = strings.TrimSpace(tokenType)
 	if tokenType == "" {
 		tokenType = "Bearer"
+	}
+	if platform == PlatformNewAPI {
+		session := Session{
+			Platform:    PlatformNewAPI,
+			BaseURL:     normalizedURL,
+			UserID:      strings.TrimSpace(account),
+			AccessToken: accessToken,
+			TokenType:   tokenType,
+		}
+		if !session.IsAuthenticated() {
+			return LoginResult{}, newRequestError(ErrorAuth, PlatformNewAPI)
+		}
+		session.QuotaPerUnit = s.fetchNewAPIQuotaPerUnit(session)
+		metrics, err := s.fetchNewAPIMetrics(session, nil)
+		if err != nil {
+			return LoginResult{}, err
+		}
+		return LoginResult{Platform: PlatformNewAPI, Session: session, Metrics: metrics}, nil
 	}
 	session := Session{Platform: PlatformSub2API, BaseURL: normalizedURL, AccessToken: accessToken, RefreshToken: refreshToken, TokenType: tokenType}
 	if session.RefreshToken != "" {

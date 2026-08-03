@@ -654,10 +654,12 @@ export default {
             password: 'Account Password',
             passwordHelp: 'Sign in with the site account and password, then save the session automatically.',
             token: 'Access Token / Refresh Token',
-            tokenHelp: 'Use this for Sub2API sites where Cloudflare or two-factor login blocks direct password login.'
+            tokenHelp: 'Use this for Sub2API or New-API sites where Cloudflare or two-factor login blocks direct password login.'
           },
           account: 'Account',
           accountPlaceholder: 'Enter account',
+          newApiUserId: 'New-API User ID',
+          newApiUserIdPlaceholder: 'Enter the numeric user ID shown on your profile',
           password: 'Password',
           passwordPlaceholder: 'Enter password',
           passwordEditPlaceholder: 'Leave blank to keep current password',
@@ -669,6 +671,7 @@ export default {
           tokenType: 'Token Type',
           tokenTypePlaceholder: 'Defaults to Bearer',
           tokenHelp: 'When refresh_token is provided, the server refreshes it first to obtain the latest access_token and expiration time.',
+          tokenHelpNewApi: 'Enter the profile user ID and system access token to avoid Cloudflare Turnstile password login.',
           rechargeRate: 'Recharge Multiplier',
           rechargeRatePlaceholder: 'Enter the USD to CNY multiplier, e.g. 7',
           rechargeRateHelp: 'Required. CNY amount = USD amount × this multiplier.',
