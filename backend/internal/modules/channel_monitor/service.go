@@ -46,6 +46,10 @@ type SessionProvider interface {
 	RequireSession(ctx context.Context, userID string, adminAccountID string) (upstream.Session, error)
 }
 
+type GroupStateProvider interface {
+	RefreshOwnGroups(ctx context.Context, userID string, adminAccountID string) (*my_sites.State, error)
+}
+
 type UpstreamLookup interface {
 	GetSite(ctx context.Context, siteID string) (*upstream.Site, error)
 	RefreshSite(ctx context.Context, siteID string) (*upstream.Site, error)
@@ -67,6 +71,7 @@ type Service struct {
 	conns         ConnectionStore
 	states        StateStore
 	sessions      SessionProvider
+	groupStates   GroupStateProvider
 	upstreams     UpstreamLookup
 	platform      MonitorPlatform
 	accounts      AdminAccountResolver
@@ -86,6 +91,13 @@ func NewService(store Store, conns ConnectionStore, states StateStore, upstreams
 
 func (s *Service) SetSessionProvider(provider SessionProvider) {
 	s.sessions = provider
+	if groupStates, ok := provider.(GroupStateProvider); ok {
+		s.groupStates = groupStates
+	}
+}
+
+func (s *Service) SetGroupStateProvider(provider GroupStateProvider) {
+	s.groupStates = provider
 }
 
 func (s *Service) EnsureSchema(ctx context.Context) error {
@@ -136,6 +148,18 @@ func (s *Service) Summary(ctx context.Context, userID string) (SummaryResponse, 
 		TestModelConfig: testModelConfig,
 	}
 	groupMap := map[string]*GroupSummary{}
+	groupPlatformByName := map[string]string{}
+	if state != nil {
+		for _, ownGroup := range state.OwnGroups {
+			name := strings.TrimSpace(ownGroup.Name)
+			if name == "" {
+				continue
+			}
+			platform := strings.TrimSpace(ownGroup.Platform)
+			groupPlatformByName[name] = platform
+			groupMap[name+"|"+platform] = &GroupSummary{GroupName: name, Platform: platform}
+		}
+	}
 	for _, conn := range connections {
 		rule := rulesByConnection[conn.ID]
 		row := s.channelStatus(ctx, conn, rule, state, accountsByID, testModelConfig)
@@ -149,10 +173,14 @@ func (s *Service) Summary(ctx context.Context, userID string) (SummaryResponse, 
 			ownGroups = []string{"未分组"}
 		}
 		for _, groupName := range ownGroups {
-			key := groupName + "|" + row.GroupType
+			platform := row.GroupType
+			if currentPlatform, exists := groupPlatformByName[groupName]; exists && currentPlatform != "" {
+				platform = currentPlatform
+			}
+			key := groupName + "|" + platform
 			group := groupMap[key]
 			if group == nil {
-				group = &GroupSummary{GroupName: groupName, Platform: row.GroupType}
+				group = &GroupSummary{GroupName: groupName, Platform: platform}
 				groupMap[key] = group
 			}
 			group.Total++
@@ -732,12 +760,27 @@ func (s *Service) RunDue(ctx context.Context, limit int) int {
 		return 0
 	}
 	checked := 0
+	workspaceStates := map[string]workspaceStateResult{}
+	healthyWorkspaces := map[string]Rule{}
 	for _, rule := range rules {
-		if _, err := s.runRule(ctx, rule, "scheduled"); err != nil {
+		key := workspaceKey(rule.UserID, rule.AdminAccountID)
+		workspace, exists := workspaceStates[key]
+		if !exists {
+			workspace.state, workspace.err = s.workspaceState(ctx, rule.UserID, rule.AdminAccountID)
+			workspaceStates[key] = workspace
+		}
+		result, err := s.runRuleWithWorkspace(ctx, rule, "scheduled", &workspace)
+		if err != nil {
 			log.Printf("[channel-monitor] run rule failed rule_id=%s err=%v", rule.ID, err)
 			continue
 		}
 		checked++
+		if result.Status == StatusHealthy {
+			healthyWorkspaces[key] = rule
+		}
+	}
+	for _, rule := range healthyWorkspaces {
+		s.applyRateRuleAfterCheck(ctx, rule.UserID, rule.AdminAccountID)
 	}
 	return checked
 }
@@ -770,7 +813,20 @@ func (s *Service) StopScheduler() {
 	}
 }
 
+type workspaceStateResult struct {
+	state *my_sites.State
+	err   error
+}
+
+func workspaceKey(userID, adminAccountID string) string {
+	return strings.TrimSpace(userID) + "|" + strings.TrimSpace(adminAccountID)
+}
+
 func (s *Service) runRule(ctx context.Context, rule Rule, reason string) (Result, error) {
+	return s.runRuleWithWorkspace(ctx, rule, reason, nil)
+}
+
+func (s *Service) runRuleWithWorkspace(ctx context.Context, rule Rule, reason string, workspace *workspaceStateResult) (Result, error) {
 	started := time.Now()
 	result := Result{
 		ID:           newResultID(),
@@ -817,7 +873,12 @@ func (s *Service) runRule(ctx context.Context, rule Rule, reason string) (Result
 	if conn == nil {
 		return finish(StatusFailed, false, "真实对接记录不存在", nil, "")
 	}
-	state, err := s.workspaceState(ctx, rule.UserID, rule.AdminAccountID)
+	var state *my_sites.State
+	if workspace == nil {
+		state, err = s.workspaceState(ctx, rule.UserID, rule.AdminAccountID)
+	} else {
+		state, err = workspace.state, workspace.err
+	}
 	if err != nil {
 		rule.ConsecutiveFailures = 0
 		return finish(StatusUnknown, true, "admin 登录会话失效，已跳过本次检测："+err.Error(), nil, "")
@@ -906,7 +967,7 @@ func (s *Service) runRule(ctx context.Context, rule Rule, reason string) (Result
 		message = "账号测试通过"
 	}
 	result, err = finish(StatusHealthy, true, message, &latency, testResult.Model)
-	if err == nil {
+	if err == nil && reason != "scheduled" {
 		s.applyRateRuleAfterCheck(ctx, rule.UserID, rule.AdminAccountID)
 	}
 	return result, err
@@ -941,6 +1002,13 @@ func (s *Service) currentAdminAccountID(ctx context.Context, userID string) (str
 }
 
 func (s *Service) summaryState(ctx context.Context, userID, adminAccountID string) *my_sites.State {
+	if s.groupStates != nil {
+		state, err := s.groupStates.RefreshOwnGroups(ctx, userID, adminAccountID)
+		if err == nil {
+			return state
+		}
+		log.Printf("[channel-monitor] admin group refresh failed user_id=%s admin_account_id=%s err=%v", userID, adminAccountID, err)
+	}
 	state, err := s.workspaceState(ctx, userID, adminAccountID)
 	if err == nil {
 		return state
@@ -1434,17 +1502,57 @@ func ownGroupsForConnection(state *my_sites.State, conn my_sites.RealConnection)
 	if state == nil {
 		return append([]string(nil), conn.OwnGroupIDs...)
 	}
+	authoritativeGroups := state.OwnGroups != nil
+	validNames := make(map[string]struct{}, len(state.OwnGroups))
+	idToName := make(map[string]string, len(state.OwnGroups))
+	for _, group := range state.OwnGroups {
+		name := strings.TrimSpace(group.Name)
+		if name == "" {
+			continue
+		}
+		validNames[name] = struct{}{}
+		if id := strings.TrimSpace(group.ID); id != "" {
+			idToName[id] = name
+		}
+	}
 	groups := make([]string, 0)
+	seen := map[string]struct{}{}
+	appendGroup := func(name string) {
+		name = strings.TrimSpace(name)
+		if name == "" {
+			return
+		}
+		if authoritativeGroups {
+			if _, exists := validNames[name]; !exists {
+				return
+			}
+		}
+		if _, exists := seen[name]; exists {
+			return
+		}
+		seen[name] = struct{}{}
+		groups = append(groups, name)
+	}
 	target := my_sites.UpstreamGroupRef{SiteID: conn.UpstreamSiteID, GroupName: conn.UpstreamGroupName}
 	for _, mapping := range state.Mappings {
 		for _, candidate := range mapping.UpstreamTargets {
 			if candidate == target {
-				groups = append(groups, mapping.OwnGroup)
+				appendGroup(mapping.OwnGroup)
 				break
 			}
 		}
 	}
 	if len(groups) > 0 {
+		return groups
+	}
+	if authoritativeGroups {
+		for _, ownGroupID := range conn.OwnGroupIDs {
+			if name, exists := idToName[strings.TrimSpace(ownGroupID)]; exists {
+				appendGroup(name)
+				continue
+			}
+			appendGroup(ownGroupID)
+		}
 		return groups
 	}
 	return append([]string(nil), conn.OwnGroupIDs...)

@@ -46,6 +46,54 @@ func TestSummaryCreatesDefaultRulesAndGroupCounts(t *testing.T) {
 	}
 }
 
+func TestSummaryRefreshesAllAdminGroupsAndDropsDeletedGroupFallback(t *testing.T) {
+	ctx := context.Background()
+	repo := newFakeRepository()
+	service := newTestService(repo)
+	service.state().Mappings = []my_sites.GroupMapping{
+		{OwnGroup: "active-group", UpstreamTargets: []my_sites.UpstreamGroupRef{{SiteID: "site-1", GroupName: "GPT-4o"}}},
+		{OwnGroup: "deleted-group", UpstreamTargets: []my_sites.UpstreamGroupRef{{SiteID: "site-1", GroupName: "GPT-4o"}}},
+	}
+	service.conns.connections[0].OwnGroupIDs = []string{"deleted-id"}
+	provider := &fakeGroupStateProvider{state: &my_sites.State{
+		UserID:         "user-1",
+		AdminAccountID: "admin-1",
+		Session:        service.state().Session,
+		OwnGroups: []my_sites.GroupOption{
+			{ID: "active-id", Name: "active-group", Platform: "openai", Multiplier: 0.4},
+			{ID: "50", Name: "国产模型", Platform: "openai", Multiplier: 0.8},
+		},
+		Mappings: []my_sites.GroupMapping{
+			{OwnGroup: "active-group", UpstreamTargets: []my_sites.UpstreamGroupRef{{SiteID: "site-1", GroupName: "GPT-4o"}}},
+		},
+	}}
+	service.SetGroupStateProvider(provider)
+
+	summary, err := service.Summary(ctx, "user-1")
+	if err != nil {
+		t.Fatalf("Summary returned error: %v", err)
+	}
+	if provider.calls != 1 {
+		t.Fatalf("expected one admin group refresh, got %d", provider.calls)
+	}
+	groups := make(map[string]GroupSummary, len(summary.Groups))
+	for _, group := range summary.Groups {
+		groups[group.GroupName] = group
+	}
+	if group, ok := groups["国产模型"]; !ok || group.Total != 0 || group.Platform != "openai" {
+		t.Fatalf("expected zero-connection admin group in summary, got %+v", group)
+	}
+	if group := groups["active-group"]; group.Total != 1 || group.Available != 1 {
+		t.Fatalf("expected active group counts, got %+v", group)
+	}
+	if _, exists := groups["deleted-group"]; exists {
+		t.Fatalf("deleted admin group must not be restored from historical connections: %+v", summary.Groups)
+	}
+	if got := summary.Channels[0].OwnGroups; len(got) != 1 || got[0] != "active-group" {
+		t.Fatalf("expected channel to use refreshed live groups, got %+v", got)
+	}
+}
+
 func TestSummaryKeepsRecentResultsAsEmptySliceWhenStoreReturnsNil(t *testing.T) {
 	ctx := context.Background()
 	repo := newFakeRepository()
@@ -84,6 +132,34 @@ func TestRunRuleSuccessWritesHealthyResultWithoutPausing(t *testing.T) {
 	}
 	if len(service.platform.schedulableCalls) != 0 {
 		t.Fatalf("expected no schedulable changes, got %+v", service.platform.schedulableCalls)
+	}
+}
+
+func TestRunDueReusesWorkspaceSessionAcrossRules(t *testing.T) {
+	ctx := context.Background()
+	repo := newFakeRepository()
+	second := DefaultRule("user-1", "admin-1", "conn-2")
+	repo.rules[second.ID] = second
+	repo.dueRules = []Rule{repo.mustRule("conn-1"), second}
+	service := newTestService(repo)
+	service.conns.connections = append(service.conns.connections, my_sites.RealConnection{
+		ID:                "conn-2",
+		UpstreamSiteID:    "site-1",
+		UpstreamGroupID:   "g-upstream-2",
+		UpstreamGroupName: "GPT-4.1",
+		AdminAccountID:    "456",
+		AdminAccountName:  "A-【site】-GPT-4.1",
+		OwnGroupIDs:       []string{"own-1"},
+		GroupType:         "openai",
+	})
+	sessions := &countingSessionProvider{session: service.state().Session}
+	service.SetSessionProvider(sessions)
+
+	if checked := service.RunDue(ctx, 20); checked != 2 {
+		t.Fatalf("expected two due rules checked, got %d", checked)
+	}
+	if sessions.calls != 1 {
+		t.Fatalf("expected one session validation per workspace batch, got %d", sessions.calls)
 	}
 }
 
@@ -933,6 +1009,7 @@ func TestRateRuleDoesNotReEnableBalancePausedChannel(t *testing.T) {
 
 type fakeRepository struct {
 	rules            map[string]Rule
+	dueRules         []Rule
 	results          []Result
 	returnNilResults bool
 	rateRule         *RateRule
@@ -1000,7 +1077,9 @@ func (r *fakeRepository) ListRecentResults(context.Context, string, int) ([]Resu
 	}
 	return results, nil
 }
-func (r *fakeRepository) ListDueRules(context.Context, int) ([]Rule, error) { return nil, nil }
+func (r *fakeRepository) ListDueRules(context.Context, int) ([]Rule, error) {
+	return append([]Rule(nil), r.dueRules...), nil
+}
 func (r *fakeRepository) GetRateRule(context.Context, string, string) (*RateRule, error) {
 	if r.rateRule == nil {
 		return nil, nil
@@ -1133,6 +1212,27 @@ func (f *fakeMonitorPlatform) UpdateSub2APIAdminAccountPriority(_ upstream.Sessi
 type fakeSessionProvider struct {
 	session upstream.Session
 	err     error
+}
+
+type countingSessionProvider struct {
+	session upstream.Session
+	calls   int
+}
+
+func (f *countingSessionProvider) RequireSession(context.Context, string, string) (upstream.Session, error) {
+	f.calls++
+	return f.session, nil
+}
+
+type fakeGroupStateProvider struct {
+	state *my_sites.State
+	err   error
+	calls int
+}
+
+func (f *fakeGroupStateProvider) RefreshOwnGroups(context.Context, string, string) (*my_sites.State, error) {
+	f.calls++
+	return f.state, f.err
 }
 
 func (f fakeSessionProvider) RequireSession(context.Context, string, string) (upstream.Session, error) {

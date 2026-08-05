@@ -95,8 +95,13 @@ type MappingOwnGroupOption struct {
 
 // GroupOption 自有分组的名称与倍率，缓存于 State.OwnGroups。
 type GroupOption struct {
-	Name       string  `json:"name"`
-	Multiplier float64 `json:"multiplier"`
+	ID               string  `json:"id,omitempty"`
+	Name             string  `json:"name"`
+	Multiplier       float64 `json:"multiplier"`
+	Platform         string  `json:"platform,omitempty"`
+	Status           string  `json:"status,omitempty"`
+	IsExclusive      bool    `json:"isExclusive,omitempty"`
+	SubscriptionType string  `json:"subscriptionType,omitempty"`
 }
 
 // RealConnectRequest 真实对接请求体。

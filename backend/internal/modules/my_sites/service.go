@@ -93,32 +93,74 @@ func (s *Service) MappingOptions(ctx context.Context, userID string) (MappingOpt
 	if err != nil {
 		return MappingOptionsResponse{}, err
 	}
-	state, err := s.authenticatedState(ctx, userID, adminAccountID)
+	state, err := s.RefreshOwnGroups(ctx, userID, adminAccountID)
 	if err != nil {
 		return MappingOptionsResponse{}, err
+	}
+
+	groups := make([]MappingOwnGroupOption, 0, len(state.OwnGroups))
+	for _, group := range state.OwnGroups {
+		groups = append(groups, MappingOwnGroupOption{
+			ID:               group.ID,
+			SiteName:         state.Email,
+			GroupName:        group.Name,
+			Multiplier:       group.Multiplier,
+			Platform:         group.Platform,
+			Status:           group.Status,
+			IsExclusive:      group.IsExclusive,
+			SubscriptionType: group.SubscriptionType,
+		})
+	}
+	sort.Slice(groups, func(i, j int) bool {
+		if groups[i].SiteName == groups[j].SiteName {
+			return groups[i].GroupName < groups[j].GroupName
+		}
+		return groups[i].SiteName < groups[j].SiteName
+	})
+	return MappingOptionsResponse{OwnGroups: groups, Mappings: state.Mappings}, nil
+}
+
+// RefreshOwnGroups refreshes the current admin workspace's complete group list and removes
+// mappings that refer to groups no longer present in the admin platform.
+func (s *Service) RefreshOwnGroups(ctx context.Context, userID string, adminAccountID string) (*State, error) {
+	state, err := s.authenticatedState(ctx, userID, adminAccountID)
+	if err != nil {
+		return nil, err
 	}
 	adminGroups, err := s.platformService.FetchAdminAllGroups(state.Session)
 	if err != nil {
-		return MappingOptionsResponse{}, err
+		return nil, err
 	}
-	// 用最新拉取的分组列表更新缓存，并将历史真实对接记录补偿回 mappings。
+
 	freshOwnGroups := make([]GroupOption, 0, len(adminGroups))
 	idToName := make(map[string]string, len(adminGroups))
 	for _, g := range adminGroups {
 		name := strings.TrimSpace(g.Name)
-		if name != "" {
-			idToName[g.ID] = name
+		if name == "" {
+			continue
+		}
+		id := strings.TrimSpace(g.ID)
+		if id != "" {
+			idToName[id] = name
 		}
 		multiplier := 0.0
 		if g.Multiplier != nil {
 			multiplier = *g.Multiplier
 		}
-		freshOwnGroups = append(freshOwnGroups, GroupOption{Name: name, Multiplier: multiplier})
+		freshOwnGroups = append(freshOwnGroups, GroupOption{
+			ID:               id,
+			Name:             name,
+			Multiplier:       multiplier,
+			Platform:         strings.TrimSpace(g.Platform),
+			Status:           strings.TrimSpace(g.Status),
+			IsExclusive:      g.IsExclusive,
+			SubscriptionType: strings.TrimSpace(g.SubscriptionType),
+		})
 	}
 	if err := s.backfillMappingsFromRealConnections(ctx, state, idToName); err != nil {
-		return MappingOptionsResponse{}, err
+		return nil, err
 	}
-	// 自有分组变化时，自动清理引用了已不存在分组的映射关系
+
 	freshGroupSet := make(map[string]struct{}, len(freshOwnGroups))
 	for _, g := range freshOwnGroups {
 		freshGroupSet[strings.TrimSpace(g.Name)] = struct{}{}
@@ -132,36 +174,9 @@ func (s *Service) MappingOptions(ctx context.Context, userID string) (MappingOpt
 	state.OwnGroups = freshOwnGroups
 	state.Mappings = cleanedMappings
 	if err := s.repository.Save(ctx, *state); err != nil {
-		return MappingOptionsResponse{}, err
+		return nil, err
 	}
-
-	groups := make([]MappingOwnGroupOption, 0, len(adminGroups))
-	for _, g := range adminGroups {
-		name := strings.TrimSpace(g.Name)
-		if name != "" {
-			multiplier := 0.0
-			if g.Multiplier != nil {
-				multiplier = *g.Multiplier
-			}
-			groups = append(groups, MappingOwnGroupOption{
-				ID:               g.ID,
-				SiteName:         state.Email,
-				GroupName:        name,
-				Multiplier:       multiplier,
-				Platform:         g.Platform,
-				Status:           g.Status,
-				IsExclusive:      g.IsExclusive,
-				SubscriptionType: g.SubscriptionType,
-			})
-		}
-	}
-	sort.Slice(groups, func(i, j int) bool {
-		if groups[i].SiteName == groups[j].SiteName {
-			return groups[i].GroupName < groups[j].GroupName
-		}
-		return groups[i].SiteName < groups[j].SiteName
-	})
-	return MappingOptionsResponse{OwnGroups: groups, Mappings: state.Mappings}, nil
+	return state, nil
 }
 
 // SaveMappings 保存用户的分组映射关系，包含自动调价配置。

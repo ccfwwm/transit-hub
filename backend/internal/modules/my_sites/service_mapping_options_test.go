@@ -56,7 +56,8 @@ func TestMappingOptionsRestoresExpiredMySiteSessionFromDashboardSession(t *testi
 			TokenType:    "Bearer",
 			ExpiresAt:    &expired,
 		},
-		Mappings: []GroupMapping{},
+		Mappings:  []GroupMapping{{OwnGroup: "deleted-group"}},
+		OwnGroups: []GroupOption{{Name: "deleted-group", Multiplier: 9}},
 	}}
 	service := NewService(repo, upstream.NewPlatformService(upstream.NewHTTPClient(adminServer.Client())), nil)
 	service.SetAdminAccountResolver(realConnectAccounts{id: "account-1"})
@@ -78,7 +79,16 @@ func TestMappingOptionsRestoresExpiredMySiteSessionFromDashboardSession(t *testi
 	if len(response.OwnGroups) != 1 || response.OwnGroups[0].GroupName != "codex-极速福利" {
 		t.Fatalf("unexpected own groups: %+v", response.OwnGroups)
 	}
+	if response.OwnGroups[0].ID != "101" || response.OwnGroups[0].Platform != "openai" || response.OwnGroups[0].Status != "active" {
+		t.Fatalf("expected full admin group metadata, got %+v", response.OwnGroups[0])
+	}
+	if len(response.Mappings) != 0 {
+		t.Fatalf("expected deleted admin group mapping to be removed, got %+v", response.Mappings)
+	}
 	if repo.state == nil || repo.state.Session.AccessToken != "fresh-token" || repo.state.Email != "fresh@example.com" {
 		t.Fatalf("expected my_site state to be restored from dashboard session, got %+v", repo.state)
+	}
+	if len(repo.state.OwnGroups) != 1 || repo.state.OwnGroups[0].ID != "101" || repo.state.OwnGroups[0].Platform != "openai" {
+		t.Fatalf("expected refreshed group metadata persisted, got %+v", repo.state.OwnGroups)
 	}
 }
