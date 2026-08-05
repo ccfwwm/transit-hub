@@ -227,7 +227,8 @@ func (r *Repository) ListRulesForWorkspace(ctx context.Context, userID, adminAcc
 			failure_threshold, balance_threshold, desired_schedulable, schedulable_managed, original_schedulable,
 			last_applied_schedulable, schedulable_conflict, priority_managed, original_priority,
 			last_applied_priority, priority_conflict, manual_paused, consecutive_failures,
-			last_status, last_message, last_latency_ms, last_checked_at, next_check_at, created_at, updated_at, test_model_id
+			last_status, last_message, last_latency_ms, last_checked_at, next_check_at, created_at, updated_at,
+			COALESCE(test_model_id, '') AS test_model_id
 		FROM channel_monitor_rules
 		WHERE user_id = $1 AND admin_account_id = $2
 		ORDER BY created_at ASC
@@ -244,7 +245,8 @@ func (r *Repository) GetRule(ctx context.Context, id string) (*Rule, error) {
 			failure_threshold, balance_threshold, desired_schedulable, schedulable_managed, original_schedulable,
 			last_applied_schedulable, schedulable_conflict, priority_managed, original_priority,
 			last_applied_priority, priority_conflict, manual_paused, consecutive_failures,
-			last_status, last_message, last_latency_ms, last_checked_at, next_check_at, created_at, updated_at, test_model_id
+			last_status, last_message, last_latency_ms, last_checked_at, next_check_at, created_at, updated_at,
+			COALESCE(test_model_id, '') AS test_model_id
 		FROM channel_monitor_rules
 		WHERE id = $1
 	`, id)
@@ -285,7 +287,7 @@ func (r *Repository) UpdateRule(ctx context.Context, rule Rule) error {
 			last_checked_at = $20,
 			next_check_at = $21,
 			updated_at = now(),
-			test_model_id = $22
+			test_model_id = NULLIF($22, '')
 		WHERE id = $1
 	`, rule.ID, rule.Enabled, rule.CheckIntervalMinutes, rule.FailureThreshold, rule.BalanceThreshold,
 		rule.DesiredSchedulable, rule.SchedulableManaged, rule.OriginalSchedulable, rule.LastAppliedSchedulable, rule.SchedulableConflict,
@@ -328,7 +330,8 @@ func (r *Repository) ListDueRules(ctx context.Context, limit int) ([]Rule, error
 			failure_threshold, balance_threshold, desired_schedulable, schedulable_managed, original_schedulable,
 			last_applied_schedulable, schedulable_conflict, priority_managed, original_priority,
 			last_applied_priority, priority_conflict, manual_paused, consecutive_failures,
-			last_status, last_message, last_latency_ms, last_checked_at, next_check_at, created_at, updated_at, test_model_id
+			last_status, last_message, last_latency_ms, last_checked_at, next_check_at, created_at, updated_at,
+			COALESCE(test_model_id, '') AS test_model_id
 		FROM channel_monitor_rules
 		WHERE enabled = true AND (next_check_at IS NULL OR next_check_at <= now())
 		ORDER BY next_check_at ASC NULLS FIRST, created_at ASC
