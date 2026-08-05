@@ -38,6 +38,7 @@ type Rule struct {
 	CheckIntervalMinutes   int        `json:"checkIntervalMinutes"`
 	FailureThreshold       int        `json:"failureThreshold"`
 	BalanceThreshold       float64    `json:"balanceThreshold"`
+	TestModelID            string     `json:"testModelId,omitempty"`
 	DesiredSchedulable     *bool      `json:"desiredSchedulable"`
 	SchedulableManaged     bool       `json:"schedulableManaged"`
 	OriginalSchedulable    *bool      `json:"originalSchedulable"`
@@ -167,6 +168,9 @@ type ChannelStatus struct {
 	RecentTotal                 int        `json:"recentTotal"`
 	RecentSuccess               int        `json:"recentSuccess"`
 	UptimePercent               float64    `json:"uptimePercent"`
+	TestModelID                 string     `json:"testModelId"`
+	EffectiveTestModelID        string     `json:"effectiveTestModelId"`
+	TestModelSource             string     `json:"testModelSource"`
 }
 
 type UpdateRuleRequest struct {
@@ -174,6 +178,7 @@ type UpdateRuleRequest struct {
 	CheckIntervalMinutes *int     `json:"checkIntervalMinutes"`
 	FailureThreshold     *int     `json:"failureThreshold"`
 	BalanceThreshold     *float64 `json:"balanceThreshold"`
+	TestModelID          *string  `json:"testModelId"`
 }
 
 type BulkUpdateRuleRequest struct {

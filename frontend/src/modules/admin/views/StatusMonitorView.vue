@@ -94,7 +94,7 @@ const isTestModelEditorOpen = ref(false)
 const disconnectingChannel = ref<ChannelMonitorChannel | null>(null)
 const disconnectMode = ref<RealDisconnectRequest['mode']>('unlink')
 const disconnectError = ref('')
-const editForm = ref({ enabled: true, checkIntervalMinutes: 10, failureThreshold: 3, balanceThreshold: 1 })
+const editForm = ref({ enabled: true, checkIntervalMinutes: 10, failureThreshold: 3, balanceThreshold: 1, useDefaultTestModel: true, testModelId: '' })
 const rateRuleForm = ref({ enabled: false, autoApplyOnCheck: true, updatePriority: true, stopWhenMissingRate: true })
 const testModelForm = ref({ openaiModelId: 'gpt-5.4', anthropicModelId: 'claude-sonnet-4-6', grokModelId: 'grok-4.5', balanceRefreshIntervalMinutes: 5 })
 const priorityDrafts = ref<Record<string, number | null>>({})
@@ -331,6 +331,8 @@ const openEditor = (channel: ChannelMonitorChannel) => {
     checkIntervalMinutes: channel.checkIntervalMinutes,
     failureThreshold: channel.failureThreshold,
     balanceThreshold: channel.balanceThreshold,
+    useDefaultTestModel: !channel.testModelId,
+    testModelId: channel.testModelId || channel.effectiveTestModelId,
   }
 }
 
@@ -344,6 +346,8 @@ const openBulkEditor = (scope: BulkEditorScope = 'selected') => {
     checkIntervalMinutes: first?.checkIntervalMinutes ?? 10,
     failureThreshold: first?.failureThreshold ?? 3,
     balanceThreshold: first?.balanceThreshold ?? 1,
+    useDefaultTestModel: true,
+    testModelId: '',
   }
 }
 
@@ -411,6 +415,12 @@ const saveEditor = async () => {
     balanceThreshold: Number(editForm.value.balanceThreshold),
   }
   if (editingChannel.value) {
+    const customModel = editForm.value.testModelId.trim()
+    if (!editForm.value.useDefaultTestModel && !customModel) {
+      errorKey.value = 'admin.channelMonitor.editor.modelRequired'
+      return
+    }
+    payload.testModelId = editForm.value.useDefaultTestModel ? '' : customModel
     await runAction(() => updateChannelMonitorRule(editingChannel.value!.ruleId, payload), { actionKey: `editor:${editingChannel.value.ruleId}` })
   } else if (isBulkEditorOpen.value) {
     const ruleIds = bulkEditorRuleIds.value
@@ -877,6 +887,12 @@ const dispatchButtonClass = (channel: ChannelMonitorChannel): string => (
                   <div v-if="channel.consecutiveFailures > 0" class="mt-1 text-xs text-muted-foreground">
                     {{ t('admin.channelMonitor.channels.failures', { count: channel.consecutiveFailures }) }}
                   </div>
+                  <div class="mt-2 max-w-[180px] truncate font-mono text-[11px] text-foreground" :title="channel.effectiveTestModelId">
+                    {{ channel.effectiveTestModelId || '-' }}
+                  </div>
+                  <div class="text-[11px] text-muted-foreground">
+                    {{ channel.testModelSource === 'custom' ? t('admin.channelMonitor.channels.customModel') : t('admin.channelMonitor.channels.globalModel') }}
+                  </div>
                 </td>
                 <td class="px-3 py-3 align-top">
                   <div class="font-mono text-foreground">{{ formatMoney(channel.balance) }}</div>
@@ -956,6 +972,29 @@ const dispatchButtonClass = (channel: ChannelMonitorChannel): string => (
             <span class="text-sm font-medium text-foreground">{{ t('admin.channelMonitor.editor.balanceThreshold') }}</span>
             <input v-model.number="editForm.balanceThreshold" type="number" min="0" step="0.01" class="h-10 w-full rounded-xl border border-border/50 bg-surface px-3 text-sm outline-none focus:border-primary focus:ring-1 focus:ring-primary" />
           </label>
+          <div v-if="editingChannel" class="space-y-2">
+            <span class="text-sm font-medium text-foreground">{{ t('admin.channelMonitor.editor.testModel') }}</span>
+            <div class="grid grid-cols-2 gap-2 rounded-xl border border-border/50 bg-surface p-1">
+              <label :class="['flex cursor-pointer items-center justify-center gap-2 rounded-lg px-3 py-2 text-xs transition-colors', editForm.useDefaultTestModel ? 'bg-primary/10 text-primary' : 'text-muted-foreground hover:bg-surface-elevated']">
+                <input v-model="editForm.useDefaultTestModel" type="radio" :value="true" class="sr-only" />
+                {{ t('admin.channelMonitor.editor.inheritTestModel') }}
+              </label>
+              <label :class="['flex cursor-pointer items-center justify-center gap-2 rounded-lg px-3 py-2 text-xs transition-colors', !editForm.useDefaultTestModel ? 'bg-primary/10 text-primary' : 'text-muted-foreground hover:bg-surface-elevated']">
+                <input v-model="editForm.useDefaultTestModel" type="radio" :value="false" class="sr-only" />
+                {{ t('admin.channelMonitor.editor.customTestModel') }}
+              </label>
+            </div>
+            <input
+              v-model.trim="editForm.testModelId"
+              type="text"
+              :disabled="editForm.useDefaultTestModel"
+              :placeholder="editForm.useDefaultTestModel ? editingChannel.effectiveTestModelId : t('admin.channelMonitor.editor.testModelPlaceholder')"
+              class="h-10 w-full rounded-xl border border-border/50 bg-surface px-3 font-mono text-sm outline-none transition-colors focus:border-primary focus:ring-1 focus:ring-primary disabled:cursor-not-allowed disabled:opacity-60"
+            />
+            <p class="text-xs text-muted-foreground">
+              {{ editForm.useDefaultTestModel ? t('admin.channelMonitor.editor.inheritTestModelHelp', { model: editingChannel.effectiveTestModelId }) : t('admin.channelMonitor.editor.customTestModelHelp') }}
+            </p>
+          </div>
         </div>
         <div class="mt-6 flex justify-end gap-2">
           <Button variant="secondary" :disabled="isActionLoading" @click="closeEditor">{{ t('admin.channelMonitor.actions.cancel') }}</Button>

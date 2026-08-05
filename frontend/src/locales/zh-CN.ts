@@ -181,7 +181,9 @@ export default {
         },
         failures: '连续失败 {count} 次',
         threshold: '阈值 {value}',
-        next: '下次 {value}'
+        next: '下次 {value}',
+        customModel: '单条自定义',
+        globalModel: '统一配置'
       },
       timeline: {
         window: '近 60 次记录',
@@ -272,7 +274,14 @@ export default {
         enabled: '启用监控',
         interval: '检测间隔（分钟）',
         failureThreshold: '连续失败阈值',
-        balanceThreshold: '余额停用阈值'
+        balanceThreshold: '余额停用阈值',
+        testModel: '检测模型',
+        inheritTestModel: '继承统一模型',
+        customTestModel: '自定义模型',
+        testModelPlaceholder: '例如 claude-sonnet-4-6',
+        inheritTestModelHelp: '当前将使用统一配置：{model}',
+        customTestModelHelp: '此渠道检测时固定使用自定义模型。',
+        modelRequired: '请选择继承统一模型，或填写自定义模型。'
       },
       disconnect: {
         action: '取消对接',

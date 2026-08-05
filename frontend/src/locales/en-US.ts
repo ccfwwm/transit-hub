@@ -181,7 +181,9 @@ export default {
         },
         failures: '{count} consecutive failures',
         threshold: 'Threshold {value}',
-        next: 'Next {value}'
+        next: 'Next {value}',
+        customModel: 'Per-channel',
+        globalModel: 'Global'
       },
       timeline: {
         window: 'Recent 60 checks',
@@ -272,7 +274,14 @@ export default {
         enabled: 'Enable monitor',
         interval: 'Check interval (minutes)',
         failureThreshold: 'Failure threshold',
-        balanceThreshold: 'Balance pause threshold'
+        balanceThreshold: 'Balance pause threshold',
+        testModel: 'Check model',
+        inheritTestModel: 'Use global model',
+        customTestModel: 'Custom model',
+        testModelPlaceholder: 'e.g. claude-sonnet-4-6',
+        inheritTestModelHelp: 'This channel uses the global model: {model}',
+        customTestModelHelp: 'This channel always uses the custom model for checks.',
+        modelRequired: 'Choose the global model or enter a custom model.'
       },
       disconnect: {
         action: 'Disconnect',

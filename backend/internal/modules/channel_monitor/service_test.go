@@ -216,6 +216,66 @@ func TestRunRuleUsesSavedGrokTestModelForXAI(t *testing.T) {
 	}
 }
 
+func TestRunRuleUsesPerRuleTestModelOverride(t *testing.T) {
+	ctx := context.Background()
+	repo := newFakeRepository()
+	repo.testModelConfig = &TestModelConfig{UserID: "user-1", AdminAccountID: "admin-1", OpenAIModelID: "global-gpt"}
+	rule := repo.mustRule("conn-1")
+	rule.TestModelID = "  account-specific-model  "
+	repo.rules[rule.ID] = rule
+	service := newTestService(repo)
+
+	if _, err := service.RunRule(ctx, rule.ID, "manual"); err != nil {
+		t.Fatalf("RunRule returned error: %v", err)
+	}
+	if len(service.platform.testOptions) != 1 || service.platform.testOptions[0].ModelID != "account-specific-model" {
+		t.Fatalf("expected per-rule model override, got %#v", service.platform.testOptions)
+	}
+}
+
+func TestUpdateRuleClearsPerRuleTestModelOverride(t *testing.T) {
+	ctx := context.Background()
+	repo := newFakeRepository()
+	rule := repo.mustRule("conn-1")
+	rule.TestModelID = "account-specific-model"
+	repo.rules[rule.ID] = rule
+	service := newTestService(repo)
+
+	updated, err := service.UpdateRule(ctx, "user-1", rule.ID, UpdateRuleRequest{TestModelID: stringPtr("")})
+	if err != nil {
+		t.Fatalf("UpdateRule returned error: %v", err)
+	}
+	if updated.TestModelID != "" || repo.mustRule(rule.ID).TestModelID != "" {
+		t.Fatalf("expected empty model override after clear, got %q", updated.TestModelID)
+	}
+}
+
+func TestSummaryReportsEffectiveModelAndSource(t *testing.T) {
+	ctx := context.Background()
+	repo := newFakeRepository()
+	repo.testModelConfig = &TestModelConfig{UserID: "user-1", AdminAccountID: "admin-1", OpenAIModelID: "global-gpt"}
+	service := newTestService(repo)
+
+	summary, err := service.Summary(ctx, "user-1")
+	if err != nil {
+		t.Fatalf("Summary returned error: %v", err)
+	}
+	if summary.Channels[0].EffectiveTestModelID != "global-gpt" || summary.Channels[0].TestModelSource != "global" {
+		t.Fatalf("expected global effective model, got %+v", summary.Channels[0])
+	}
+
+	rule := repo.mustRule("conn-1")
+	rule.TestModelID = "account-specific-model"
+	repo.rules[rule.ID] = rule
+	summary, err = service.Summary(ctx, "user-1")
+	if err != nil {
+		t.Fatalf("Summary returned error with override: %v", err)
+	}
+	if summary.Channels[0].TestModelID != "account-specific-model" || summary.Channels[0].EffectiveTestModelID != "account-specific-model" || summary.Channels[0].TestModelSource != "custom" {
+		t.Fatalf("expected custom effective model, got %+v", summary.Channels[0])
+	}
+}
+
 func TestRunRuleSkipsWhenAdminSessionCannotBeRecovered(t *testing.T) {
 	ctx := context.Background()
 	repo := newFakeRepository()
@@ -1140,6 +1200,7 @@ func (s *testService) state() *my_sites.State {
 func boolPtr(value bool) *bool        { return &value }
 func intPtr(value int) *int           { return &value }
 func floatPtr(value float64) *float64 { return &value }
+func stringPtr(value string) *string  { return &value }
 
 func timeNowAdd(deltaMS int64) int64 {
 	return timeNow().Add(time.Duration(deltaMS) * time.Millisecond).UnixMilli()

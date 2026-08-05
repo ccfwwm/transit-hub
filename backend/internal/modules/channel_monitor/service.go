@@ -138,7 +138,7 @@ func (s *Service) Summary(ctx context.Context, userID string) (SummaryResponse, 
 	groupMap := map[string]*GroupSummary{}
 	for _, conn := range connections {
 		rule := rulesByConnection[conn.ID]
-		row := s.channelStatus(ctx, conn, rule, state, accountsByID)
+		row := s.channelStatus(ctx, conn, rule, state, accountsByID, testModelConfig)
 		if rateRow, ok := rateRowsByConnection[conn.ID]; ok {
 			applyRatePlanToChannel(&row, rateRow)
 		}
@@ -320,6 +320,9 @@ func (s *Service) UpdateRule(ctx context.Context, userID, ruleID string, req Upd
 		} else {
 			rule.BalanceThreshold = *req.BalanceThreshold
 		}
+	}
+	if req.TestModelID != nil {
+		rule.TestModelID = strings.TrimSpace(*req.TestModelID)
 	}
 	now := time.Now()
 	next := now
@@ -862,7 +865,7 @@ func (s *Service) runRule(ctx context.Context, rule Rule, reason string) (Result
 		return finish(StatusBalancePaused, false, fmt.Sprintf("余额 %.2f 低于阈值 %.2f，已自动停止", *balance, rule.BalanceThreshold), nil, "")
 	}
 
-	testModel := testModelForGroupType(conn.GroupType, testModelConfig)
+	testModel, _ := effectiveTestModel(rule, conn.GroupType, testModelConfig)
 	testResult, testErr := s.platform.TestSub2APIAdminAccount(state.Session, conn.AdminAccountID, AccountTestOptions{ModelID: testModel})
 	if strings.TrimSpace(testResult.Model) == "" {
 		testResult.Model = testModel
@@ -972,7 +975,8 @@ func (s *Service) workspaceState(ctx context.Context, userID, adminAccountID str
 	return state, nil
 }
 
-func (s *Service) channelStatus(ctx context.Context, conn my_sites.RealConnection, rule Rule, state *my_sites.State, accountsByID map[string]AdminAccountStatus) ChannelStatus {
+func (s *Service) channelStatus(ctx context.Context, conn my_sites.RealConnection, rule Rule, state *my_sites.State, accountsByID map[string]AdminAccountStatus, testModelConfig TestModelConfig) ChannelStatus {
+	effectiveTestModelID, testModelSource := effectiveTestModel(rule, conn.GroupType, testModelConfig)
 	row := ChannelStatus{
 		RuleID:               rule.ID,
 		ConnectionID:         conn.ID,
@@ -997,6 +1001,9 @@ func (s *Service) channelStatus(ctx context.Context, conn my_sites.RealConnectio
 		LastLatencyMS:        rule.LastLatencyMS,
 		LastCheckedAt:        rule.LastCheckedAt,
 		NextCheckAt:          rule.NextCheckAt,
+		TestModelID:          strings.TrimSpace(rule.TestModelID),
+		EffectiveTestModelID: effectiveTestModelID,
+		TestModelSource:      testModelSource,
 		Supported:            state != nil && state.Session.Platform == upstream.PlatformSub2API,
 		RecentResults:        []Result{},
 	}
@@ -1406,6 +1413,13 @@ func testModelForGroupType(groupType string, config TestModelConfig) string {
 	default:
 		return defaultIfBlank(config.OpenAIModelID, DefaultOpenAITestModel)
 	}
+}
+
+func effectiveTestModel(rule Rule, groupType string, config TestModelConfig) (string, string) {
+	if modelID := strings.TrimSpace(rule.TestModelID); modelID != "" {
+		return modelID, "custom"
+	}
+	return testModelForGroupType(groupType, config), "global"
 }
 
 func convertedBalance(site *upstream.Site) *float64 {

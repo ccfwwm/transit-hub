@@ -3,6 +3,7 @@ package channel_monitor
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -30,6 +31,7 @@ func (r *Repository) EnsureSchema(ctx context.Context) error {
 			check_interval_minutes integer NOT NULL DEFAULT 10,
 			failure_threshold integer NOT NULL DEFAULT 3,
 			balance_threshold double precision NOT NULL DEFAULT 1,
+			test_model_id text NULL,
 			desired_schedulable boolean NULL,
 			schedulable_managed boolean NOT NULL DEFAULT false,
 			original_schedulable boolean NULL,
@@ -166,6 +168,11 @@ func (r *Repository) EnsureSchema(ctx context.Context) error {
 	`); err != nil {
 		return err
 	}
+	if _, err := r.db.Exec(ctx, `
+		ALTER TABLE channel_monitor_rules ADD COLUMN IF NOT EXISTS test_model_id text NULL
+	`); err != nil {
+		return err
+	}
 	_, err := r.db.Exec(ctx, `
 		CREATE INDEX IF NOT EXISTS idx_channel_monitor_rate_results_workspace_created
 		ON channel_monitor_rate_results (user_id, admin_account_id, created_at DESC)
@@ -220,7 +227,7 @@ func (r *Repository) ListRulesForWorkspace(ctx context.Context, userID, adminAcc
 			failure_threshold, balance_threshold, desired_schedulable, schedulable_managed, original_schedulable,
 			last_applied_schedulable, schedulable_conflict, priority_managed, original_priority,
 			last_applied_priority, priority_conflict, manual_paused, consecutive_failures,
-			last_status, last_message, last_latency_ms, last_checked_at, next_check_at, created_at, updated_at
+			last_status, last_message, last_latency_ms, last_checked_at, next_check_at, created_at, updated_at, test_model_id
 		FROM channel_monitor_rules
 		WHERE user_id = $1 AND admin_account_id = $2
 		ORDER BY created_at ASC
@@ -237,7 +244,7 @@ func (r *Repository) GetRule(ctx context.Context, id string) (*Rule, error) {
 			failure_threshold, balance_threshold, desired_schedulable, schedulable_managed, original_schedulable,
 			last_applied_schedulable, schedulable_conflict, priority_managed, original_priority,
 			last_applied_priority, priority_conflict, manual_paused, consecutive_failures,
-			last_status, last_message, last_latency_ms, last_checked_at, next_check_at, created_at, updated_at
+			last_status, last_message, last_latency_ms, last_checked_at, next_check_at, created_at, updated_at, test_model_id
 		FROM channel_monitor_rules
 		WHERE id = $1
 	`, id)
@@ -277,13 +284,14 @@ func (r *Repository) UpdateRule(ctx context.Context, rule Rule) error {
 			last_latency_ms = $19,
 			last_checked_at = $20,
 			next_check_at = $21,
-			updated_at = now()
+			updated_at = now(),
+			test_model_id = $22
 		WHERE id = $1
 	`, rule.ID, rule.Enabled, rule.CheckIntervalMinutes, rule.FailureThreshold, rule.BalanceThreshold,
 		rule.DesiredSchedulable, rule.SchedulableManaged, rule.OriginalSchedulable, rule.LastAppliedSchedulable, rule.SchedulableConflict,
 		rule.PriorityManaged, rule.OriginalPriority, rule.LastAppliedPriority, rule.PriorityConflict,
 		rule.ManualPaused, rule.ConsecutiveFailures, rule.LastStatus, rule.LastMessage, rule.LastLatencyMS,
-		rule.LastCheckedAt, rule.NextCheckAt)
+		rule.LastCheckedAt, rule.NextCheckAt, strings.TrimSpace(rule.TestModelID))
 	return err
 }
 
@@ -320,7 +328,7 @@ func (r *Repository) ListDueRules(ctx context.Context, limit int) ([]Rule, error
 			failure_threshold, balance_threshold, desired_schedulable, schedulable_managed, original_schedulable,
 			last_applied_schedulable, schedulable_conflict, priority_managed, original_priority,
 			last_applied_priority, priority_conflict, manual_paused, consecutive_failures,
-			last_status, last_message, last_latency_ms, last_checked_at, next_check_at, created_at, updated_at
+			last_status, last_message, last_latency_ms, last_checked_at, next_check_at, created_at, updated_at, test_model_id
 		FROM channel_monitor_rules
 		WHERE enabled = true AND (next_check_at IS NULL OR next_check_at <= now())
 		ORDER BY next_check_at ASC NULLS FIRST, created_at ASC
@@ -472,7 +480,7 @@ func scanRules(rows pgx.Rows) ([]Rule, error) {
 			&rule.SchedulableManaged, &rule.OriginalSchedulable, &rule.LastAppliedSchedulable, &rule.SchedulableConflict,
 			&rule.PriorityManaged, &rule.OriginalPriority, &rule.LastAppliedPriority, &rule.PriorityConflict,
 			&rule.ManualPaused, &rule.ConsecutiveFailures, &rule.LastStatus, &rule.LastMessage,
-			&rule.LastLatencyMS, &rule.LastCheckedAt, &rule.NextCheckAt, &rule.CreatedAt, &rule.UpdatedAt,
+			&rule.LastLatencyMS, &rule.LastCheckedAt, &rule.NextCheckAt, &rule.CreatedAt, &rule.UpdatedAt, &rule.TestModelID,
 		); err != nil {
 			return nil, err
 		}

@@ -73,6 +73,9 @@ export interface ChannelMonitorChannel {
   recentTotal: number
   recentSuccess: number
   uptimePercent: number
+  testModelId: string
+  effectiveTestModelId: string
+  testModelSource: 'custom' | 'global'
 }
 
 export interface ChannelMonitorSummary {
@@ -88,6 +91,7 @@ export interface UpdateChannelMonitorRuleRequest {
   checkIntervalMinutes?: number
   failureThreshold?: number
   balanceThreshold?: number
+  testModelId?: string
 }
 
 export interface BulkUpdateChannelMonitorRuleRequest extends UpdateChannelMonitorRuleRequest {
