@@ -296,6 +296,80 @@ func TestFetchSub2APIMetrics_UsesOverriddenMultiplier(t *testing.T) {
 	}
 }
 
+func TestLoginAutoFallsBackToSub2APIWhenDashboardStatsUnavailable(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/user/login":
+			w.Header().Set("Content-Type", "text/plain")
+			w.WriteHeader(http.StatusNotFound)
+			_, _ = w.Write([]byte("404 page not found"))
+		case "/api/v1/auth/login":
+			writeJSON(w, map[string]any{"data": map[string]any{
+				"access_token":  "sub2api-token",
+				"refresh_token": "sub2api-refresh-token",
+				"token_type":    "Bearer",
+			}})
+		case "/api/v1/auth/me":
+			writeJSON(w, map[string]any{"data": map[string]any{
+				"balance":         12.5,
+				"total_recharged": 30.0,
+			}})
+		case "/api/v1/usage/dashboard/stats":
+			w.Header().Set("Content-Type", "text/html")
+			w.WriteHeader(http.StatusNotFound)
+			_, _ = w.Write([]byte("<html><body>not found</body></html>"))
+		case "/api/v1/groups/available":
+			availableGroupsFixture(w)
+		case "/api/v1/groups/rates":
+			writeJSON(w, map[string]any{"data": map[string]any{"1": 0.8}})
+		default:
+			t.Fatalf("unexpected path: %s", r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	service := NewPlatformService(NewHTTPClient(server.Client()))
+	result, err := service.Login(server.URL, PlatformAuto, "user@example.com", "password")
+	if err != nil {
+		t.Fatalf("expected auto login to succeed through Sub2API fallback, got: %v", err)
+	}
+	if result.Platform != PlatformSub2API || result.Session.Platform != PlatformSub2API {
+		t.Fatalf("unexpected detected platform: result=%s session=%s", result.Platform, result.Session.Platform)
+	}
+	if result.Metrics.Balance.Value == nil || *result.Metrics.Balance.Value != 12.5 {
+		t.Fatalf("unexpected balance metric: %+v", result.Metrics.Balance)
+	}
+	if result.Metrics.HistoryRecharge.Value == nil || *result.Metrics.HistoryRecharge.Value != 30 {
+		t.Fatalf("unexpected recharge metric: %+v", result.Metrics.HistoryRecharge)
+	}
+	if result.Metrics.TodayConsume.Value != nil || result.Metrics.TodayConsume.Display != defaultDisplay {
+		t.Fatalf("today usage should be unavailable when the optional endpoint is missing: %+v", result.Metrics.TodayConsume)
+	}
+	if len(result.Metrics.Groups) == 0 {
+		t.Fatal("expected available groups to be preserved")
+	}
+}
+
+func TestFetchSub2APIMetricsKeepsAuthFailureFatal(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/v1/auth/me" {
+			t.Fatalf("unexpected path: %s", r.URL.Path)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusUnauthorized)
+		_, _ = w.Write([]byte(`{"code":401,"message":"unauthorized"}`))
+	}))
+	defer server.Close()
+
+	service := NewPlatformService(NewHTTPClient(server.Client()))
+	_, err := service.fetchSub2APIMetrics(Session{
+		Platform: PlatformSub2API, BaseURL: server.URL, AccessToken: "expired-token", TokenType: "Bearer",
+	})
+	if errorKey(err) != ErrorAuth {
+		t.Fatalf("expected auth error, got: %v", err)
+	}
+}
+
 // TestSub2APIGroupRateOverrides 覆盖 sub2APIGroupRateOverrides helper 对上游几种常见
 // payload 形态的解析，以及无效条目的容错行为。
 func TestSub2APIGroupRateOverrides(t *testing.T) {

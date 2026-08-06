@@ -1258,8 +1258,12 @@ func (s *PlatformService) fetchSub2APIMetrics(session Session) (Metrics, error) 
 	}
 	stats, err := s.httpClient.requestJSON(session.BaseURL+"/api/v1/usage/dashboard/stats", authOptions)
 	if err != nil {
-		log.Printf("[sub2api-metrics] /api/v1/usage/dashboard/stats 失败 base_url=%s err=%v", session.BaseURL, err)
-		return Metrics{}, err
+		// Some Sub2API-compatible deployments do not expose the dashboard-only
+		// stats endpoint to ordinary users. Authentication has already been
+		// verified through /auth/me, so keep the session and the remaining
+		// metrics instead of treating this optional endpoint as a login failure.
+		log.Printf("[sub2api-metrics] /api/v1/usage/dashboard/stats 不可用，继续使用基础指标 base_url=%s err=%v", session.BaseURL, err)
+		stats = jsonResponse{Payload: map[string]any{}}
 	}
 	groups, err := s.fetchSub2APIAvailableGroupsWithRates(session)
 	if err != nil {
