@@ -685,6 +685,8 @@ export default {
           tokenTypePlaceholder: '默认 Bearer',
           tokenHelp: '如果提供 refresh_token，系统会优先调用刷新接口换取新的 access_token 和过期时间。',
           tokenHelpNewApi: '只需填写一个令牌：支持纯令牌，也支持 Bearer 开头的完整内容。',
+          skipTlsVerify: '忽略此站点的 TLS 证书校验',
+          skipTlsVerifyHelp: '仅在站点证书过期、自签名或证书链异常时启用。默认关闭，开启会降低连接安全性。',
           rechargeRate: '充值倍率',
           rechargeRatePlaceholder: '输入 USD 转 CNY 的倍率，如 7',
           rechargeRateHelp: '必填。人民币金额 = USD 金额 × 此倍率。',

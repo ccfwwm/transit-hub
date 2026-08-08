@@ -58,6 +58,11 @@ func (r *Repository) EnsureSchema(ctx context.Context) error {
 	`); err != nil {
 		return err
 	}
+	if _, err := r.db.Exec(ctx, `
+		ALTER TABLE upstream_sites ADD COLUMN IF NOT EXISTS skip_tls_verify boolean NOT NULL DEFAULT false
+	`); err != nil {
+		return err
+	}
 	// 工作区隔离字段：每个站点归属到一个 admin workspace。
 	if _, err := r.db.Exec(ctx, `
 		ALTER TABLE upstream_sites ADD COLUMN IF NOT EXISTS admin_account_id text NOT NULL DEFAULT ''
@@ -87,7 +92,7 @@ func (r *Repository) EnsureSchema(ctx context.Context) error {
 func (r *Repository) ListSites(ctx context.Context) ([]Site, error) {
 	rows, err := r.db.Query(ctx, `
 		SELECT id, user_id, admin_account_id, name, base_url, platform, requested_platform, account, remark,
-			 recharge_rate, status, error_key, metrics, session, settings, last_synced_at, can_relogin
+			 recharge_rate, status, error_key, metrics, session, settings, last_synced_at, can_relogin, skip_tls_verify
 		FROM upstream_sites
 		WHERE user_id <> ''
 		ORDER BY created_at ASC, id ASC
@@ -101,7 +106,7 @@ func (r *Repository) ListSites(ctx context.Context) ([]Site, error) {
 func (r *Repository) ListSitesForUser(ctx context.Context, userID string) ([]Site, error) {
 	rows, err := r.db.Query(ctx, `
 		SELECT id, user_id, admin_account_id, name, base_url, platform, requested_platform, account, remark,
-			 recharge_rate, status, error_key, metrics, session, settings, last_synced_at, can_relogin
+			 recharge_rate, status, error_key, metrics, session, settings, last_synced_at, can_relogin, skip_tls_verify
 		FROM upstream_sites
 		WHERE user_id = $1
 		ORDER BY created_at ASC, id ASC
@@ -135,10 +140,10 @@ func (r *Repository) SaveSite(ctx context.Context, site Site) error {
 	_, err = r.db.Exec(ctx, `
 		INSERT INTO upstream_sites (
 			id, user_id, admin_account_id, name, base_url, platform, requested_platform, account, remark,
-			recharge_rate, status, error_key, metrics, session, settings, last_synced_at, can_relogin,
+			recharge_rate, status, error_key, metrics, session, settings, last_synced_at, can_relogin, skip_tls_verify,
 			created_at, updated_at
 		)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13::jsonb, $14::jsonb, $15::jsonb, $16, $17, $18, $18)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13::jsonb, $14::jsonb, $15::jsonb, $16, $17, $18, $19, $19)
 		ON CONFLICT (id) DO UPDATE SET
 			user_id = EXCLUDED.user_id,
 			admin_account_id = EXCLUDED.admin_account_id,
@@ -156,9 +161,10 @@ func (r *Repository) SaveSite(ctx context.Context, site Site) error {
 			settings = EXCLUDED.settings,
 			last_synced_at = EXCLUDED.last_synced_at,
 			can_relogin = EXCLUDED.can_relogin,
+			skip_tls_verify = EXCLUDED.skip_tls_verify,
 			updated_at = EXCLUDED.updated_at
 	`, site.ID, site.UserID, site.AdminAccountID, site.Name, site.BaseURL, site.Platform, site.RequestedPlatform, site.Account, site.Remark,
-		site.RechargeRate, site.Status, site.ErrorKey, string(metricsJSON), nullableJSONString(sessionJSON), string(settingsJSON), site.LastSyncedAt, site.CanRelogin, now)
+		site.RechargeRate, site.Status, site.ErrorKey, string(metricsJSON), nullableJSONString(sessionJSON), string(settingsJSON), site.LastSyncedAt, site.CanRelogin, site.SkipTLSVerify, now)
 	return err
 }
 
@@ -190,6 +196,7 @@ func scanSites(rows pgx.Rows) ([]Site, error) {
 		var metricsJSON []byte
 		var sessionJSON []byte
 		var settingsJSON []byte
+		var skipTLSVerify bool
 		if err := rows.Scan(
 			&site.ID,
 			&site.UserID,
@@ -208,6 +215,7 @@ func scanSites(rows pgx.Rows) ([]Site, error) {
 			&settingsJSON,
 			&site.LastSyncedAt,
 			&site.CanRelogin,
+			&skipTLSVerify,
 		); err != nil {
 			return nil, err
 		}
@@ -224,6 +232,7 @@ func scanSites(rows pgx.Rows) ([]Site, error) {
 		if len(settingsJSON) > 0 {
 			_ = json.Unmarshal(settingsJSON, &site.Settings)
 		}
+		site.SkipTLSVerify = skipTLSVerify
 		sites = append(sites, site)
 	}
 	if err := rows.Err(); err != nil {

@@ -685,6 +685,8 @@ export default {
           tokenTypePlaceholder: 'Defaults to Bearer',
           tokenHelp: 'When refresh_token is provided, the server refreshes it first to obtain the latest access_token and expiration time.',
           tokenHelpNewApi: 'Enter one token only: either the raw token or the complete value beginning with Bearer.',
+          skipTlsVerify: 'Ignore TLS certificate verification for this site',
+          skipTlsVerifyHelp: 'Enable only for expired, self-signed, or otherwise invalid certificates. Disabled by default because it reduces connection security.',
           rechargeRate: 'Recharge Multiplier',
           rechargeRatePlaceholder: 'Enter the USD to CNY multiplier, e.g. 7',
           rechargeRateHelp: 'Required. CNY amount = USD amount × this multiplier.',

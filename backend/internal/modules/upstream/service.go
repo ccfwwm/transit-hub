@@ -384,6 +384,7 @@ func (s *Service) Create(ctx context.Context, userID string, dto CreateRequest) 
 		Account:           strings.TrimSpace(dto.Account),
 		Remark:            strings.TrimSpace(dto.Remark),
 		RechargeRate:      dto.RechargeRate,
+		SkipTLSVerify:     dto.SkipTLSVerify,
 		Status:            StatusConnecting,
 		ErrorKey:          nil,
 		Metrics:           defaultMetrics(),
@@ -474,6 +475,10 @@ func (s *Service) Update(ctx context.Context, userID string, id string, dto Upda
 	site.Account = strings.TrimSpace(dto.Account)
 	site.Remark = strings.TrimSpace(dto.Remark)
 	site.RechargeRate = dto.RechargeRate
+	site.SkipTLSVerify = dto.SkipTLSVerify
+	if site.Session != nil {
+		site.Session.InsecureSkipTLS = dto.SkipTLSVerify
+	}
 	shouldRelogin := strings.TrimSpace(dto.Password) != "" || strings.TrimSpace(dto.AccessToken) != "" || strings.TrimSpace(dto.RefreshToken) != ""
 
 	if shouldRelogin {
@@ -563,16 +568,16 @@ func resolvedPlatform(platform Platform) Platform {
 
 func (s *Service) createLogin(dto CreateRequest) (LoginResult, error) {
 	if normalizedAuthMode(dto.AuthMode) == AuthModeToken {
-		return s.platformService.LoginWithToken(dto.SiteURL, dto.Platform, dto.Account, dto.AccessToken, dto.RefreshToken, dto.TokenType)
+		return s.platformService.LoginWithTokenOptions(dto.SiteURL, dto.Platform, dto.Account, dto.AccessToken, dto.RefreshToken, dto.TokenType, dto.SkipTLSVerify)
 	}
-	return s.platformService.Login(dto.SiteURL, dto.Platform, dto.Account, dto.Password)
+	return s.platformService.LoginWithOptions(dto.SiteURL, dto.Platform, dto.Account, dto.Password, dto.SkipTLSVerify)
 }
 
 func (s *Service) updateLogin(dto UpdateRequest) (LoginResult, error) {
 	if normalizedAuthMode(dto.AuthMode) == AuthModeToken {
-		return s.platformService.LoginWithToken(dto.SiteURL, dto.Platform, dto.Account, dto.AccessToken, dto.RefreshToken, dto.TokenType)
+		return s.platformService.LoginWithTokenOptions(dto.SiteURL, dto.Platform, dto.Account, dto.AccessToken, dto.RefreshToken, dto.TokenType, dto.SkipTLSVerify)
 	}
-	return s.platformService.Login(dto.SiteURL, dto.Platform, dto.Account, dto.Password)
+	return s.platformService.LoginWithOptions(dto.SiteURL, dto.Platform, dto.Account, dto.Password, dto.SkipTLSVerify)
 }
 
 func normalizedAuthMode(authMode AuthMode) AuthMode {
@@ -1131,6 +1136,7 @@ func toResponse(site *Site) Response {
 		Account:           site.Account,
 		Remark:            site.Remark,
 		RechargeRate:      site.RechargeRate,
+		SkipTLSVerify:     site.SkipTLSVerify,
 		Status:            site.Status,
 		ErrorKey:          site.ErrorKey,
 		Metrics:           site.Metrics,

@@ -18,6 +18,7 @@ export interface UpstreamSiteForm {
   tokenType: string
   rechargeRate: number
   remark: string
+  skipTlsVerify: boolean
 }
 
 export interface UpstreamMetricValue {
@@ -76,6 +77,7 @@ export interface UpstreamSite {
   requestedPlatform: UpstreamPlatform
   account: string
   rechargeRate: number
+  skipTlsVerify: boolean
   remark: string
   logo: string
   logoBg: string

@@ -108,31 +108,33 @@ type Metrics struct {
 }
 
 type CreateRequest struct {
-	Name         string   `json:"name"`
-	SiteURL      string   `json:"siteUrl"`
-	Platform     Platform `json:"platform"`
-	AuthMode     AuthMode `json:"authMode"`
-	Account      string   `json:"account"`
-	Password     string   `json:"password"`
-	AccessToken  string   `json:"accessToken"`
-	RefreshToken string   `json:"refreshToken"`
-	TokenType    string   `json:"tokenType"`
-	Remark       string   `json:"remark"`
-	RechargeRate float64  `json:"rechargeRate"`
+	Name          string   `json:"name"`
+	SiteURL       string   `json:"siteUrl"`
+	Platform      Platform `json:"platform"`
+	AuthMode      AuthMode `json:"authMode"`
+	Account       string   `json:"account"`
+	Password      string   `json:"password"`
+	AccessToken   string   `json:"accessToken"`
+	RefreshToken  string   `json:"refreshToken"`
+	TokenType     string   `json:"tokenType"`
+	Remark        string   `json:"remark"`
+	RechargeRate  float64  `json:"rechargeRate"`
+	SkipTLSVerify bool     `json:"skipTlsVerify"`
 }
 
 type UpdateRequest struct {
-	Name         string   `json:"name"`
-	SiteURL      string   `json:"siteUrl"`
-	Platform     Platform `json:"platform"`
-	AuthMode     AuthMode `json:"authMode"`
-	Account      string   `json:"account"`
-	Password     string   `json:"password"`
-	AccessToken  string   `json:"accessToken"`
-	RefreshToken string   `json:"refreshToken"`
-	TokenType    string   `json:"tokenType"`
-	Remark       string   `json:"remark"`
-	RechargeRate float64  `json:"rechargeRate"`
+	Name          string   `json:"name"`
+	SiteURL       string   `json:"siteUrl"`
+	Platform      Platform `json:"platform"`
+	AuthMode      AuthMode `json:"authMode"`
+	Account       string   `json:"account"`
+	Password      string   `json:"password"`
+	AccessToken   string   `json:"accessToken"`
+	RefreshToken  string   `json:"refreshToken"`
+	TokenType     string   `json:"tokenType"`
+	Remark        string   `json:"remark"`
+	RechargeRate  float64  `json:"rechargeRate"`
+	SkipTLSVerify bool     `json:"skipTlsVerify"`
 }
 
 // SiteSettings 站点级预警覆盖配置。nil 表示使用全局默认值。
@@ -151,6 +153,7 @@ type Site struct {
 	Account           string       `json:"account"`
 	Remark            string       `json:"remark"`
 	RechargeRate      float64      `json:"rechargeRate"`
+	SkipTLSVerify     bool         `json:"skipTlsVerify"`
 	Status            Status       `json:"status"`
 	ErrorKey          *string      `json:"errorKey"`
 	Metrics           Metrics      `json:"metrics"`
@@ -171,6 +174,7 @@ type Response struct {
 	Account           string       `json:"account"`
 	Remark            string       `json:"remark"`
 	RechargeRate      float64      `json:"rechargeRate"`
+	SkipTLSVerify     bool         `json:"skipTlsVerify"`
 	Status            Status       `json:"status"`
 	ErrorKey          *string      `json:"errorKey"`
 	Metrics           Metrics      `json:"metrics"`
@@ -180,13 +184,14 @@ type Response struct {
 }
 
 type Session struct {
-	Platform     Platform
-	BaseURL      string
-	Cookie       string
-	UserID       string
-	AccessToken  string
-	RefreshToken string
-	TokenType    string
+	Platform        Platform
+	BaseURL         string
+	InsecureSkipTLS bool
+	Cookie          string
+	UserID          string
+	AccessToken     string
+	RefreshToken    string
+	TokenType       string
 	// ExpiresAt 是 access token 过期的毫秒时间戳，来自登录/刷新响应的 expires_in。
 	// 临期时由 refreshIfNeeded 用 refresh token 自动换新（refresh token 本身无过期时间）。
 	ExpiresAt *int64

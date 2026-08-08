@@ -143,6 +143,7 @@ const createEmptyForm = (): UpstreamSiteForm => ({
   tokenType: 'Bearer',
   rechargeRate: 1,
   remark: '',
+  skipTlsVerify: false,
 })
 
 const newSiteForm = ref<UpstreamSiteForm>(createEmptyForm())
@@ -171,6 +172,7 @@ const handleEditSite = (site: UpstreamSite) => {
     tokenType: 'Bearer',
     rechargeRate: site.rechargeRate > 0 ? site.rechargeRate : 1,
     remark: site.remark,
+    skipTlsVerify: Boolean(site.skipTlsVerify),
   }
   isAddModalOpen.value = true
 }
@@ -903,6 +905,14 @@ onBeforeUnmount(() => {
                   class="bg-surface border-border/50 focus:border-primary h-10"
                 />
               </div>
+
+              <label class="sm:col-span-2 flex cursor-pointer items-start gap-3 rounded-xl border border-warning/30 bg-warning/5 p-3 text-sm">
+                <input v-model="newSiteForm.skipTlsVerify" type="checkbox" :disabled="isAdding" class="mt-1 h-4 w-4 accent-warning" />
+                <span class="space-y-1">
+                  <span class="block font-medium text-foreground">{{ t('admin.upstream.modal.form.skipTlsVerify') }}</span>
+                  <span class="block text-xs leading-5 text-muted-foreground">{{ t('admin.upstream.modal.form.skipTlsVerifyHelp') }}</span>
+                </span>
+              </label>
 
               <!-- Auth Mode -->
               <div class="space-y-2 sm:col-span-2">

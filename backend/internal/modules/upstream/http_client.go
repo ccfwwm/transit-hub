@@ -3,27 +3,32 @@ package upstream
 import (
 	"bytes"
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"io"
 	"log"
 	"net/http"
+	"sync"
 )
 
 // BrowserUserAgent 是所有上游 HTTP 请求统一使用的浏览器 User-Agent。
 const BrowserUserAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/136.0.0.0 Safari/537.36"
 
 type HTTPClient struct {
-	client *http.Client
+	client         *http.Client
+	mu             sync.Mutex
+	insecureClient *http.Client
 }
 
 type requestOptions struct {
-	Context     context.Context
-	Method      string
-	Body        any
-	Cookie      string
-	UserID      string
-	AccessToken string
-	TokenType   string
+	Context         context.Context
+	Method          string
+	Body            any
+	Cookie          string
+	UserID          string
+	AccessToken     string
+	TokenType       string
+	InsecureSkipTLS bool
 }
 
 type jsonResponse struct {
@@ -39,6 +44,35 @@ type textResponse struct {
 
 func NewHTTPClient(client *http.Client) *HTTPClient {
 	return &HTTPClient{client: client}
+}
+
+func (c *HTTPClient) requestClient(skipTLS bool) *http.Client {
+	if !skipTLS {
+		return c.client
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.insecureClient != nil {
+		return c.insecureClient
+	}
+	transport, ok := c.client.Transport.(*http.Transport)
+	if !ok || transport == nil {
+		transport = http.DefaultTransport.(*http.Transport)
+	}
+	transport = transport.Clone()
+	if transport.TLSClientConfig == nil {
+		transport.TLSClientConfig = &tls.Config{}
+	} else {
+		transport.TLSClientConfig = transport.TLSClientConfig.Clone()
+	}
+	transport.TLSClientConfig.InsecureSkipVerify = true
+	c.insecureClient = &http.Client{
+		Transport:     transport,
+		Timeout:       c.client.Timeout,
+		CheckRedirect: c.client.CheckRedirect,
+		Jar:           c.client.Jar,
+	}
+	return c.insecureClient
 }
 
 func (c *HTTPClient) requestJSON(reqURL string, options requestOptions) (jsonResponse, error) {
@@ -81,7 +115,7 @@ func (c *HTTPClient) requestJSON(reqURL string, options requestOptions) (jsonRes
 		req.Header.Set("New-Api-User", options.UserID)
 	}
 
-	response, err := c.client.Do(req)
+	response, err := c.requestClient(options.InsecureSkipTLS).Do(req)
 	if err != nil {
 		log.Printf("[http-client] 请求失败 url=%s err=%v", reqURL, err)
 		return jsonResponse{}, newRequestError(ErrorNetwork, "")
@@ -140,7 +174,7 @@ func (c *HTTPClient) requestText(reqURL string, options requestOptions) (textRes
 		req.Header.Set("New-Api-User", options.UserID)
 	}
 
-	response, err := c.client.Do(req)
+	response, err := c.requestClient(options.InsecureSkipTLS).Do(req)
 	if err != nil {
 		log.Printf("[http-client] 请求失败 url=%s err=%v", reqURL, err)
 		return textResponse{}, newRequestError(ErrorNetwork, "")

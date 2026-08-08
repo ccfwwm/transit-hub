@@ -51,25 +51,33 @@ func (s *PlatformService) NormalizeURL(value string) (string, error) {
 }
 
 func (s *PlatformService) Login(baseURL string, platform Platform, account string, password string) (LoginResult, error) {
+	return s.LoginWithOptions(baseURL, platform, account, password, false)
+}
+
+func (s *PlatformService) LoginWithOptions(baseURL string, platform Platform, account string, password string, insecureSkipTLS bool) (LoginResult, error) {
 	normalizedURL, err := s.NormalizeURL(baseURL)
 	if err != nil {
 		return LoginResult{}, err
 	}
 	switch platform {
 	case PlatformNewAPI:
-		return s.loginNewAPI(normalizedURL, account, password)
+		return s.loginNewAPI(normalizedURL, account, password, insecureSkipTLS)
 	case PlatformSub2API:
-		return s.loginSub2API(normalizedURL, account, password)
+		return s.loginSub2API(normalizedURL, account, password, insecureSkipTLS)
 	default:
-		result, err := s.loginNewAPI(normalizedURL, account, password)
+		result, err := s.loginNewAPI(normalizedURL, account, password, insecureSkipTLS)
 		if err == nil {
 			return result, nil
 		}
-		return s.loginSub2API(normalizedURL, account, password)
+		return s.loginSub2API(normalizedURL, account, password, insecureSkipTLS)
 	}
 }
 
 func (s *PlatformService) LoginWithToken(baseURL string, platform Platform, account string, accessToken string, refreshToken string, tokenType string) (LoginResult, error) {
+	return s.LoginWithTokenOptions(baseURL, platform, account, accessToken, refreshToken, tokenType, false)
+}
+
+func (s *PlatformService) LoginWithTokenOptions(baseURL string, platform Platform, account string, accessToken string, refreshToken string, tokenType string, insecureSkipTLS bool) (LoginResult, error) {
 	normalizedURL, err := s.NormalizeURL(baseURL)
 	if err != nil {
 		return LoginResult{}, err
@@ -86,11 +94,12 @@ func (s *PlatformService) LoginWithToken(baseURL string, platform Platform, acco
 	}
 	if platform == PlatformNewAPI {
 		session := Session{
-			Platform:    PlatformNewAPI,
-			BaseURL:     normalizedURL,
-			UserID:      strings.TrimSpace(account),
-			AccessToken: accessToken,
-			TokenType:   tokenType,
+			Platform:        PlatformNewAPI,
+			BaseURL:         normalizedURL,
+			InsecureSkipTLS: insecureSkipTLS,
+			UserID:          strings.TrimSpace(account),
+			AccessToken:     accessToken,
+			TokenType:       tokenType,
 		}
 		if !session.IsAuthenticated() {
 			return LoginResult{}, newRequestError(ErrorAuth, PlatformNewAPI)
@@ -102,7 +111,7 @@ func (s *PlatformService) LoginWithToken(baseURL string, platform Platform, acco
 		}
 		return LoginResult{Platform: PlatformNewAPI, Session: session, Metrics: metrics}, nil
 	}
-	session := Session{Platform: PlatformSub2API, BaseURL: normalizedURL, AccessToken: accessToken, RefreshToken: refreshToken, TokenType: tokenType}
+	session := Session{Platform: PlatformSub2API, BaseURL: normalizedURL, InsecureSkipTLS: insecureSkipTLS, AccessToken: accessToken, RefreshToken: refreshToken, TokenType: tokenType}
 	if session.RefreshToken != "" {
 		refreshedSession, err := s.refreshSub2APISession(session)
 		if err != nil {
@@ -149,8 +158,9 @@ func (s *PlatformService) refreshNewAPISession(session Session) (Session, error)
 		return Session{}, newRequestError(ErrorAuth, PlatformNewAPI)
 	}
 	response, err := s.httpClient.requestJSON(session.BaseURL+"/api/user/auth/refresh", requestOptions{
-		Method: http.MethodPost,
-		Cookie: session.Cookie,
+		Method:          http.MethodPost,
+		Cookie:          session.Cookie,
+		InsecureSkipTLS: session.InsecureSkipTLS,
 	})
 	if err != nil {
 		return Session{}, err
@@ -168,6 +178,7 @@ func (s *PlatformService) refreshSub2APISession(session Session) (Session, error
 		Body: map[string]string{
 			"refresh_token": session.RefreshToken,
 		},
+		InsecureSkipTLS: session.InsecureSkipTLS,
 	})
 	if err != nil {
 		return Session{}, err
@@ -190,7 +201,7 @@ func (s *PlatformService) refreshSub2APISession(session Session) (Session, error
 		next := time.Now().UnixMilli() + int64(*expiresIn*1000)
 		expiresAt = &next
 	}
-	return Session{Platform: PlatformSub2API, BaseURL: session.BaseURL, AccessToken: *accessToken, RefreshToken: refreshToken, TokenType: tokenType, ExpiresAt: expiresAt}, nil
+	return Session{Platform: PlatformSub2API, BaseURL: session.BaseURL, InsecureSkipTLS: session.InsecureSkipTLS, AccessToken: *accessToken, RefreshToken: refreshToken, TokenType: tokenType, ExpiresAt: expiresAt}, nil
 }
 
 func (s *PlatformService) FetchMetrics(session Session) (Metrics, error) {
@@ -227,7 +238,7 @@ func (s *PlatformService) LoginSub2APIAdmin(baseURL string, email string, passwo
 		return Session{}, err
 	}
 	log.Printf("my-sites sub2api admin login start base_url=%s email=%s", normalizedURL, email)
-	result, err := s.loginSub2API(normalizedURL, email, password)
+	result, err := s.loginSub2API(normalizedURL, email, password, false)
 	if err != nil {
 		log.Printf("my-sites sub2api admin login failed base_url=%s email=%s err=%v", normalizedURL, email, err)
 		return Session{}, err
@@ -249,7 +260,7 @@ func (s *PlatformService) LoginNewAPIAdmin(baseURL string, username string, pass
 		return Session{}, err
 	}
 	log.Printf("new-api admin login start base_url=%s username=%s", normalizedURL, username)
-	result, err := s.loginNewAPI(normalizedURL, username, password)
+	result, err := s.loginNewAPI(normalizedURL, username, password, false)
 	if err != nil {
 		log.Printf("new-api admin login failed base_url=%s username=%s err=%v", normalizedURL, username, err)
 		return Session{}, err
@@ -308,7 +319,7 @@ func (s *PlatformService) VerifySub2APIAdmin(session Session) error {
 	}
 	requestURL := session.BaseURL + "/api/v1/auth/me"
 	log.Printf("my-sites sub2api admin verify request url=%s token_type=%s access_token_set=%t", requestURL, session.TokenType, session.AccessToken != "")
-	response, err := s.httpClient.requestJSON(requestURL, requestOptions{AccessToken: session.AccessToken, TokenType: session.TokenType})
+	response, err := s.httpClient.requestJSON(requestURL, sub2APIRequestOptions(session))
 	if err != nil {
 		log.Printf("my-sites sub2api admin verify request failed url=%s err=%v", requestURL, err)
 		return err
@@ -355,7 +366,7 @@ func (s *PlatformService) FetchSub2APIGroupDailyStats(session Session, groups ..
 	}
 	today := time.Now().Format("2006-01-02")
 	statsURL := session.BaseURL + "/api/v1/admin/dashboard/groups?start_date=" + today + "&end_date=" + today
-	response, err := s.httpClient.requestJSON(statsURL, requestOptions{AccessToken: session.AccessToken, TokenType: session.TokenType})
+	response, err := s.httpClient.requestJSON(statsURL, sub2APIRequestOptions(session))
 	if err != nil {
 		return nil, err
 	}
@@ -385,8 +396,9 @@ func (s *PlatformService) FetchSub2APIAdminUsageStats(session Session, startDate
 	}
 	statsURL := session.BaseURL + "/api/v1/admin/usage/stats?start_date=" + startDate + "&end_date=" + endDate
 	response, err := s.httpClient.requestJSON(statsURL, requestOptions{
-		AccessToken: session.AccessToken,
-		TokenType:   session.TokenType,
+		AccessToken:     session.AccessToken,
+		TokenType:       session.TokenType,
+		InsecureSkipTLS: session.InsecureSkipTLS,
 	})
 	if err != nil {
 		return 0, err
@@ -415,7 +427,7 @@ func (s *PlatformService) FetchSub2APIAdminSiteBalanceFiltered(session Session, 
 
 	const pageSize = 100
 	const maxConcurrency = 5
-	authOptions := requestOptions{AccessToken: session.AccessToken, TokenType: session.TokenType}
+	authOptions := sub2APIRequestOptions(session)
 
 	// 第 1 页顺序获取，确定总用户数。
 	firstURL := session.BaseURL + "/api/v1/admin/users?page=1&page_size=" + strconvInt(pageSize)
@@ -528,7 +540,7 @@ func (s *PlatformService) fetchSub2APIAvailableGroupsWithRates(session Session) 
 	if session.Platform != PlatformSub2API || strings.TrimSpace(session.AccessToken) == "" {
 		return nil, newRequestError(ErrorAuth, PlatformSub2API)
 	}
-	authOptions := requestOptions{AccessToken: session.AccessToken, TokenType: session.TokenType}
+	authOptions := sub2APIRequestOptions(session)
 
 	response, err := s.httpClient.requestJSON(session.BaseURL+"/api/v1/groups/available", authOptions)
 	if err != nil {
@@ -643,7 +655,7 @@ func (s *PlatformService) FetchSub2APIAdminAllGroups(session Session) ([]AdminGr
 	if session.Platform != PlatformSub2API || strings.TrimSpace(session.AccessToken) == "" {
 		return nil, newRequestError(ErrorAuth, PlatformSub2API)
 	}
-	authOptions := requestOptions{AccessToken: session.AccessToken, TokenType: session.TokenType}
+	authOptions := sub2APIRequestOptions(session)
 	response, err := s.httpClient.requestJSON(session.BaseURL+"/api/v1/admin/groups/all", authOptions)
 	if err != nil {
 		log.Printf("[sub2api-admin-groups] /api/v1/admin/groups/all 拉取失败，尝试旧接口 base_url=%s err=%v", session.BaseURL, err)
@@ -713,7 +725,7 @@ func (s *PlatformService) fetchSub2APIGroupUsageSummaryStats(session Session) ([
 	if session.Platform != PlatformSub2API || strings.TrimSpace(session.AccessToken) == "" {
 		return nil, newRequestError(ErrorAuth, PlatformSub2API)
 	}
-	authOptions := requestOptions{AccessToken: session.AccessToken, TokenType: session.TokenType}
+	authOptions := sub2APIRequestOptions(session)
 	groupsResponse, err := s.httpClient.requestJSON(session.BaseURL+"/api/v1/groups/available", authOptions)
 	if err != nil {
 		return nil, err
@@ -765,7 +777,7 @@ func (s *PlatformService) fetchSub2APIKeyGroupDailyStats(session Session) ([]Gro
 	if session.Platform != PlatformSub2API || strings.TrimSpace(session.AccessToken) == "" {
 		return nil, newRequestError(ErrorAuth, PlatformSub2API)
 	}
-	authOptions := requestOptions{AccessToken: session.AccessToken, TokenType: session.TokenType}
+	authOptions := sub2APIRequestOptions(session)
 	keysResponse, err := s.httpClient.requestJSON(session.BaseURL+"/api/v1/keys", authOptions)
 	if err != nil {
 		return nil, err
@@ -885,7 +897,8 @@ func (s *PlatformService) fetchSub2APIKeyUsageToday(ctx context.Context, session
 	if session.Platform != PlatformSub2API || strings.TrimSpace(session.AccessToken) == "" {
 		return nil, newRequestError(ErrorAuth, PlatformSub2API)
 	}
-	authOptions := requestOptions{Context: ctx, AccessToken: session.AccessToken, TokenType: session.TokenType}
+	authOptions := sub2APIRequestOptions(session)
+	authOptions.Context = ctx
 
 	const pageSize = 100
 	const maxPages = 100 // 安全上限，防止上游分页字段异常导致死循环
@@ -1088,10 +1101,11 @@ func (s *PlatformService) fetchNewAPIKeyUsageToday(ctx context.Context, session 
 	return stats, nil
 }
 
-func (s *PlatformService) loginNewAPI(baseURL string, username string, password string) (LoginResult, error) {
+func (s *PlatformService) loginNewAPI(baseURL string, username string, password string, insecureSkipTLS bool) (LoginResult, error) {
 	response, err := s.httpClient.requestJSON(baseURL+"/api/user/login", requestOptions{
-		Method: http.MethodPost,
-		Body:   map[string]string{"username": username, "password": password},
+		Method:          http.MethodPost,
+		Body:            map[string]string{"username": username, "password": password},
+		InsecureSkipTLS: insecureSkipTLS,
 	})
 	if err != nil {
 		return LoginResult{}, err
@@ -1106,6 +1120,7 @@ func (s *PlatformService) loginNewAPI(baseURL string, username string, password 
 	if err != nil {
 		return LoginResult{}, err
 	}
+	session.InsecureSkipTLS = insecureSkipTLS
 	session.QuotaPerUnit = s.fetchNewAPIQuotaPerUnit(session)
 	metrics, err := s.fetchNewAPIMetrics(session, loginData)
 	if err != nil {
@@ -1149,6 +1164,7 @@ func newAPISessionFromResponse(baseURL string, response jsonResponse, previous .
 		if session.UserID == "" {
 			session.UserID = previous[0].UserID
 		}
+		session.InsecureSkipTLS = previous[0].InsecureSkipTLS
 		session.QuotaPerUnit = previous[0].QuotaPerUnit
 	}
 	if !session.IsAuthenticated() {
@@ -1157,10 +1173,11 @@ func newAPISessionFromResponse(baseURL string, response jsonResponse, previous .
 	return session, nil
 }
 
-func (s *PlatformService) loginSub2API(baseURL string, email string, password string) (LoginResult, error) {
+func (s *PlatformService) loginSub2API(baseURL string, email string, password string, insecureSkipTLS bool) (LoginResult, error) {
 	response, err := s.httpClient.requestJSON(baseURL+"/api/v1/auth/login", requestOptions{
-		Method: http.MethodPost,
-		Body:   map[string]string{"email": email, "password": password},
+		Method:          http.MethodPost,
+		Body:            map[string]string{"email": email, "password": password},
+		InsecureSkipTLS: insecureSkipTLS,
 	})
 	if err != nil {
 		return LoginResult{}, err
@@ -1183,7 +1200,7 @@ func (s *PlatformService) loginSub2API(baseURL string, email string, password st
 		next := time.Now().UnixMilli() + int64(*expiresIn*1000)
 		expiresAt = &next
 	}
-	session := Session{Platform: PlatformSub2API, BaseURL: baseURL, AccessToken: *accessToken, RefreshToken: refreshToken, TokenType: tokenType, ExpiresAt: expiresAt}
+	session := Session{Platform: PlatformSub2API, BaseURL: baseURL, InsecureSkipTLS: insecureSkipTLS, AccessToken: *accessToken, RefreshToken: refreshToken, TokenType: tokenType, ExpiresAt: expiresAt}
 	metrics, err := s.fetchSub2APIMetrics(session)
 	if err != nil {
 		return LoginResult{}, err
@@ -1249,7 +1266,7 @@ func (s *PlatformService) fetchNewAPIMetrics(session Session, loginData map[stri
 }
 
 func (s *PlatformService) fetchSub2APIMetrics(session Session) (Metrics, error) {
-	authOptions := requestOptions{AccessToken: session.AccessToken, TokenType: session.TokenType}
+	authOptions := sub2APIRequestOptions(session)
 	log.Printf("[sub2api-metrics] 开始拉取指标 base_url=%s", session.BaseURL)
 	me, err := s.httpClient.requestJSON(session.BaseURL+"/api/v1/auth/me", authOptions)
 	if err != nil {
@@ -1330,11 +1347,16 @@ func newAPIUserID(loginData map[string]any) string {
 
 func newAPIRequestOptions(session Session) requestOptions {
 	return requestOptions{
-		Cookie:      session.Cookie,
-		UserID:      session.UserID,
-		AccessToken: session.AccessToken,
-		TokenType:   session.TokenType,
+		Cookie:          session.Cookie,
+		UserID:          session.UserID,
+		AccessToken:     session.AccessToken,
+		TokenType:       session.TokenType,
+		InsecureSkipTLS: session.InsecureSkipTLS,
 	}
+}
+
+func sub2APIRequestOptions(session Session) requestOptions {
+	return requestOptions{AccessToken: session.AccessToken, TokenType: session.TokenType, InsecureSkipTLS: session.InsecureSkipTLS}
 }
 
 func newAPIRequestOptionsWith(session Session, method string, body any) requestOptions {
@@ -1365,8 +1387,9 @@ func (s *PlatformService) ListSub2APIKeys(session Session) ([]Sub2APIKeyItem, er
 	response, err := s.httpClient.requestJSON(
 		session.BaseURL+"/api/v1/keys?page=1&page_size=100&sort_by=created_at&sort_order=desc",
 		requestOptions{
-			AccessToken: session.AccessToken,
-			TokenType:   session.TokenType,
+			AccessToken:     session.AccessToken,
+			TokenType:       session.TokenType,
+			InsecureSkipTLS: session.InsecureSkipTLS,
 		},
 	)
 	if err != nil {
@@ -1409,9 +1432,10 @@ func (s *PlatformService) CreateSub2APIKey(session Session, name string, groupID
 		return "", "", newRequestError(ErrorAuth, PlatformSub2API)
 	}
 	response, err := s.httpClient.requestJSON(session.BaseURL+"/api/v1/keys", requestOptions{
-		AccessToken: session.AccessToken,
-		TokenType:   session.TokenType,
-		Method:      http.MethodPost,
+		AccessToken:     session.AccessToken,
+		TokenType:       session.TokenType,
+		InsecureSkipTLS: session.InsecureSkipTLS,
+		Method:          http.MethodPost,
 		Body: map[string]any{
 			"name":     name,
 			"group_id": groupID,
@@ -1448,10 +1472,11 @@ func (s *PlatformService) CreateSub2APIAdminAccount(session Session, payload map
 		return "", newRequestError(ErrorAuth, PlatformSub2API)
 	}
 	response, err := s.httpClient.requestJSON(session.BaseURL+"/api/v1/admin/accounts", requestOptions{
-		AccessToken: session.AccessToken,
-		TokenType:   session.TokenType,
-		Method:      http.MethodPost,
-		Body:        payload,
+		AccessToken:     session.AccessToken,
+		TokenType:       session.TokenType,
+		InsecureSkipTLS: session.InsecureSkipTLS,
+		Method:          http.MethodPost,
+		Body:            payload,
 	})
 	if err != nil {
 		return "", err
@@ -1466,8 +1491,9 @@ func (s *PlatformService) ListSub2APIAdminAccounts(session Session) ([]Sub2APIAd
 		return nil, newRequestError(ErrorAuth, PlatformSub2API)
 	}
 	response, err := s.httpClient.requestJSON(session.BaseURL+"/api/v1/admin/accounts?page=1&page_size=1000", requestOptions{
-		AccessToken: session.AccessToken,
-		TokenType:   session.TokenType,
+		AccessToken:     session.AccessToken,
+		TokenType:       session.TokenType,
+		InsecureSkipTLS: session.InsecureSkipTLS,
 	})
 	if err != nil {
 		return nil, err
@@ -1504,9 +1530,10 @@ func (s *PlatformService) DeleteSub2APIKey(session Session, keyID string) error 
 		return newRequestError(ErrorAuth, PlatformSub2API)
 	}
 	_, err := s.httpClient.requestJSON(session.BaseURL+"/api/v1/keys/"+keyID, requestOptions{
-		AccessToken: session.AccessToken,
-		TokenType:   session.TokenType,
-		Method:      http.MethodDelete,
+		AccessToken:     session.AccessToken,
+		TokenType:       session.TokenType,
+		InsecureSkipTLS: session.InsecureSkipTLS,
+		Method:          http.MethodDelete,
 	})
 	return err
 }
@@ -1517,9 +1544,10 @@ func (s *PlatformService) DeleteSub2APIAdminAccount(session Session, accountID s
 		return newRequestError(ErrorAuth, PlatformSub2API)
 	}
 	_, err := s.httpClient.requestJSON(session.BaseURL+"/api/v1/admin/accounts/"+accountID, requestOptions{
-		AccessToken: session.AccessToken,
-		TokenType:   session.TokenType,
-		Method:      http.MethodDelete,
+		AccessToken:     session.AccessToken,
+		TokenType:       session.TokenType,
+		InsecureSkipTLS: session.InsecureSkipTLS,
+		Method:          http.MethodDelete,
 	})
 	return err
 }
@@ -1529,9 +1557,10 @@ func (s *PlatformService) SetSub2APIAdminAccountSchedulable(session Session, acc
 		return newRequestError(ErrorAuth, PlatformSub2API)
 	}
 	_, err := s.httpClient.requestJSON(session.BaseURL+"/api/v1/admin/accounts/"+accountID+"/schedulable", requestOptions{
-		AccessToken: session.AccessToken,
-		TokenType:   session.TokenType,
-		Method:      http.MethodPost,
+		AccessToken:     session.AccessToken,
+		TokenType:       session.TokenType,
+		InsecureSkipTLS: session.InsecureSkipTLS,
+		Method:          http.MethodPost,
 		Body: map[string]any{
 			"schedulable": schedulable,
 		},
@@ -1544,9 +1573,10 @@ func (s *PlatformService) UpdateSub2APIAdminAccountPriority(session Session, acc
 		return newRequestError(ErrorAuth, PlatformSub2API)
 	}
 	_, err := s.httpClient.requestJSON(session.BaseURL+"/api/v1/admin/accounts/"+accountID, requestOptions{
-		AccessToken: session.AccessToken,
-		TokenType:   session.TokenType,
-		Method:      http.MethodPut,
+		AccessToken:     session.AccessToken,
+		TokenType:       session.TokenType,
+		InsecureSkipTLS: session.InsecureSkipTLS,
+		Method:          http.MethodPut,
 		Body: map[string]any{
 			"priority": priority,
 		},
@@ -1567,10 +1597,11 @@ func (s *PlatformService) TestSub2APIAdminAccount(session Session, accountID str
 	}
 	started := time.Now()
 	response, err := s.httpClient.requestText(session.BaseURL+"/api/v1/admin/accounts/"+accountID+"/test", requestOptions{
-		AccessToken: session.AccessToken,
-		TokenType:   session.TokenType,
-		Method:      http.MethodPost,
-		Body:        body,
+		AccessToken:     session.AccessToken,
+		TokenType:       session.TokenType,
+		InsecureSkipTLS: session.InsecureSkipTLS,
+		Method:          http.MethodPost,
+		Body:            body,
 	})
 	latency := int(time.Since(started).Milliseconds())
 	if err != nil {
@@ -2156,7 +2187,7 @@ func (s *PlatformService) updateSub2APIAdminGroupMultiplier(session Session, gro
 	if session.Platform != PlatformSub2API || strings.TrimSpace(session.AccessToken) == "" {
 		return newRequestError(ErrorAuth, PlatformSub2API)
 	}
-	authOptions := requestOptions{AccessToken: session.AccessToken, TokenType: session.TokenType}
+	authOptions := sub2APIRequestOptions(session)
 
 	// GET 分组详情
 	getURL := session.BaseURL + "/api/v1/admin/groups/" + groupID
@@ -2178,10 +2209,11 @@ func (s *PlatformService) updateSub2APIAdminGroupMultiplier(session Session, gro
 
 	// PUT 更新
 	_, err = s.httpClient.requestJSON(getURL, requestOptions{
-		AccessToken: session.AccessToken,
-		TokenType:   session.TokenType,
-		Method:      http.MethodPut,
-		Body:        payload,
+		AccessToken:     session.AccessToken,
+		TokenType:       session.TokenType,
+		InsecureSkipTLS: session.InsecureSkipTLS,
+		Method:          http.MethodPut,
+		Body:            payload,
 	})
 	return err
 }

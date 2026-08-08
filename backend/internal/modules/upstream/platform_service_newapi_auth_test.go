@@ -4,6 +4,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 )
 
 func TestLoginNewAPISupportsAccessTokenResponse(t *testing.T) {
@@ -130,6 +131,43 @@ func TestLoginWithTokenSupportsNewAPISystemAccessToken(t *testing.T) {
 	}
 	if result.Platform != PlatformNewAPI || result.Session.UserID != userID || result.Session.AccessToken != accessToken {
 		t.Fatalf("unexpected New-API token login result: %+v", result)
+	}
+}
+
+func TestLoginWithTokenCanSkipInvalidTLSForOneSite(t *testing.T) {
+	const accessToken = "new-api-system-access-token"
+	const userID = "224"
+
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assertNewAPIAccessTokenHeaders(t, r, accessToken, userID)
+		switch r.URL.Path {
+		case "/api/status":
+			writeJSON(w, map[string]any{"success": true, "data": map[string]any{"quota_per_unit": 500000}})
+		case "/api/user/self":
+			writeJSON(w, map[string]any{"success": true, "data": map[string]any{"id": 224, "quota": 500000, "used_quota": 0}})
+		case "/api/log/self/stat":
+			writeJSON(w, map[string]any{"success": true, "data": map[string]any{"quota": 0}})
+		case "/api/user/self/groups":
+			writeJSON(w, map[string]any{"success": true, "data": map[string]any{}})
+		case "/api/pricing":
+			writeJSON(w, map[string]any{"success": true, "data": []any{}})
+		default:
+			t.Fatalf("unexpected request: %s %s", r.Method, r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	service := NewPlatformService(NewHTTPClient(&http.Client{Timeout: 5 * time.Second}))
+	if _, err := service.LoginWithToken(server.URL, PlatformNewAPI, userID, accessToken, "", "Bearer"); errorKey(err) != ErrorNetwork {
+		t.Fatalf("expected invalid TLS certificate to fail by default, got: %v", err)
+	}
+
+	result, err := service.LoginWithTokenOptions(server.URL, PlatformNewAPI, userID, accessToken, "", "Bearer", true)
+	if err != nil {
+		t.Fatalf("expected site-scoped TLS bypass to allow login, got: %v", err)
+	}
+	if !result.Session.InsecureSkipTLS {
+		t.Fatal("expected TLS bypass setting to be preserved in the session")
 	}
 }
 
