@@ -155,7 +155,7 @@ export default {
         dispatchOff: 'Dispatch off',
         autoManaged: 'Auto managed',
         manualOverride: 'Manual override',
-        manualOverrideHelp: 'The remote value was changed manually, so automatic rules will not overwrite it.'
+        manualOverrideHelp: 'The remote value was changed manually, so automatic rules will not overwrite it. Sync the current state to take over again.'
       },
       groups: {
         title: 'Group Overview',
@@ -310,6 +310,8 @@ export default {
         enableDispatchShort: 'Dispatch on',
         disableDispatch: 'Disable group dispatch',
         disableDispatchShort: 'Dispatch off',
+        syncTakeover: 'Sync remote state and take over automatic rules',
+        syncTakeoverShort: 'Sync & take over',
         cancel: 'Cancel',
         save: 'Save'
       },
@@ -318,6 +320,8 @@ export default {
         request: 'Status monitor request failed.',
         notFound: 'Monitor rule not found.',
         unsupported: 'This channel does not support the operation.',
+        accountNotFound: 'The corresponding upstream account was not found. Sync the connection data first.',
+        stateUnavailable: 'The current remote state could not be read. Try again later.',
         unknown: 'Status monitor service error.'
       }
     },

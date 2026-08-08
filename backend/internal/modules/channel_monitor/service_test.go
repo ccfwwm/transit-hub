@@ -938,6 +938,42 @@ func TestApplyRateRuleKeepsManualOverrideAfterRemoteValueMatchesPreviousWrite(t 
 	}
 }
 
+func TestSyncAndTakeOverRuleAdoptsCurrentRemoteState(t *testing.T) {
+	ctx := context.Background()
+	repo := newFakeRepository()
+	service := newTestService(repo)
+	rule := repo.mustRule("conn-1")
+	rule.SchedulableManaged = true
+	rule.SchedulableConflict = true
+	rule.LastAppliedSchedulable = boolPtr(false)
+	rule.OriginalSchedulable = boolPtr(true)
+	rule.PriorityManaged = true
+	rule.PriorityConflict = true
+	rule.LastAppliedPriority = intPtr(1)
+	rule.OriginalPriority = intPtr(9)
+	repo.rules[rule.ID] = rule
+	service.platform.accounts = []AdminAccountStatus{{
+		ID: "123", Name: "A-【site】-GPT-4o", Schedulable: boolPtr(true), Priority: intPtr(7),
+	}}
+
+	updated, err := service.SyncAndTakeOverRule(ctx, "user-1", rule.ID)
+	if err != nil {
+		t.Fatalf("SyncAndTakeOverRule returned error: %v", err)
+	}
+	if len(service.platform.schedulableCalls) != 0 || len(service.platform.priorityCalls) != 0 {
+		t.Fatalf("takeover must not write a new remote value, got schedulable=%+v priority=%+v", service.platform.schedulableCalls, service.platform.priorityCalls)
+	}
+	if !updated.SchedulableManaged || updated.SchedulableConflict || updated.LastAppliedSchedulable == nil || !*updated.LastAppliedSchedulable {
+		t.Fatalf("expected current schedulable value to become managed baseline, got %+v", updated)
+	}
+	if !updated.PriorityManaged || updated.PriorityConflict || updated.LastAppliedPriority == nil || *updated.LastAppliedPriority != 7 {
+		t.Fatalf("expected current priority to become managed baseline, got %+v", updated)
+	}
+	if updated.DesiredSchedulable == nil || !*updated.DesiredSchedulable {
+		t.Fatalf("expected desired schedulable value to match remote state, got %+v", updated.DesiredSchedulable)
+	}
+}
+
 func TestUpstreamGroupMultiplierUsesStableIDAfterRename(t *testing.T) {
 	site := &upstream.Site{Metrics: upstream.Metrics{Groups: []upstream.GroupInfo{{
 		ID: "group-1", Name: "renamed-group", Multiplier: floatPtr(0.8),

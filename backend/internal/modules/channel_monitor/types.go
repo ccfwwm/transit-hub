@@ -137,6 +137,7 @@ type ChannelStatus struct {
 	SchedulableConflict         bool       `json:"schedulableConflict"`
 	PriorityManaged             bool       `json:"priorityManaged"`
 	PriorityConflict            bool       `json:"priorityConflict"`
+	TakeoverAvailable           bool       `json:"takeoverAvailable"`
 	Status                      string     `json:"status"`
 	SiteID                      string     `json:"siteId"`
 	SiteName                    string     `json:"siteName"`

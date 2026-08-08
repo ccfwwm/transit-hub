@@ -92,6 +92,10 @@ export const setChannelMonitorRulePriority = async (ruleId: string, priority: nu
   })
 }
 
+export const syncAndTakeOverChannelMonitorRule = async (ruleId: string): Promise<void> => {
+  await requestJson(`/channel-monitor/rules/${encodeURIComponent(ruleId)}/takeover`, { method: 'POST' })
+}
+
 export const bulkUpdateChannelMonitorRules = async (request: BulkUpdateChannelMonitorRuleRequest): Promise<void> => {
   await requestJson('/channel-monitor/rules/bulk', {
     method: 'PATCH',

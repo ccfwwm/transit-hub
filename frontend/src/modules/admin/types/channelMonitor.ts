@@ -42,6 +42,7 @@ export interface ChannelMonitorChannel {
   schedulableConflict: boolean
   priorityManaged: boolean
   priorityConflict: boolean
+  takeoverAvailable: boolean
   status: ChannelMonitorStatus
   siteId: string
   siteName: string

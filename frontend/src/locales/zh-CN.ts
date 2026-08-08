@@ -155,7 +155,7 @@ export default {
         dispatchOff: '调度停',
         autoManaged: '自动管理',
         manualOverride: '人工覆盖',
-        manualOverrideHelp: '远端状态已被手动修改，自动规则不会再次覆盖。'
+        manualOverrideHelp: '远端状态已被手动修改，自动规则不会再次覆盖。同步当前状态后可重新接管。'
       },
       groups: {
         title: '分组概览',
@@ -310,6 +310,8 @@ export default {
         enableDispatchShort: '启调度',
         disableDispatch: '停用分组调度',
         disableDispatchShort: '停调度',
+        syncTakeover: '同步远端状态并接管自动规则',
+        syncTakeoverShort: '同步接管',
         cancel: '取消',
         save: '保存'
       },
@@ -318,6 +320,8 @@ export default {
         request: '状态监控操作失败，请稍后重试。',
         notFound: '监控规则不存在。',
         unsupported: '当前渠道暂不支持该操作。',
+        accountNotFound: '未找到对应的上游账号，请先同步对接数据。',
+        stateUnavailable: '无法读取远端当前状态，请稍后重试。',
         unknown: '状态监控服务异常。'
       }
     },

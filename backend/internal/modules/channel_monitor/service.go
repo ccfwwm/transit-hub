@@ -451,6 +451,69 @@ func (s *Service) SetRulePriority(ctx context.Context, userID, ruleID string, pr
 	return s.store.UpdateRule(ctx, rule)
 }
 
+func (s *Service) SyncAndTakeOverRule(ctx context.Context, userID, ruleID string) (Rule, error) {
+	adminAccountID, err := s.currentAdminAccountID(ctx, userID)
+	if err != nil {
+		return Rule{}, err
+	}
+	rule, err := s.requireRule(ctx, ruleID, userID, adminAccountID)
+	if err != nil {
+		return Rule{}, err
+	}
+	state, err := s.workspaceState(ctx, userID, adminAccountID)
+	if err != nil {
+		return Rule{}, err
+	}
+	conn, err := s.conns.GetRealConnection(ctx, rule.ConnectionID, userID, adminAccountID)
+	if err != nil {
+		return Rule{}, err
+	}
+	if state == nil || state.Session.Platform != upstream.PlatformSub2API || conn == nil || strings.TrimSpace(conn.AdminAccountID) == "" {
+		return Rule{}, requestError("admin.channelMonitor.errors.unsupported")
+	}
+	accounts, err := s.platform.ListSub2APIAdminAccounts(state.Session)
+	if err != nil {
+		return Rule{}, err
+	}
+	var account *AdminAccountStatus
+	for index := range accounts {
+		if strings.TrimSpace(accounts[index].ID) == strings.TrimSpace(conn.AdminAccountID) {
+			account = &accounts[index]
+			break
+		}
+	}
+	if account == nil {
+		return Rule{}, requestError("admin.channelMonitor.errors.accountNotFound")
+	}
+	if rule.SchedulableManaged || rule.SchedulableConflict {
+		if account.Schedulable == nil {
+			return Rule{}, requestError("admin.channelMonitor.errors.stateUnavailable")
+		}
+		rule.SchedulableManaged = true
+		rule.SchedulableConflict = false
+		rule.OriginalSchedulable = cloneBool(account.Schedulable)
+		rule.LastAppliedSchedulable = cloneBool(account.Schedulable)
+		rule.DesiredSchedulable = cloneBool(account.Schedulable)
+	}
+	if rule.PriorityManaged || rule.PriorityConflict {
+		if account.Priority == nil {
+			return Rule{}, requestError("admin.channelMonitor.errors.stateUnavailable")
+		}
+		rule.PriorityManaged = true
+		rule.PriorityConflict = false
+		rule.OriginalPriority = cloneInt(account.Priority)
+		rule.LastAppliedPriority = cloneInt(account.Priority)
+	}
+	rule.LastMessage = "已同步远端状态并重新接管自动规则"
+	now := time.Now()
+	rule.LastCheckedAt = &now
+	rule.UpdatedAt = now
+	if err := s.store.UpdateRule(ctx, rule); err != nil {
+		return Rule{}, err
+	}
+	return rule, nil
+}
+
 func (s *Service) BulkSetSchedulable(ctx context.Context, userID string, req BulkSchedulableRequest) error {
 	ruleIDs := uniqueRuleIDs(req.RuleIDs)
 	if len(ruleIDs) == 0 {
@@ -1054,6 +1117,7 @@ func (s *Service) channelStatus(ctx context.Context, conn my_sites.RealConnectio
 		SchedulableConflict:  rule.SchedulableConflict,
 		PriorityManaged:      rule.PriorityManaged,
 		PriorityConflict:     rule.PriorityConflict,
+		TakeoverAvailable:    rule.SchedulableConflict || rule.PriorityConflict,
 		Status:               normalizedStatus(rule.LastStatus),
 		UpstreamGroupID:      conn.UpstreamGroupID,
 		UpstreamGroupName:    conn.UpstreamGroupName,

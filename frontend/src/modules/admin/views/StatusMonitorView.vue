@@ -33,6 +33,7 @@ import {
   runChannelMonitorRule,
   setChannelMonitorRuleSchedulable,
   setChannelMonitorRulePriority,
+  syncAndTakeOverChannelMonitorRule,
   updateChannelMonitorRateRule,
   updateChannelMonitorRule,
   updateChannelMonitorTestModelConfig,
@@ -463,6 +464,9 @@ const setChannelPriority = (channel: ChannelMonitorChannel) => {
   return runAction(() => setChannelMonitorRulePriority(channel.ruleId, Math.round(priority)), { actionKey: channelActionKey(channel, 'priority') })
 }
 
+const syncAndTakeOverChannel = (channel: ChannelMonitorChannel) =>
+  runAction(() => syncAndTakeOverChannelMonitorRule(channel.ruleId), { actionKey: channelActionKey(channel, 'takeover') })
+
 const openDisconnect = (channel: ChannelMonitorChannel) => {
   disconnectingChannel.value = channel
   disconnectMode.value = 'unlink'
@@ -806,6 +810,20 @@ const dispatchButtonClass = (channel: ChannelMonitorChannel): string => (
                       </div>
                       <div v-if="channel.schedulableConflict || channel.priorityConflict" class="mt-1 text-xs text-amber-700 dark:text-amber-300">
                         {{ t('admin.channelMonitor.flags.manualOverrideHelp') }}
+                        <Button
+                          v-if="channel.takeoverAvailable"
+                          type="button"
+                          variant="secondary"
+                          size="sm"
+                          class="mt-2 h-7 gap-1 !border-amber-500/30 !bg-amber-500/10 px-2 text-xs !text-amber-700 hover:!bg-amber-500/15 dark:!text-amber-300"
+                          :disabled="isChannelBusy(channel) || !channel.supported"
+                          :title="t('admin.channelMonitor.actions.syncTakeover')"
+                          @click="syncAndTakeOverChannel(channel)"
+                        >
+                          <Loader2 v-if="isActionActive(channelActionKey(channel, 'takeover'))" class="h-3 w-3 animate-spin" />
+                          <RefreshCw v-else class="h-3 w-3" />
+                          {{ t('admin.channelMonitor.actions.syncTakeoverShort') }}
+                        </Button>
                       </div>
                     </div>
 

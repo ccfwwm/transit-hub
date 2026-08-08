@@ -21,6 +21,7 @@ func RegisterRoutes(mux *http.ServeMux, service *Service) {
 	mux.HandleFunc("POST /api/channel-monitor/rules/{id}/resume", handler.resumeRule)
 	mux.HandleFunc("POST /api/channel-monitor/rules/{id}/schedulable", handler.setSchedulable)
 	mux.HandleFunc("POST /api/channel-monitor/rules/{id}/priority", handler.setPriority)
+	mux.HandleFunc("POST /api/channel-monitor/rules/{id}/takeover", handler.takeOverRule)
 	mux.HandleFunc("PATCH /api/channel-monitor/rules/{id}", handler.updateRule)
 	mux.HandleFunc("PATCH /api/channel-monitor/rules/bulk", handler.bulkUpdateRules)
 	mux.HandleFunc("POST /api/channel-monitor/rules/bulk/run", handler.bulkRunRules)
@@ -141,6 +142,20 @@ func (h *Handler) setPriority(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	httpjson.Write(w, http.StatusOK, map[string]bool{"success": true})
+}
+
+func (h *Handler) takeOverRule(w http.ResponseWriter, r *http.Request) {
+	userID, ok := authctx.UserID(r.Context())
+	if !ok {
+		httpjson.WriteError(w, http.StatusUnauthorized, "auth.errors.unauthorized")
+		return
+	}
+	rule, err := h.service.SyncAndTakeOverRule(r.Context(), userID, r.PathValue("id"))
+	if err != nil {
+		writeMonitorError(w, err)
+		return
+	}
+	httpjson.Write(w, http.StatusOK, rule)
 }
 
 func (h *Handler) bulkUpdateRules(w http.ResponseWriter, r *http.Request) {
