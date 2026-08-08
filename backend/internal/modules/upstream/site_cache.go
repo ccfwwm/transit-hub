@@ -54,6 +54,7 @@ type sitePayload struct {
 	Account           string   `json:"account"`
 	Remark            string   `json:"remark"`
 	RechargeRate      float64  `json:"rechargeRate"`
+	SkipTLSVerify     bool     `json:"skipTlsVerify"`
 	Status            Status   `json:"status"`
 	ErrorKey          *string  `json:"errorKey"`
 	Metrics           Metrics  `json:"metrics"`
@@ -74,6 +75,7 @@ func toPayload(site *Site) sitePayload {
 		Account:           site.Account,
 		Remark:            site.Remark,
 		RechargeRate:      site.RechargeRate,
+		SkipTLSVerify:     site.SkipTLSVerify,
 		Status:            site.Status,
 		ErrorKey:          site.ErrorKey,
 		Metrics:           site.Metrics,
@@ -95,6 +97,7 @@ func fromPayload(p sitePayload) *Site {
 		Account:           p.Account,
 		Remark:            p.Remark,
 		RechargeRate:      p.RechargeRate,
+		SkipTLSVerify:     p.SkipTLSVerify,
 		Status:            p.Status,
 		ErrorKey:          p.ErrorKey,
 		Metrics:           p.Metrics,
