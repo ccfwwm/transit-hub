@@ -779,7 +779,14 @@ const dispatchButtonClass = (channel: ChannelMonitorChannel): string => (
               </tr>
             </thead>
             <tbody class="divide-y divide-border/40">
-              <tr v-for="channel in filteredChannels" :key="channel.connectionId" class="hover:bg-surface-elevated/60">
+              <tr
+                v-for="channel in filteredChannels"
+                :key="channel.connectionId"
+                :class="[
+                  'hover:bg-surface-elevated/60',
+                  channel.takeoverAvailable ? 'bg-amber-500/[0.04]' : ''
+                ]"
+              >
                 <td class="px-3 py-3 align-top">
                   <button type="button" class="mt-1 text-muted-foreground hover:text-primary" @click="toggleSelect(channel.ruleId)">
                     <CheckSquare2 v-if="selectedRuleIds.includes(channel.ruleId)" class="h-4 w-4 text-primary" />
@@ -810,20 +817,6 @@ const dispatchButtonClass = (channel: ChannelMonitorChannel): string => (
                       </div>
                       <div v-if="channel.schedulableConflict || channel.priorityConflict" class="mt-1 text-xs text-amber-700 dark:text-amber-300">
                         {{ t('admin.channelMonitor.flags.manualOverrideHelp') }}
-                        <Button
-                          v-if="channel.takeoverAvailable"
-                          type="button"
-                          variant="secondary"
-                          size="sm"
-                          class="mt-2 h-7 gap-1 !border-amber-500/30 !bg-amber-500/10 px-2 text-xs !text-amber-700 hover:!bg-amber-500/15 dark:!text-amber-300"
-                          :disabled="isChannelBusy(channel) || !channel.supported"
-                          :title="t('admin.channelMonitor.actions.syncTakeover')"
-                          @click="syncAndTakeOverChannel(channel)"
-                        >
-                          <Loader2 v-if="isActionActive(channelActionKey(channel, 'takeover'))" class="h-3 w-3 animate-spin" />
-                          <RefreshCw v-else class="h-3 w-3" />
-                          {{ t('admin.channelMonitor.actions.syncTakeoverShort') }}
-                        </Button>
                       </div>
                     </div>
 
@@ -930,6 +923,20 @@ const dispatchButtonClass = (channel: ChannelMonitorChannel): string => (
                 </td>
                 <td class="px-3 py-3 align-top">
                   <div class="flex max-w-[210px] flex-wrap justify-end gap-1">
+                    <Button
+                      v-if="channel.takeoverAvailable"
+                      type="button"
+                      variant="secondary"
+                      size="sm"
+                      class="h-8 gap-1 !border-amber-500/40 !bg-amber-500/15 px-2 text-xs font-semibold !text-amber-700 hover:!bg-amber-500/25 dark:!text-amber-300"
+                      :disabled="isChannelBusy(channel) || !channel.supported"
+                      :title="t('admin.channelMonitor.actions.syncTakeover')"
+                      @click="syncAndTakeOverChannel(channel)"
+                    >
+                      <Loader2 v-if="isActionActive(channelActionKey(channel, 'takeover'))" class="h-3.5 w-3.5 animate-spin" />
+                      <RefreshCw v-else class="h-3.5 w-3.5" />
+                      {{ t('admin.channelMonitor.actions.syncTakeoverShort') }}
+                    </Button>
                     <Button type="button" variant="secondary" size="sm" class="h-8 gap-1 !border-blue-500/30 !bg-blue-500/10 px-2 text-xs !text-blue-700 hover:!bg-blue-500/15 dark:!text-blue-300" :disabled="isChannelBusy(channel) || !channel.supported" :title="t('admin.channelMonitor.actions.run')" @click="runAction(() => runChannelMonitorRule(channel.ruleId), { actionKey: channelActionKey(channel, 'run') })">
                       <RefreshCw :class="['h-3.5 w-3.5', isActionActive(channelActionKey(channel, 'run')) ? 'animate-spin' : '']" />
                       {{ t('admin.channelMonitor.actions.runShort') }}
