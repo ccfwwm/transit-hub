@@ -200,6 +200,25 @@ func TestRunRuleUsesSessionProviderSession(t *testing.T) {
 	}
 }
 
+func TestRunRuleSkipsMissingRemoteAccount(t *testing.T) {
+	ctx := context.Background()
+	repo := newFakeRepository()
+	service := newTestService(repo)
+	service.platform.accounts = []AdminAccountStatus{}
+	rule := repo.mustRule("conn-1")
+
+	result, err := service.RunRule(ctx, rule.ID, "scheduled")
+	if err != nil {
+		t.Fatalf("RunRule returned error: %v", err)
+	}
+	if result.Status != StatusUnsupported || result.Success {
+		t.Fatalf("expected missing remote account to be unsupported, got %+v", result)
+	}
+	if len(service.platform.testSessions) != 0 || len(service.platform.schedulableCalls) != 0 {
+		t.Fatalf("missing remote account must not be tested or mutated")
+	}
+}
+
 func TestRunRuleUsesDefaultOpenAITestModel(t *testing.T) {
 	ctx := context.Background()
 	repo := newFakeRepository()
@@ -1409,7 +1428,7 @@ type testService struct {
 }
 
 func newTestService(repo *fakeRepository) *testService {
-	platform := &fakeMonitorPlatform{}
+	platform := &fakeMonitorPlatform{accounts: []AdminAccountStatus{{ID: "123", Name: "A-【site】-GPT-4o", Schedulable: boolPtr(true)}}}
 	conn := my_sites.RealConnection{
 		ID:                "conn-1",
 		UpstreamSiteID:    "site-1",

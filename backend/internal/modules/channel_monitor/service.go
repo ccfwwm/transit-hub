@@ -904,6 +904,9 @@ func (s *Service) runDue(ctx context.Context, limit, workers int) int {
 		if _, exists := workspaceStates[key]; !exists {
 			var workspace workspaceStateResult
 			workspace.state, workspace.err = s.workspaceState(ctx, rule.UserID, rule.AdminAccountID)
+			if workspace.err == nil && workspace.state != nil && workspace.state.Session.Platform == upstream.PlatformSub2API {
+				workspace.accounts, workspace.accountsErr = s.platform.ListSub2APIAdminAccounts(workspace.state.Session)
+			}
 			workspaceStates[key] = workspace
 		}
 	}
@@ -982,8 +985,10 @@ func (s *Service) StopScheduler() {
 }
 
 type workspaceStateResult struct {
-	state *my_sites.State
-	err   error
+	state       *my_sites.State
+	err         error
+	accounts    []AdminAccountStatus
+	accountsErr error
 }
 
 func workspaceKey(userID, adminAccountID string) string {
@@ -1054,6 +1059,31 @@ func (s *Service) runRuleWithWorkspace(ctx context.Context, rule Rule, reason st
 	if state == nil || state.Session.Platform != upstream.PlatformSub2API {
 		rule.ConsecutiveFailures = 0
 		return finish(StatusUnsupported, false, "当前 admin 平台暂不支持主动监控", nil, "")
+	}
+	if strings.TrimSpace(conn.AdminAccountID) == "" {
+		rule.ConsecutiveFailures = 0
+		return finish(StatusUnsupported, false, "真实对接记录缺少远端 admin 账号，已跳过主动监控", nil, "")
+	}
+	var accounts []AdminAccountStatus
+	var accountErr error
+	if workspace != nil {
+		accounts, accountErr = workspace.accounts, workspace.accountsErr
+	} else {
+		accounts, accountErr = s.platform.ListSub2APIAdminAccounts(state.Session)
+	}
+	if accountErr != nil {
+		return finish(StatusUnknown, true, "无法确认远端 admin 账号，已跳过本次检测："+accountErr.Error(), nil, "")
+	}
+	accountFound := false
+	for _, account := range accounts {
+		if strings.TrimSpace(account.ID) == strings.TrimSpace(conn.AdminAccountID) {
+			accountFound = account.Schedulable != nil
+			break
+		}
+	}
+	if !accountFound {
+		rule.ConsecutiveFailures = 0
+		return finish(StatusUnsupported, false, "远端 admin 账号不存在或已删除，已跳过主动监控", nil, "")
 	}
 	testModelConfig, err := s.ensureTestModelConfig(ctx, rule.UserID, rule.AdminAccountID)
 	if err != nil {
@@ -1252,7 +1282,7 @@ func (s *Service) channelStatus(ctx context.Context, conn my_sites.RealConnectio
 		TestModelID:          strings.TrimSpace(rule.TestModelID),
 		EffectiveTestModelID: effectiveTestModelID,
 		TestModelSource:      testModelSource,
-		Supported:            state != nil && state.Session.Platform == upstream.PlatformSub2API,
+		Supported:            state != nil && state.Session.Platform == upstream.PlatformSub2API && strings.TrimSpace(conn.AdminAccountID) != "",
 		RecentResults:        []Result{},
 	}
 	if account, ok := accountsByID[strings.TrimSpace(conn.AdminAccountID)]; ok {
@@ -1260,6 +1290,8 @@ func (s *Service) channelStatus(ctx context.Context, conn my_sites.RealConnectio
 		if strings.TrimSpace(row.AdminAccountName) == "" {
 			row.AdminAccountName = account.Name
 		}
+	} else {
+		row.Supported = false
 	}
 	if rule.DesiredSchedulable != nil {
 		row.Schedulable = rule.DesiredSchedulable
@@ -1374,8 +1406,14 @@ func (s *Service) buildRatePlan(ctx context.Context, connections []my_sites.Real
 	rows := make([]RatePlanRow, 0, len(connections))
 	for _, conn := range connections {
 		monitorRule := rulesByConnection[conn.ID]
-		account := accountsByID[strings.TrimSpace(conn.AdminAccountID)]
+		account, accountExists := accountsByID[strings.TrimSpace(conn.AdminAccountID)]
 		row := s.buildRatePlanRow(ctx, conn, monitorRule, state, account, rateRule)
+		if !accountExists {
+			row.Supported = false
+			row.RateGateStatus = RateGateSkipped
+			row.SuggestedSchedulable = false
+			row.RateGateMessage = "远端账号不存在或已删除，已跳过自动调度"
+		}
 		if monitorRule.AutoEnableBlocked && row.SuggestedSchedulable {
 			row.SuggestedSchedulable = false
 			row.RateGateMessage = "已同步接管，自动开启调度保持关闭"
@@ -1400,7 +1438,7 @@ func (s *Service) buildRatePlanRow(ctx context.Context, conn my_sites.RealConnec
 		AccountPriority:       account.Priority,
 		CurrentPriority:       account.Priority,
 		CurrentSchedulable:    account.Schedulable,
-		Supported:             state != nil && state.Session.Platform == upstream.PlatformSub2API && strings.TrimSpace(conn.AdminAccountID) != "",
+		Supported:             state != nil && state.Session.Platform == upstream.PlatformSub2API && strings.TrimSpace(conn.AdminAccountID) != "" && account.Schedulable != nil,
 		SuggestedSchedulable:  true,
 	}
 	if rule.DesiredSchedulable != nil {
