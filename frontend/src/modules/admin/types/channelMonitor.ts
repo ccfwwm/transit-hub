@@ -40,6 +40,7 @@ export interface ChannelMonitorChannel {
   schedulable: boolean | null
   schedulableManaged: boolean
   schedulableConflict: boolean
+  autoEnableBlocked: boolean
   priorityManaged: boolean
   priorityConflict: boolean
   takeoverAvailable: boolean

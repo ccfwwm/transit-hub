@@ -95,7 +95,7 @@ const isTestModelEditorOpen = ref(false)
 const disconnectingChannel = ref<ChannelMonitorChannel | null>(null)
 const disconnectMode = ref<RealDisconnectRequest['mode']>('unlink')
 const disconnectError = ref('')
-const editForm = ref({ enabled: true, checkIntervalMinutes: 10, failureThreshold: 3, balanceThreshold: 1, useDefaultTestModel: true, testModelId: '' })
+const editForm = ref({ enabled: true, checkIntervalMinutes: 2, failureThreshold: 2, balanceThreshold: 1, useDefaultTestModel: true, testModelId: '' })
 const rateRuleForm = ref({ enabled: false, autoApplyOnCheck: true, updatePriority: true, stopWhenMissingRate: true })
 const testModelForm = ref({ openaiModelId: 'gpt-5.4', anthropicModelId: 'claude-sonnet-4-6', grokModelId: 'grok-4.5', balanceRefreshIntervalMinutes: 5 })
 const priorityDrafts = ref<Record<string, number | null>>({})
@@ -344,8 +344,8 @@ const openBulkEditor = (scope: BulkEditorScope = 'selected') => {
   isBulkEditorOpen.value = true
   editForm.value = {
     enabled: first?.enabled ?? true,
-    checkIntervalMinutes: first?.checkIntervalMinutes ?? 10,
-    failureThreshold: first?.failureThreshold ?? 3,
+    checkIntervalMinutes: first?.checkIntervalMinutes ?? 2,
+    failureThreshold: first?.failureThreshold ?? 2,
     balanceThreshold: first?.balanceThreshold ?? 1,
     useDefaultTestModel: true,
     testModelId: '',
@@ -807,6 +807,9 @@ const dispatchButtonClass = (channel: ChannelMonitorChannel): string => (
                         </span>
                         <span v-if="channel.schedulableManaged || channel.priorityManaged" :class="['rounded-md border px-2 py-0.5 text-[11px] font-medium', channel.schedulableConflict || channel.priorityConflict ? 'border-amber-500/30 bg-amber-500/10 text-amber-700 dark:text-amber-300' : 'border-blue-500/30 bg-blue-500/10 text-blue-700 dark:text-blue-300']">
                           {{ channel.schedulableConflict || channel.priorityConflict ? t('admin.channelMonitor.flags.manualOverride') : t('admin.channelMonitor.flags.autoManaged') }}
+                        </span>
+                        <span v-if="channel.autoEnableBlocked" class="rounded-md border border-zinc-500/30 bg-zinc-500/10 px-2 py-0.5 text-[11px] font-medium text-zinc-700 dark:text-zinc-300" :title="t('admin.channelMonitor.flags.autoEnableBlockedHelp')">
+                          {{ t('admin.channelMonitor.flags.autoEnableBlocked') }}
                         </span>
                         <span :class="['rounded-md border px-2 py-0.5 text-[11px] font-medium', rateGateClass(channel.rateGateStatus)]">
                           {{ rateGateLabel(channel.rateGateStatus) }}

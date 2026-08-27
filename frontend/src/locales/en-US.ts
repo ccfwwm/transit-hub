@@ -155,7 +155,9 @@ export default {
         dispatchOff: 'Dispatch off',
         autoManaged: 'Auto managed',
         manualOverride: 'Manual override',
-        manualOverrideHelp: 'The remote value was changed manually, so automatic rules will not overwrite it. Sync the current state to take over again.'
+        manualOverrideHelp: 'The remote value was changed manually, so automatic rules will not overwrite it. Sync the current state to take over again.',
+        autoEnableBlocked: 'Auto enable blocked',
+        autoEnableBlockedHelp: 'Checks and rate rules may still disable dispatch, but cannot enable it until dispatch is enabled manually.'
       },
       groups: {
         title: 'Group Overview',
@@ -310,7 +312,7 @@ export default {
         enableDispatchShort: 'Dispatch on',
         disableDispatch: 'Disable group dispatch',
         disableDispatchShort: 'Dispatch off',
-        syncTakeover: 'Sync remote state and take over automatic rules',
+        syncTakeover: 'Take over, disable dispatch, and block automatic enabling',
         syncTakeoverShort: 'Sync & take over',
         cancel: 'Cancel',
         save: 'Save'

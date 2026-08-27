@@ -155,7 +155,9 @@ export default {
         dispatchOff: '调度停',
         autoManaged: '自动管理',
         manualOverride: '人工覆盖',
-        manualOverrideHelp: '远端状态已被手动修改，自动规则不会再次覆盖。同步当前状态后可重新接管。'
+        manualOverrideHelp: '远端状态已被手动修改，自动规则不会再次覆盖。同步当前状态后可重新接管。',
+        autoEnableBlocked: '禁止自动开启',
+        autoEnableBlockedHelp: '检测恢复和倍率规则仍可自动停用，但不会自动开启调度；手动点击启调度后解除。'
       },
       groups: {
         title: '分组概览',
@@ -310,7 +312,7 @@ export default {
         enableDispatchShort: '启调度',
         disableDispatch: '停用分组调度',
         disableDispatchShort: '停调度',
-        syncTakeover: '同步远端状态并接管自动规则',
+        syncTakeover: '同步接管并关闭调度，禁止规则自动开启',
         syncTakeoverShort: '同步接管',
         cancel: '取消',
         save: '保存'

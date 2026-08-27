@@ -46,6 +46,19 @@ func TestSummaryCreatesDefaultRulesAndGroupCounts(t *testing.T) {
 	}
 }
 
+func TestDefaultRuleUsesProductionSafetyThresholds(t *testing.T) {
+	rule := DefaultRule("user-1", "admin-1", "conn-1")
+	if rule.CheckIntervalMinutes != 2 {
+		t.Fatalf("expected 2 minute default interval, got %d", rule.CheckIntervalMinutes)
+	}
+	if rule.FailureThreshold != 2 {
+		t.Fatalf("expected 2 failure default threshold, got %d", rule.FailureThreshold)
+	}
+	if rule.BalanceThreshold != 1 {
+		t.Fatalf("expected 1 yuan default balance threshold, got %.2f", rule.BalanceThreshold)
+	}
+}
+
 func TestSummaryRefreshesAllAdminGroupsAndDropsDeletedGroupFallback(t *testing.T) {
 	ctx := context.Background()
 	repo := newFakeRepository()
@@ -538,6 +551,28 @@ func TestRunRuleRestoresAutoPausedHealthyChannel(t *testing.T) {
 	}
 }
 
+func TestRunRuleDoesNotRestoreAutoPausedTakeoverProtectedChannel(t *testing.T) {
+	ctx := context.Background()
+	repo := newFakeRepository()
+	service := newTestService(repo)
+	rule := repo.mustRule("conn-1")
+	rule.LastStatus = StatusAutoPaused
+	rule.AutoEnableBlocked = true
+	rule.DesiredSchedulable = boolPtr(false)
+	repo.rules[rule.ID] = rule
+
+	result, err := service.RunRule(ctx, rule.ID, "scheduled")
+	if err != nil {
+		t.Fatalf("RunRule returned error: %v", err)
+	}
+	if result.Status != StatusHealthy {
+		t.Fatalf("expected healthy check result, got %+v", result)
+	}
+	if len(service.platform.schedulableCalls) != 0 {
+		t.Fatalf("takeover protection allowed automatic dispatch: %+v", service.platform.schedulableCalls)
+	}
+}
+
 func TestManualPausedRuleDoesNotAutoRestore(t *testing.T) {
 	ctx := context.Background()
 	repo := newFakeRepository()
@@ -643,6 +678,9 @@ func TestSetRuleSchedulableOnlyControlsRemoteDispatch(t *testing.T) {
 	if updated.DesiredSchedulable == nil || *updated.DesiredSchedulable {
 		t.Fatalf("expected desired schedulable false to be stored, got %+v", updated.DesiredSchedulable)
 	}
+	if !updated.AutoEnableBlocked {
+		t.Fatalf("manual dispatch stop must block automatic enabling, got %+v", updated)
+	}
 	if got := service.platform.schedulableCalls; len(got) != 1 || got[0].AccountID != "123" || got[0].Schedulable {
 		t.Fatalf("expected one remote disable call for account 123, got %+v", got)
 	}
@@ -655,6 +693,8 @@ func TestSetRuleSchedulableSummaryReflectsRequestedState(t *testing.T) {
 	remoteDisabled := false
 	service.platform.accounts = []AdminAccountStatus{{ID: "123", Name: "A-【site】-GPT-4o", Schedulable: &remoteDisabled}}
 	rule := repo.mustRule("conn-1")
+	rule.AutoEnableBlocked = true
+	repo.rules[rule.ID] = rule
 
 	if err := service.SetRuleSchedulable(ctx, "user-1", rule.ID, true); err != nil {
 		t.Fatalf("SetRuleSchedulable returned error: %v", err)
@@ -670,6 +710,9 @@ func TestSetRuleSchedulableSummaryReflectsRequestedState(t *testing.T) {
 	}
 	if summary.Stats.DispatchPaused != 0 || summary.Stats.Available != 1 {
 		t.Fatalf("expected enabled dispatch to be available, got %+v", summary.Stats)
+	}
+	if repo.mustRule(rule.ID).AutoEnableBlocked {
+		t.Fatalf("manual dispatch enable must release automatic enable protection")
 	}
 }
 
@@ -938,7 +981,7 @@ func TestApplyRateRuleKeepsManualOverrideAfterRemoteValueMatchesPreviousWrite(t 
 	}
 }
 
-func TestSyncAndTakeOverRuleAdoptsCurrentRemoteState(t *testing.T) {
+func TestSyncAndTakeOverRuleDisablesDispatchBeforeTakingOver(t *testing.T) {
 	ctx := context.Background()
 	repo := newFakeRepository()
 	service := newTestService(repo)
@@ -960,17 +1003,43 @@ func TestSyncAndTakeOverRuleAdoptsCurrentRemoteState(t *testing.T) {
 	if err != nil {
 		t.Fatalf("SyncAndTakeOverRule returned error: %v", err)
 	}
-	if len(service.platform.schedulableCalls) != 0 || len(service.platform.priorityCalls) != 0 {
-		t.Fatalf("takeover must not write a new remote value, got schedulable=%+v priority=%+v", service.platform.schedulableCalls, service.platform.priorityCalls)
+	if got := service.platform.schedulableCalls; len(got) != 1 || got[0].AccountID != "123" || got[0].Schedulable {
+		t.Fatalf("takeover must disable remote dispatch, got %+v", got)
 	}
-	if !updated.SchedulableManaged || updated.SchedulableConflict || updated.LastAppliedSchedulable == nil || !*updated.LastAppliedSchedulable {
-		t.Fatalf("expected current schedulable value to become managed baseline, got %+v", updated)
+	if len(service.platform.priorityCalls) != 0 {
+		t.Fatalf("takeover must not write a new remote priority, got %+v", service.platform.priorityCalls)
+	}
+	if !updated.SchedulableManaged || updated.SchedulableConflict || updated.LastAppliedSchedulable == nil || *updated.LastAppliedSchedulable {
+		t.Fatalf("expected disabled schedulable value to become managed baseline, got %+v", updated)
 	}
 	if !updated.PriorityManaged || updated.PriorityConflict || updated.LastAppliedPriority == nil || *updated.LastAppliedPriority != 7 {
 		t.Fatalf("expected current priority to become managed baseline, got %+v", updated)
 	}
-	if updated.DesiredSchedulable == nil || !*updated.DesiredSchedulable {
-		t.Fatalf("expected desired schedulable value to match remote state, got %+v", updated.DesiredSchedulable)
+	if updated.DesiredSchedulable == nil || *updated.DesiredSchedulable || !updated.AutoEnableBlocked {
+		t.Fatalf("expected takeover to keep automatic dispatch disabled, got %+v", updated)
+	}
+}
+
+func TestApplyRateRuleDoesNotEnableTakeoverProtectedChannel(t *testing.T) {
+	ctx := context.Background()
+	repo := newFakeRepository()
+	service := newTestService(repo)
+	service.state().OwnGroups = []my_sites.GroupOption{{Name: "PLUS", Multiplier: 1.2}}
+	service.upstreams.site.Metrics.Groups = []upstream.GroupInfo{{ID: "g-upstream", Name: "GPT-4o", Multiplier: floatPtr(0.5)}}
+	rule := repo.mustRule("conn-1")
+	rule.AutoEnableBlocked = true
+	rule.DesiredSchedulable = boolPtr(false)
+	repo.rules[rule.ID] = rule
+	service.platform.accounts = []AdminAccountStatus{{ID: "123", Name: "A-【site】-GPT-4o", Schedulable: boolPtr(false), Priority: intPtr(9)}}
+
+	if _, err := service.UpdateRateRule(ctx, "user-1", UpdateRateRuleRequest{Enabled: boolPtr(true), AutoApplyOnCheck: boolPtr(true)}); err != nil {
+		t.Fatalf("UpdateRateRule returned error: %v", err)
+	}
+	if _, err := service.ApplyRateRule(ctx, "user-1", "scheduled"); err != nil {
+		t.Fatalf("ApplyRateRule returned error: %v", err)
+	}
+	if len(service.platform.schedulableCalls) != 0 {
+		t.Fatalf("rate rule enabled takeover-protected dispatch: %+v", service.platform.schedulableCalls)
 	}
 }
 

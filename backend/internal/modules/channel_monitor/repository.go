@@ -28,8 +28,8 @@ func (r *Repository) EnsureSchema(ctx context.Context) error {
 			admin_account_id text NOT NULL,
 			connection_id text NOT NULL,
 			enabled boolean NOT NULL DEFAULT true,
-			check_interval_minutes integer NOT NULL DEFAULT 10,
-			failure_threshold integer NOT NULL DEFAULT 3,
+			check_interval_minutes integer NOT NULL DEFAULT 2,
+			failure_threshold integer NOT NULL DEFAULT 2,
 			balance_threshold double precision NOT NULL DEFAULT 1,
 			test_model_id text NULL,
 			desired_schedulable boolean NULL,
@@ -37,6 +37,7 @@ func (r *Repository) EnsureSchema(ctx context.Context) error {
 			original_schedulable boolean NULL,
 			last_applied_schedulable boolean NULL,
 			schedulable_conflict boolean NOT NULL DEFAULT false,
+			auto_enable_blocked boolean NOT NULL DEFAULT false,
 			priority_managed boolean NOT NULL DEFAULT false,
 			original_priority integer NULL,
 			last_applied_priority integer NULL,
@@ -69,6 +70,15 @@ func (r *Repository) EnsureSchema(ctx context.Context) error {
 		ADD COLUMN IF NOT EXISTS original_priority integer NULL,
 		ADD COLUMN IF NOT EXISTS last_applied_priority integer NULL,
 		ADD COLUMN IF NOT EXISTS priority_conflict boolean NOT NULL DEFAULT false
+	`); err != nil {
+		return err
+	}
+	if _, err := r.db.Exec(ctx, `
+		ALTER TABLE channel_monitor_rules
+		ADD COLUMN IF NOT EXISTS auto_enable_blocked boolean NOT NULL DEFAULT false,
+		ALTER COLUMN check_interval_minutes SET DEFAULT 2,
+		ALTER COLUMN failure_threshold SET DEFAULT 2,
+		ALTER COLUMN balance_threshold SET DEFAULT 1
 	`); err != nil {
 		return err
 	}
@@ -225,7 +235,7 @@ func (r *Repository) ListRulesForWorkspace(ctx context.Context, userID, adminAcc
 	rows, err := r.db.Query(ctx, `
 		SELECT id, user_id, admin_account_id, connection_id, enabled, check_interval_minutes,
 			failure_threshold, balance_threshold, desired_schedulable, schedulable_managed, original_schedulable,
-			last_applied_schedulable, schedulable_conflict, priority_managed, original_priority,
+			last_applied_schedulable, schedulable_conflict, auto_enable_blocked, priority_managed, original_priority,
 			last_applied_priority, priority_conflict, manual_paused, consecutive_failures,
 			last_status, last_message, last_latency_ms, last_checked_at, next_check_at, created_at, updated_at,
 			COALESCE(test_model_id, '') AS test_model_id
@@ -243,7 +253,7 @@ func (r *Repository) GetRule(ctx context.Context, id string) (*Rule, error) {
 	rows, err := r.db.Query(ctx, `
 		SELECT id, user_id, admin_account_id, connection_id, enabled, check_interval_minutes,
 			failure_threshold, balance_threshold, desired_schedulable, schedulable_managed, original_schedulable,
-			last_applied_schedulable, schedulable_conflict, priority_managed, original_priority,
+			last_applied_schedulable, schedulable_conflict, auto_enable_blocked, priority_managed, original_priority,
 			last_applied_priority, priority_conflict, manual_paused, consecutive_failures,
 			last_status, last_message, last_latency_ms, last_checked_at, next_check_at, created_at, updated_at,
 			COALESCE(test_model_id, '') AS test_model_id
@@ -275,22 +285,23 @@ func (r *Repository) UpdateRule(ctx context.Context, rule Rule) error {
 			original_schedulable = $8,
 			last_applied_schedulable = $9,
 			schedulable_conflict = $10,
-			priority_managed = $11,
-			original_priority = $12,
-			last_applied_priority = $13,
-			priority_conflict = $14,
-			manual_paused = $15,
-			consecutive_failures = $16,
-			last_status = $17,
-			last_message = $18,
-			last_latency_ms = $19,
-			last_checked_at = $20,
-			next_check_at = $21,
+			auto_enable_blocked = $11,
+			priority_managed = $12,
+			original_priority = $13,
+			last_applied_priority = $14,
+			priority_conflict = $15,
+			manual_paused = $16,
+			consecutive_failures = $17,
+			last_status = $18,
+			last_message = $19,
+			last_latency_ms = $20,
+			last_checked_at = $21,
+			next_check_at = $22,
 			updated_at = now(),
-			test_model_id = NULLIF($22, '')
+			test_model_id = NULLIF($23, '')
 		WHERE id = $1
 	`, rule.ID, rule.Enabled, rule.CheckIntervalMinutes, rule.FailureThreshold, rule.BalanceThreshold,
-		rule.DesiredSchedulable, rule.SchedulableManaged, rule.OriginalSchedulable, rule.LastAppliedSchedulable, rule.SchedulableConflict,
+		rule.DesiredSchedulable, rule.SchedulableManaged, rule.OriginalSchedulable, rule.LastAppliedSchedulable, rule.SchedulableConflict, rule.AutoEnableBlocked,
 		rule.PriorityManaged, rule.OriginalPriority, rule.LastAppliedPriority, rule.PriorityConflict,
 		rule.ManualPaused, rule.ConsecutiveFailures, rule.LastStatus, rule.LastMessage, rule.LastLatencyMS,
 		rule.LastCheckedAt, rule.NextCheckAt, strings.TrimSpace(rule.TestModelID))
@@ -328,7 +339,7 @@ func (r *Repository) ListDueRules(ctx context.Context, limit int) ([]Rule, error
 	rows, err := r.db.Query(ctx, `
 		SELECT id, user_id, admin_account_id, connection_id, enabled, check_interval_minutes,
 			failure_threshold, balance_threshold, desired_schedulable, schedulable_managed, original_schedulable,
-			last_applied_schedulable, schedulable_conflict, priority_managed, original_priority,
+			last_applied_schedulable, schedulable_conflict, auto_enable_blocked, priority_managed, original_priority,
 			last_applied_priority, priority_conflict, manual_paused, consecutive_failures,
 			last_status, last_message, last_latency_ms, last_checked_at, next_check_at, created_at, updated_at,
 			COALESCE(test_model_id, '') AS test_model_id
@@ -480,7 +491,7 @@ func scanRules(rows pgx.Rows) ([]Rule, error) {
 		if err := rows.Scan(
 			&rule.ID, &rule.UserID, &rule.AdminAccountID, &rule.ConnectionID, &rule.Enabled,
 			&rule.CheckIntervalMinutes, &rule.FailureThreshold, &rule.BalanceThreshold, &rule.DesiredSchedulable,
-			&rule.SchedulableManaged, &rule.OriginalSchedulable, &rule.LastAppliedSchedulable, &rule.SchedulableConflict,
+			&rule.SchedulableManaged, &rule.OriginalSchedulable, &rule.LastAppliedSchedulable, &rule.SchedulableConflict, &rule.AutoEnableBlocked,
 			&rule.PriorityManaged, &rule.OriginalPriority, &rule.LastAppliedPriority, &rule.PriorityConflict,
 			&rule.ManualPaused, &rule.ConsecutiveFailures, &rule.LastStatus, &rule.LastMessage,
 			&rule.LastLatencyMS, &rule.LastCheckedAt, &rule.NextCheckAt, &rule.CreatedAt, &rule.UpdatedAt, &rule.TestModelID,

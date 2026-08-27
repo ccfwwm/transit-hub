@@ -3,8 +3,8 @@ package channel_monitor
 import "time"
 
 const (
-	DefaultCheckIntervalMinutes  = 10
-	DefaultFailureThreshold      = 3
+	DefaultCheckIntervalMinutes  = 2
+	DefaultFailureThreshold      = 2
 	DefaultBalanceThreshold      = 1.0
 	DefaultOpenAITestModel       = "gpt-5.4"
 	DefaultAnthropicTestModel    = "claude-sonnet-4-6"
@@ -44,6 +44,7 @@ type Rule struct {
 	OriginalSchedulable    *bool      `json:"originalSchedulable"`
 	LastAppliedSchedulable *bool      `json:"lastAppliedSchedulable"`
 	SchedulableConflict    bool       `json:"schedulableConflict"`
+	AutoEnableBlocked      bool       `json:"autoEnableBlocked"`
 	PriorityManaged        bool       `json:"priorityManaged"`
 	OriginalPriority       *int       `json:"originalPriority"`
 	LastAppliedPriority    *int       `json:"lastAppliedPriority"`
@@ -135,6 +136,7 @@ type ChannelStatus struct {
 	Schedulable                 *bool      `json:"schedulable"`
 	SchedulableManaged          bool       `json:"schedulableManaged"`
 	SchedulableConflict         bool       `json:"schedulableConflict"`
+	AutoEnableBlocked           bool       `json:"autoEnableBlocked"`
 	PriorityManaged             bool       `json:"priorityManaged"`
 	PriorityConflict            bool       `json:"priorityConflict"`
 	TakeoverAvailable           bool       `json:"takeoverAvailable"`

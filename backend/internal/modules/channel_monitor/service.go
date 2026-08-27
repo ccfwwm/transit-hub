@@ -9,7 +9,10 @@ import (
 	"math"
 	"sort"
 	"strings"
+	"sync"
 	"time"
+
+	"golang.org/x/sync/singleflight"
 
 	"transithub/backend/internal/modules/my_sites"
 	"transithub/backend/internal/modules/upstream"
@@ -67,15 +70,16 @@ type AdminAccountResolver interface {
 }
 
 type Service struct {
-	store         Store
-	conns         ConnectionStore
-	states        StateStore
-	sessions      SessionProvider
-	groupStates   GroupStateProvider
-	upstreams     UpstreamLookup
-	platform      MonitorPlatform
-	accounts      AdminAccountResolver
-	stopScheduler chan struct{}
+	store            Store
+	conns            ConnectionStore
+	states           StateStore
+	sessions         SessionProvider
+	groupStates      GroupStateProvider
+	upstreams        UpstreamLookup
+	platform         MonitorPlatform
+	accounts         AdminAccountResolver
+	stopScheduler    chan struct{}
+	balanceRefreshes singleflight.Group
 }
 
 func NewService(store Store, conns ConnectionStore, states StateStore, upstreams UpstreamLookup, platform MonitorPlatform, accounts AdminAccountResolver) *Service {
@@ -277,6 +281,7 @@ func (s *Service) PauseRule(ctx context.Context, userID, ruleID string) (Rule, e
 	rule.OriginalSchedulable = nil
 	rule.LastAppliedSchedulable = nil
 	rule.SchedulableConflict = false
+	rule.AutoEnableBlocked = true
 	rule.LastStatus = StatusManualPaused
 	rule.LastMessage = "手动停止"
 	rule.LastCheckedAt = &now
@@ -316,6 +321,7 @@ func (s *Service) ResumeRule(ctx context.Context, userID, ruleID string) (Result
 	rule.OriginalSchedulable = nil
 	rule.LastAppliedSchedulable = nil
 	rule.SchedulableConflict = false
+	rule.AutoEnableBlocked = false
 	rule.LastStatus = StatusManualPaused
 	rule.LastMessage = "手动启动检测"
 	if err := s.store.UpdateRule(ctx, rule); err != nil {
@@ -409,6 +415,7 @@ func (s *Service) SetRuleSchedulable(ctx context.Context, userID, ruleID string,
 	rule.OriginalSchedulable = nil
 	rule.LastAppliedSchedulable = nil
 	rule.SchedulableConflict = false
+	rule.AutoEnableBlocked = !schedulable
 	rule.LastMessage = "手动停用分组调度"
 	if schedulable {
 		rule.LastMessage = "手动开启分组调度"
@@ -485,16 +492,20 @@ func (s *Service) SyncAndTakeOverRule(ctx context.Context, userID, ruleID string
 	if account == nil {
 		return Rule{}, requestError("admin.channelMonitor.errors.accountNotFound")
 	}
-	if rule.SchedulableManaged || rule.SchedulableConflict {
-		if account.Schedulable == nil {
-			return Rule{}, requestError("admin.channelMonitor.errors.stateUnavailable")
-		}
-		rule.SchedulableManaged = true
-		rule.SchedulableConflict = false
-		rule.OriginalSchedulable = cloneBool(account.Schedulable)
-		rule.LastAppliedSchedulable = cloneBool(account.Schedulable)
-		rule.DesiredSchedulable = cloneBool(account.Schedulable)
+	if account.Schedulable == nil {
+		return Rule{}, requestError("admin.channelMonitor.errors.stateUnavailable")
 	}
+	if *account.Schedulable {
+		if err := s.platform.SetSub2APIAdminAccountSchedulable(state.Session, conn.AdminAccountID, false); err != nil {
+			return Rule{}, err
+		}
+	}
+	rule.SchedulableManaged = true
+	rule.SchedulableConflict = false
+	rule.OriginalSchedulable = cloneBool(account.Schedulable)
+	rule.LastAppliedSchedulable = schedulablePtr(false)
+	rule.DesiredSchedulable = schedulablePtr(false)
+	rule.AutoEnableBlocked = true
 	if rule.PriorityManaged || rule.PriorityConflict {
 		if account.Priority == nil {
 			return Rule{}, requestError("admin.channelMonitor.errors.stateUnavailable")
@@ -504,7 +515,7 @@ func (s *Service) SyncAndTakeOverRule(ctx context.Context, userID, ruleID string
 		rule.OriginalPriority = cloneInt(account.Priority)
 		rule.LastAppliedPriority = cloneInt(account.Priority)
 	}
-	rule.LastMessage = "已同步远端状态并重新接管自动规则"
+	rule.LastMessage = "已同步远端状态并重新接管；自动开启调度保持关闭"
 	now := time.Now()
 	rule.LastCheckedAt = &now
 	rule.UpdatedAt = now
@@ -741,6 +752,11 @@ func (s *Service) applyRateRuleForWorkspace(ctx context.Context, userID, adminAc
 		target := row.SuggestedSchedulable
 		current := row.CurrentSchedulable
 		monitorRule, hasMonitorRule := rulesByConnection[row.ConnectionID]
+		if hasMonitorRule && monitorRule.AutoEnableBlocked && target {
+			target = false
+			row.SuggestedSchedulable = false
+			row.RateGateMessage = "已同步接管，自动开启调度保持关闭"
+		}
 		if hasMonitorRule && monitorRule.SchedulableConflict {
 			// A direct change in Sub2API always wins until the user explicitly
 			// changes the channel state in TransitHub.
@@ -811,9 +827,14 @@ func (s *Service) applyRateRuleForWorkspace(ctx context.Context, userID, adminAc
 }
 
 func (s *Service) RunDue(ctx context.Context, limit int) int {
+	return s.runDue(ctx, limit, 1)
+}
+
+func (s *Service) runDue(ctx context.Context, limit, workers int) int {
 	if limit <= 0 {
 		limit = 20
 	}
+	workers = clampInt(workers, 1, limit)
 	if err := s.store.EnsureRulesForExistingConnections(ctx); err != nil {
 		log.Printf("[channel-monitor] ensure rules failed: %v", err)
 	}
@@ -822,24 +843,53 @@ func (s *Service) RunDue(ctx context.Context, limit int) int {
 		log.Printf("[channel-monitor] list due rules failed: %v", err)
 		return 0
 	}
-	checked := 0
 	workspaceStates := map[string]workspaceStateResult{}
-	healthyWorkspaces := map[string]Rule{}
 	for _, rule := range rules {
 		key := workspaceKey(rule.UserID, rule.AdminAccountID)
-		workspace, exists := workspaceStates[key]
-		if !exists {
+		if _, exists := workspaceStates[key]; !exists {
+			var workspace workspaceStateResult
 			workspace.state, workspace.err = s.workspaceState(ctx, rule.UserID, rule.AdminAccountID)
 			workspaceStates[key] = workspace
 		}
-		result, err := s.runRuleWithWorkspace(ctx, rule, "scheduled", &workspace)
-		if err != nil {
-			log.Printf("[channel-monitor] run rule failed rule_id=%s err=%v", rule.ID, err)
+	}
+	type dueResult struct {
+		rule   Rule
+		result Result
+		err    error
+	}
+	jobs := make(chan Rule)
+	results := make(chan dueResult, len(rules))
+	var waitGroup sync.WaitGroup
+	for range workers {
+		waitGroup.Add(1)
+		go func() {
+			defer waitGroup.Done()
+			for rule := range jobs {
+				workspace := workspaceStates[workspaceKey(rule.UserID, rule.AdminAccountID)]
+				result, err := s.runRuleWithWorkspace(ctx, rule, "scheduled", &workspace)
+				results <- dueResult{rule: rule, result: result, err: err}
+			}
+		}()
+	}
+	go func() {
+		for _, rule := range rules {
+			jobs <- rule
+		}
+		close(jobs)
+		waitGroup.Wait()
+		close(results)
+	}()
+
+	checked := 0
+	healthyWorkspaces := map[string]Rule{}
+	for outcome := range results {
+		if outcome.err != nil {
+			log.Printf("[channel-monitor] run rule failed rule_id=%s err=%v", outcome.rule.ID, outcome.err)
 			continue
 		}
 		checked++
-		if result.Status == StatusHealthy {
-			healthyWorkspaces[key] = rule
+		if outcome.result.Status == StatusHealthy {
+			healthyWorkspaces[workspaceKey(outcome.rule.UserID, outcome.rule.AdminAccountID)] = outcome.rule
 		}
 	}
 	for _, rule := range healthyWorkspaces {
@@ -863,7 +913,7 @@ func (s *Service) StartScheduler(ctx context.Context) {
 			case <-s.stopScheduler:
 				return
 			case <-ticker.C:
-				s.RunDue(context.Background(), 20)
+				s.runDue(context.Background(), 100, 10)
 			}
 		}
 	}()
@@ -1016,7 +1066,7 @@ func (s *Service) runRuleWithWorkspace(ctx context.Context, rule Rule, reason st
 	}
 
 	latency := testResult.LatencyMS
-	if rule.LastStatus == StatusAutoPaused || rule.LastStatus == StatusBalancePaused {
+	if (rule.LastStatus == StatusAutoPaused || rule.LastStatus == StatusBalancePaused) && !rule.AutoEnableBlocked {
 		if strings.TrimSpace(conn.AdminAccountID) != "" {
 			if err := s.platform.SetSub2APIAdminAccountSchedulable(state.Session, conn.AdminAccountID, true); err != nil {
 				return finish(StatusFailed, false, "检测已恢复，但自动启用失败："+err.Error(), &latency, testResult.Model)
@@ -1115,6 +1165,7 @@ func (s *Service) channelStatus(ctx context.Context, conn my_sites.RealConnectio
 		ManualPaused:         rule.ManualPaused,
 		SchedulableManaged:   rule.SchedulableManaged,
 		SchedulableConflict:  rule.SchedulableConflict,
+		AutoEnableBlocked:    rule.AutoEnableBlocked,
 		PriorityManaged:      rule.PriorityManaged,
 		PriorityConflict:     rule.PriorityConflict,
 		TakeoverAvailable:    rule.SchedulableConflict || rule.PriorityConflict,
@@ -1260,6 +1311,10 @@ func (s *Service) buildRatePlan(ctx context.Context, connections []my_sites.Real
 		monitorRule := rulesByConnection[conn.ID]
 		account := accountsByID[strings.TrimSpace(conn.AdminAccountID)]
 		row := s.buildRatePlanRow(ctx, conn, monitorRule, state, account, rateRule)
+		if monitorRule.AutoEnableBlocked && row.SuggestedSchedulable {
+			row.SuggestedSchedulable = false
+			row.RateGateMessage = "已同步接管，自动开启调度保持关闭"
+		}
 		rows = append(rows, row)
 	}
 	assignRecommendedPriorities(rows)
@@ -1489,7 +1544,24 @@ func (s *Service) refreshSiteBalanceIfStale(ctx context.Context, site *upstream.
 	if !isSiteBalanceStale(site, intervalMinutes) {
 		return site, nil
 	}
-	return s.upstreams.RefreshSite(ctx, site.ID)
+	value, err, _ := s.balanceRefreshes.Do(site.ID, func() (any, error) {
+		current, currentErr := s.upstreams.GetSite(ctx, site.ID)
+		if currentErr != nil {
+			return nil, currentErr
+		}
+		if current != nil && !isSiteBalanceStale(current, intervalMinutes) {
+			return current, nil
+		}
+		return s.upstreams.RefreshSite(ctx, site.ID)
+	})
+	if err != nil || value == nil {
+		return nil, err
+	}
+	refreshed, ok := value.(*upstream.Site)
+	if !ok {
+		return nil, fmt.Errorf("unexpected refreshed site type %T", value)
+	}
+	return refreshed, nil
 }
 
 func isSiteBalanceStale(site *upstream.Site, intervalMinutes int) bool {
