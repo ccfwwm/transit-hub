@@ -1020,6 +1020,24 @@ func TestSyncAndTakeOverRuleDisablesDispatchBeforeTakingOver(t *testing.T) {
 	}
 }
 
+func TestSyncAndTakeOverRuleValidatesPriorityBeforeDisablingDispatch(t *testing.T) {
+	ctx := context.Background()
+	repo := newFakeRepository()
+	service := newTestService(repo)
+	rule := repo.mustRule("conn-1")
+	rule.PriorityManaged = true
+	rule.PriorityConflict = true
+	repo.rules[rule.ID] = rule
+	service.platform.accounts = []AdminAccountStatus{{ID: "123", Name: "A-【site】-GPT-4o", Schedulable: boolPtr(true)}}
+
+	if _, err := service.SyncAndTakeOverRule(ctx, "user-1", rule.ID); err == nil {
+		t.Fatal("expected takeover to reject an unavailable priority before remote mutation")
+	}
+	if len(service.platform.schedulableCalls) != 0 {
+		t.Fatalf("takeover mutated remote dispatch before validation: %+v", service.platform.schedulableCalls)
+	}
+}
+
 func TestApplyRateRuleDoesNotEnableTakeoverProtectedChannel(t *testing.T) {
 	ctx := context.Background()
 	repo := newFakeRepository()

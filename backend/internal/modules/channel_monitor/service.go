@@ -495,6 +495,9 @@ func (s *Service) SyncAndTakeOverRule(ctx context.Context, userID, ruleID string
 	if account.Schedulable == nil {
 		return Rule{}, requestError("admin.channelMonitor.errors.stateUnavailable")
 	}
+	if (rule.PriorityManaged || rule.PriorityConflict) && account.Priority == nil {
+		return Rule{}, requestError("admin.channelMonitor.errors.stateUnavailable")
+	}
 	if *account.Schedulable {
 		if err := s.platform.SetSub2APIAdminAccountSchedulable(state.Session, conn.AdminAccountID, false); err != nil {
 			return Rule{}, err
@@ -507,9 +510,6 @@ func (s *Service) SyncAndTakeOverRule(ctx context.Context, userID, ruleID string
 	rule.DesiredSchedulable = schedulablePtr(false)
 	rule.AutoEnableBlocked = true
 	if rule.PriorityManaged || rule.PriorityConflict {
-		if account.Priority == nil {
-			return Rule{}, requestError("admin.channelMonitor.errors.stateUnavailable")
-		}
 		rule.PriorityManaged = true
 		rule.PriorityConflict = false
 		rule.OriginalPriority = cloneInt(account.Priority)
