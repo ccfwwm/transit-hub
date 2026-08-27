@@ -23,6 +23,7 @@ func RegisterRoutes(mux *http.ServeMux, service *Service) {
 	mux.HandleFunc("POST /api/my-sites/real-bind", handler.realBind)
 	mux.HandleFunc("GET /api/my-sites/upstream-keys", handler.listUpstreamKeys)
 	mux.HandleFunc("GET /api/my-sites/real-connections", handler.listRealConnections)
+	mux.HandleFunc("PATCH /api/my-sites/real-connections/{id}/groups", handler.updateRealConnectionGroups)
 	mux.HandleFunc("POST /api/my-sites/real-disconnect", handler.realDisconnect)
 }
 
@@ -137,6 +138,26 @@ func (h *Handler) listRealConnections(w http.ResponseWriter, r *http.Request) {
 		connections = []RealConnection{}
 	}
 	httpjson.Write(w, http.StatusOK, connections)
+}
+
+func (h *Handler) updateRealConnectionGroups(w http.ResponseWriter, r *http.Request) {
+	userID, ok := authctx.UserID(r.Context())
+	if !ok {
+		httpjson.WriteError(w, http.StatusUnauthorized, "auth.errors.unauthorized")
+		return
+	}
+	var req UpdateRealConnectionGroupsRequest
+	if err := httpjson.Decode(r, &req); err != nil {
+		httpjson.WriteError(w, http.StatusBadRequest, ErrorRequest)
+		return
+	}
+	req.ConnectionID = r.PathValue("id")
+	conn, err := h.service.UpdateRealConnectionGroups(r.Context(), userID, req)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	httpjson.Write(w, http.StatusOK, map[string]RealConnection{"connection": conn})
 }
 
 // realDisconnect 取消真实对接：删除记录，可选同时删除上游 key 和 admin 账号。

@@ -136,3 +136,10 @@ export const updateChannelMonitorTestModelConfig = async (request: UpdateChannel
     method: 'PATCH',
     body: JSON.stringify(request),
   })
+
+export const bulkSyncAndTakeOverChannelMonitorRules = async (ruleIds: string[]): Promise<void> => {
+  await requestJson('/channel-monitor/rules/bulk/takeover', {
+    method: 'POST',
+    body: JSON.stringify({ ruleIds }),
+  })
+}

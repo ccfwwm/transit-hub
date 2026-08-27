@@ -25,6 +25,7 @@ import {
 import { Button } from '@/components/ui/button'
 import {
   applyChannelMonitorRateRule,
+  bulkSyncAndTakeOverChannelMonitorRules,
   bulkRunChannelMonitorRules,
   bulkSetChannelMonitorRulesSchedulable,
   bulkUpdateChannelMonitorRules,
@@ -443,6 +444,28 @@ const setSelectedSchedulable = (schedulable: boolean) =>
 const runSelected = () =>
   runAction(() => bulkRunChannelMonitorRules(selectedRuleIds.value), { actionKey: 'bulk:run' })
 
+const oneClickRuleIds = () => selectedRuleIds.value.length > 0 ? selectedRuleIds.value : allRuleIds.value
+const syncableRuleIds = computed(() => summary.value.channels
+  .filter(channel => channel.supported && channel.adminAccountId.trim() !== '')
+  .map(channel => channel.ruleId))
+const oneClickSyncRuleIds = () => {
+  const requested = selectedRuleIds.value.length > 0 ? selectedRuleIds.value : syncableRuleIds.value
+  const syncable = new Set(syncableRuleIds.value)
+  return requested.filter(ruleId => syncable.has(ruleId))
+}
+
+const runOneClickCheck = () => {
+  const ruleIds = oneClickRuleIds()
+  if (ruleIds.length === 0) return
+  runAction(() => bulkRunChannelMonitorRules(ruleIds), { actionKey: 'bulk:one-click-check' })
+}
+
+const runOneClickSync = () => {
+  const ruleIds = oneClickSyncRuleIds()
+  if (ruleIds.length === 0) return
+  runAction(() => bulkSyncAndTakeOverChannelMonitorRules(ruleIds), { actionKey: 'bulk:one-click-sync' })
+}
+
 const previewRateRule = () =>
   runAction(async () => {
     const view = await previewChannelMonitorRateRule()
@@ -663,6 +686,14 @@ const dispatchButtonClass = (channel: ChannelMonitorChannel): string => (
           </div>
         </div>
         <div class="flex flex-wrap justify-end gap-2">
+          <Button type="button" variant="secondary" size="sm" class="gap-1.5 !border-blue-500/30 !bg-blue-500/10 !text-blue-700 hover:!bg-blue-500/15 dark:!text-blue-300" :disabled="isBulkActionLoading || allRuleIds.length === 0" @click="runOneClickCheck">
+            <RefreshCw :class="['h-3.5 w-3.5', isActionActive('bulk:one-click-check') ? 'animate-spin' : '']" />
+            {{ t('admin.channelMonitor.bulk.oneClickCheck') }}
+          </Button>
+          <Button type="button" variant="secondary" size="sm" class="gap-1.5 !border-violet-500/30 !bg-violet-500/10 !text-violet-700 hover:!bg-violet-500/15 dark:!text-violet-300" :disabled="isBulkActionLoading || syncableRuleIds.length === 0" @click="runOneClickSync">
+            <Power :class="['h-3.5 w-3.5', isActionActive('bulk:one-click-sync') ? 'animate-pulse' : '']" />
+            {{ t('admin.channelMonitor.bulk.oneClickSync') }}
+          </Button>
           <Button type="button" variant="secondary" size="sm" class="gap-1.5 !border-violet-500/30 !bg-violet-500/10 !text-violet-700 hover:!bg-violet-500/15 dark:!text-violet-300" :disabled="isBulkActionLoading" @click="openTestModelEditor">
             <Settings2 class="h-3.5 w-3.5" />
             {{ t('admin.channelMonitor.testModel.configureShort') }}

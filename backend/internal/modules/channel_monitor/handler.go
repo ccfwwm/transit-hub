@@ -25,6 +25,7 @@ func RegisterRoutes(mux *http.ServeMux, service *Service) {
 	mux.HandleFunc("PATCH /api/channel-monitor/rules/{id}", handler.updateRule)
 	mux.HandleFunc("PATCH /api/channel-monitor/rules/bulk", handler.bulkUpdateRules)
 	mux.HandleFunc("POST /api/channel-monitor/rules/bulk/run", handler.bulkRunRules)
+	mux.HandleFunc("POST /api/channel-monitor/rules/bulk/takeover", handler.bulkTakeOverRules)
 	mux.HandleFunc("POST /api/channel-monitor/rules/bulk/schedulable", handler.bulkSetSchedulable)
 	mux.HandleFunc("GET /api/channel-monitor/rate-rule", handler.rateRule)
 	mux.HandleFunc("PATCH /api/channel-monitor/rate-rule", handler.updateRateRule)
@@ -194,6 +195,25 @@ func (h *Handler) bulkRunRules(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	httpjson.Write(w, http.StatusOK, results)
+}
+
+func (h *Handler) bulkTakeOverRules(w http.ResponseWriter, r *http.Request) {
+	userID, ok := authctx.UserID(r.Context())
+	if !ok {
+		httpjson.WriteError(w, http.StatusUnauthorized, "auth.errors.unauthorized")
+		return
+	}
+	var req BulkRunRequest
+	if err := httpjson.Decode(r, &req); err != nil {
+		httpjson.WriteError(w, http.StatusBadRequest, "admin.channelMonitor.errors.request")
+		return
+	}
+	rules, err := h.service.BulkSyncAndTakeOverRules(r.Context(), userID, req)
+	if err != nil {
+		writeMonitorError(w, err)
+		return
+	}
+	httpjson.Write(w, http.StatusOK, rules)
 }
 
 func (h *Handler) bulkSetSchedulable(w http.ResponseWriter, r *http.Request) {

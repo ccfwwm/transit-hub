@@ -7,6 +7,7 @@ const (
 	ErrorAdminOnly              = "admin.mySites.errors.adminOnly"
 	ErrorRequest                = "admin.mySites.errors.request"
 	ErrorUnknown                = "admin.mySites.errors.unknown"
+	ErrorInvalidGroup           = "admin.mySites.errors.invalidGroup"
 	ErrorInvalidAutoPricingConf = "admin.mySites.errors.invalidAutoPricingConfig"
 )
 
@@ -123,6 +124,11 @@ type RealDisconnectRequest struct {
 	Mode         string `json:"mode"`
 }
 
+type UpdateRealConnectionGroupsRequest struct {
+	ConnectionID string   `json:"connectionId"`
+	OwnGroupIDs  []string `json:"ownGroupIds"`
+}
+
 // RealBindRequest 手动绑定请求体。
 // 用户从上游 key 列表中选择要绑定的 key，此接口仅创建绑定记录，不调用任何 platform API。
 type RealBindRequest struct {
@@ -152,13 +158,13 @@ type RealConnectResponse struct {
 type RealConnection struct {
 	ID                      string   `json:"id"`
 	UserID                  string   `json:"-"`
-	WorkspaceAdminAccountID string   `json:"-"`              // TransitHub workspace 归属（隔离字段）
+	WorkspaceAdminAccountID string   `json:"-"` // TransitHub workspace 归属（隔离字段）
 	UpstreamSiteID          string   `json:"upstreamSiteId"`
 	UpstreamGroupID         string   `json:"upstreamGroupId"`
 	UpstreamGroupName       string   `json:"upstreamGroupName"`
 	UpstreamKeyID           string   `json:"upstreamKeyId"`
 	UpstreamKey             string   `json:"upstreamKey"`
-	AdminAccountID          string   `json:"adminAccountId"`  // 上游平台 admin 转发账号 ID（业务字段）
+	AdminAccountID          string   `json:"adminAccountId"` // 上游平台 admin 转发账号 ID（业务字段）
 	AdminAccountName        string   `json:"adminAccountName"`
 	OwnGroupIDs             []string `json:"ownGroupIds"`
 	GroupType               string   `json:"groupType"`

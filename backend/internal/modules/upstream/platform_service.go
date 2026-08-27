@@ -1568,6 +1568,20 @@ func (s *PlatformService) SetSub2APIAdminAccountSchedulable(session Session, acc
 	return err
 }
 
+func (s *PlatformService) UpdateSub2APIAdminAccountGroups(session Session, accountID string, groupIDs []int) error {
+	if session.Platform != PlatformSub2API || strings.TrimSpace(session.AccessToken) == "" {
+		return newRequestError(ErrorAuth, PlatformSub2API)
+	}
+	_, err := s.httpClient.requestJSON(session.BaseURL+"/api/v1/admin/accounts/"+accountID, requestOptions{
+		AccessToken:     session.AccessToken,
+		TokenType:       session.TokenType,
+		InsecureSkipTLS: session.InsecureSkipTLS,
+		Method:          http.MethodPut,
+		Body:            map[string]any{"group_ids": groupIDs},
+	})
+	return err
+}
+
 func (s *PlatformService) UpdateSub2APIAdminAccountPriority(session Session, accountID string, priority int) error {
 	if session.Platform != PlatformSub2API || strings.TrimSpace(session.AccessToken) == "" {
 		return newRequestError(ErrorAuth, PlatformSub2API)
@@ -2167,6 +2181,23 @@ func (s *PlatformService) DeleteNewAPIChannel(session Session, channelID string)
 		return newRequestError(ErrorAuth, PlatformNewAPI)
 	}
 	_, err := s.httpClient.requestJSON(session.BaseURL+"/api/channel/"+channelID, newAPIRequestOptionsWith(session, http.MethodDelete, nil))
+	return err
+}
+
+func (s *PlatformService) UpdateNewAPIChannelGroups(session Session, channelID string, groupIDs []string) error {
+	if session.Platform != PlatformNewAPI || !session.IsAuthenticated() {
+		return newRequestError(ErrorAuth, PlatformNewAPI)
+	}
+	response, err := s.httpClient.requestJSON(session.BaseURL+"/api/channel/"+channelID, newAPIRequestOptions(session))
+	if err != nil {
+		return err
+	}
+	channel := dataRecord(response.Payload)
+	if len(channel) == 0 {
+		return newRequestError(ErrorInvalidResponse, PlatformNewAPI)
+	}
+	channel["group"] = strings.Join(groupIDs, ",")
+	_, err = s.httpClient.requestJSON(session.BaseURL+"/api/channel/", newAPIRequestOptionsWith(session, http.MethodPut, channel))
 	return err
 }
 

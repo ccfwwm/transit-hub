@@ -25,9 +25,10 @@ func (r *realConnectStateRepo) Save(ctx context.Context, state State) error {
 }
 
 type realConnectConnRepo struct {
-	conn    *RealConnection
-	getConn *RealConnection
-	deleted bool
+	conn        *RealConnection
+	getConn     *RealConnection
+	connections []RealConnection
+	deleted     bool
 }
 
 func (r *realConnectConnRepo) SaveRealConnection(ctx context.Context, conn RealConnection) error {
@@ -35,7 +36,20 @@ func (r *realConnectConnRepo) SaveRealConnection(ctx context.Context, conn RealC
 	return nil
 }
 
+func (r *realConnectConnRepo) UpdateRealConnectionGroups(ctx context.Context, id string, userID string, adminAccountID string, ownGroupIDs []string) error {
+	if r.getConn != nil {
+		r.getConn.OwnGroupIDs = append([]string(nil), ownGroupIDs...)
+	}
+	return nil
+}
+
 func (r *realConnectConnRepo) ListRealConnections(ctx context.Context, userID string, adminAccountID string) ([]RealConnection, error) {
+	if r.connections != nil {
+		return append([]RealConnection(nil), r.connections...), nil
+	}
+	if r.getConn != nil {
+		return []RealConnection{*r.getConn}, nil
+	}
 	return nil, nil
 }
 
@@ -290,6 +304,59 @@ func TestRealDisconnectNewAPIUpstreamDeletesSub2APIAdminAccountAndNewAPIToken(t 
 	}
 	if !connRepo.deleted {
 		t.Fatal("expected local connection record to be deleted")
+	}
+}
+
+func TestUpdateRealConnectionGroupsUpdatesSub2APIAndMappings(t *testing.T) {
+	var updatedGroups []any
+	adminServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/auth/me":
+			writeJSON(t, w, map[string]any{"data": map[string]any{"role": "admin"}})
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/admin/groups/all":
+			writeJSON(t, w, map[string]any{"data": []any{
+				map[string]any{"id": 101, "name": "old-group", "platform": "openai"},
+				map[string]any{"id": 202, "name": "new-group", "platform": "openai"},
+			}})
+		case r.Method == http.MethodPut && r.URL.Path == "/api/v1/admin/accounts/1281":
+			var payload map[string]any
+			if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+				t.Fatalf("decode group update payload: %v", err)
+			}
+			updatedGroups, _ = payload["group_ids"].([]any)
+			writeJSON(t, w, map[string]any{"success": true})
+		default:
+			t.Fatalf("unexpected admin request %s %s", r.Method, r.URL.Path)
+		}
+	}))
+	defer adminServer.Close()
+
+	stateRepo := &realConnectStateRepo{state: &State{
+		UserID: "user-1", AdminAccountID: "workspace-1",
+		Session: upstream.Session{Platform: upstream.PlatformSub2API, BaseURL: adminServer.URL, AccessToken: "admin-token", TokenType: "Bearer"},
+		Mappings: []GroupMapping{
+			{OwnGroup: "old-group", UpstreamTargets: []UpstreamGroupRef{{SiteID: "site-1", GroupName: "GPT-4o"}}},
+			{OwnGroup: "new-group", UpstreamTargets: []UpstreamGroupRef{{SiteID: "site-2", GroupName: "Other"}}},
+		},
+	}}
+	conn := &RealConnection{ID: "conn-1", UserID: "user-1", WorkspaceAdminAccountID: "workspace-1", UpstreamSiteID: "site-1", UpstreamGroupName: "GPT-4o", AdminAccountID: "1281", OwnGroupIDs: []string{"101"}}
+	connRepo := &realConnectConnRepo{getConn: conn}
+	service := NewService(stateRepo, upstream.NewPlatformService(upstream.NewHTTPClient(adminServer.Client())), nil)
+	service.connRepository = connRepo
+	service.SetAdminAccountResolver(realConnectAccounts{id: "workspace-1"})
+
+	updated, err := service.UpdateRealConnectionGroups(context.Background(), "user-1", UpdateRealConnectionGroupsRequest{ConnectionID: "conn-1", OwnGroupIDs: []string{"202"}})
+	if err != nil {
+		t.Fatalf("UpdateRealConnectionGroups returned error: %v", err)
+	}
+	if updatedGroups == nil || len(updatedGroups) != 1 || updatedGroups[0].(float64) != 202 {
+		t.Fatalf("remote group_ids = %#v, want [202]", updatedGroups)
+	}
+	if len(updated.OwnGroupIDs) != 1 || updated.OwnGroupIDs[0] != "202" {
+		t.Fatalf("local own groups = %#v, want [202]", updated.OwnGroupIDs)
+	}
+	if len(stateRepo.state.Mappings) != 1 || stateRepo.state.Mappings[0].OwnGroup != "new-group" || !hasUpstreamTarget(stateRepo.state.Mappings[0].UpstreamTargets, UpstreamGroupRef{SiteID: "site-1", GroupName: "GPT-4o"}) {
+		t.Fatalf("new mapping was not added: %+v", stateRepo.state.Mappings)
 	}
 }
 

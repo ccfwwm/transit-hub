@@ -311,8 +311,12 @@ func (r *Repository) List(ctx context.Context, userID string, adminAccountID str
 						AND states.admin_account_id = latest.admin_account_id
 						AND target->>'siteId' = latest.site_id
 						AND target->>'groupName' = latest.group_name
+						AND EXISTS (
+							SELECT 1 FROM jsonb_array_elements(states.own_groups) AS live_group
+							WHERE COALESCE(live_group->>'name', live_group->>'groupName') = mapping->>'ownGroup'
+						)
 					UNION
-					SELECT COALESCE(own_group_lookup.group_name, own_group_id.value) AS own_group
+					SELECT own_group_lookup.group_name AS own_group
 					FROM real_connections AS connections
 					CROSS JOIN LATERAL jsonb_array_elements_text(connections.own_group_ids) AS own_group_id(value)
 					LEFT JOIN my_site_states AS state_lookup

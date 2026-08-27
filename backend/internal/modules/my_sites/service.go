@@ -25,6 +25,7 @@ type StateRepository interface {
 // RealConnectionRepository 真实对接绑定记录的持久化接口。
 type RealConnectionRepository interface {
 	SaveRealConnection(ctx context.Context, conn RealConnection) error
+	UpdateRealConnectionGroups(ctx context.Context, id string, userID string, adminAccountID string, ownGroupIDs []string) error
 	ListRealConnections(ctx context.Context, userID string, adminAccountID string) ([]RealConnection, error)
 	GetRealConnection(ctx context.Context, id string, userID string, adminAccountID string) (*RealConnection, error)
 	DeleteRealConnection(ctx context.Context, id string, userID string, adminAccountID string) error
@@ -653,6 +654,172 @@ func (s *Service) ListRealConnections(ctx context.Context, userID string) ([]Rea
 		return nil, err
 	}
 	return s.connRepository.ListRealConnections(ctx, userID, adminAccountID)
+}
+
+// UpdateRealConnectionGroups updates both the remote forwarding target groups
+// and the local connection/mapping records. The remote mutation is performed
+// first so a failed API call cannot leave TransitHub claiming a change that did
+// not take effect upstream.
+func (s *Service) UpdateRealConnectionGroups(ctx context.Context, userID string, req UpdateRealConnectionGroupsRequest) (RealConnection, error) {
+	if strings.TrimSpace(req.ConnectionID) == "" || len(req.OwnGroupIDs) == 0 || s.connRepository == nil {
+		return RealConnection{}, requestError(ErrorRequest)
+	}
+	adminAccountID, err := s.currentAdminAccountID(ctx, userID)
+	if err != nil {
+		return RealConnection{}, err
+	}
+	conn, err := s.connRepository.GetRealConnection(ctx, req.ConnectionID, userID, adminAccountID)
+	if err != nil {
+		return RealConnection{}, err
+	}
+	if conn == nil {
+		return RealConnection{}, requestError(ErrorRequest)
+	}
+
+	groupIDs := uniqueStrings(req.OwnGroupIDs)
+	state, err := s.authenticatedState(ctx, userID, adminAccountID)
+	if err != nil {
+		return RealConnection{}, err
+	}
+	adminGroups, err := s.platformService.FetchAdminAllGroups(state.Session)
+	if err != nil {
+		return RealConnection{}, err
+	}
+	validGroups := make(map[string]struct{}, len(adminGroups))
+	for _, group := range adminGroups {
+		if id := strings.TrimSpace(group.ID); id != "" {
+			validGroups[id] = struct{}{}
+		}
+	}
+	for _, groupID := range groupIDs {
+		if _, ok := validGroups[groupID]; !ok {
+			return RealConnection{}, requestError(ErrorInvalidGroup)
+		}
+	}
+
+	if strings.TrimSpace(conn.AdminAccountID) != "" {
+		switch state.Session.Platform {
+		case upstream.PlatformSub2API:
+			intIDs, err := stringsToInts(groupIDs)
+			if err != nil {
+				return RealConnection{}, requestError(ErrorRequest)
+			}
+			if err := s.platformService.UpdateSub2APIAdminAccountGroups(state.Session, conn.AdminAccountID, intIDs); err != nil {
+				return RealConnection{}, err
+			}
+		case upstream.PlatformNewAPI:
+			if err := s.platformService.UpdateNewAPIChannelGroups(state.Session, conn.AdminAccountID, groupIDs); err != nil {
+				return RealConnection{}, err
+			}
+		default:
+			return RealConnection{}, requestError(ErrorRequest)
+		}
+	}
+
+	conn.OwnGroupIDs = groupIDs
+	if err := s.connRepository.UpdateRealConnectionGroups(ctx, conn.ID, userID, adminAccountID, groupIDs); err != nil {
+		return RealConnection{}, err
+	}
+	if err := s.syncConnectionMapping(ctx, userID, adminAccountID, conn); err != nil {
+		return RealConnection{}, err
+	}
+	return *conn, nil
+}
+
+func uniqueStrings(values []string) []string {
+	seen := make(map[string]struct{}, len(values))
+	result := make([]string, 0, len(values))
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value == "" {
+			continue
+		}
+		if _, ok := seen[value]; ok {
+			continue
+		}
+		seen[value] = struct{}{}
+		result = append(result, value)
+	}
+	return result
+}
+
+func (s *Service) syncConnectionMapping(ctx context.Context, userID, adminAccountID string, conn *RealConnection) error {
+	state, err := s.repository.Get(ctx, userID, adminAccountID)
+	if err != nil || state == nil {
+		return err
+	}
+	adminGroups, err := s.platformService.FetchAdminAllGroups(state.Session)
+	if err != nil {
+		return err
+	}
+	idToName := make(map[string]string, len(adminGroups))
+	for _, group := range adminGroups {
+		if id := strings.TrimSpace(group.ID); id != "" && strings.TrimSpace(group.Name) != "" {
+			idToName[id] = strings.TrimSpace(group.Name)
+		}
+	}
+	connections, err := s.connRepository.ListRealConnections(ctx, userID, adminAccountID)
+	if err != nil {
+		return err
+	}
+	// The repository update is already visible to this query in production;
+	// replace the stale item in fakes and in any read-after-write implementation.
+	found := false
+	for i := range connections {
+		if connections[i].ID == conn.ID {
+			connections[i] = *conn
+			found = true
+			break
+		}
+	}
+	if !found {
+		connections = append(connections, *conn)
+	}
+	target := UpstreamGroupRef{SiteID: conn.UpstreamSiteID, GroupName: conn.UpstreamGroupName}
+	desiredGroups := make(map[string]struct{})
+	for _, current := range connections {
+		if current.UpstreamSiteID != target.SiteID || current.UpstreamGroupName != target.GroupName {
+			continue
+		}
+		for _, groupID := range current.OwnGroupIDs {
+			if name := idToName[strings.TrimSpace(groupID)]; name != "" {
+				desiredGroups[name] = struct{}{}
+			}
+		}
+	}
+	mappedGroups := make(map[string]struct{}, len(state.Mappings))
+	for i := range state.Mappings {
+		mapping := &state.Mappings[i]
+		mapping.UpstreamTargets = removeTarget(mapping.UpstreamTargets, target)
+		if _, selected := desiredGroups[mapping.OwnGroup]; selected && !hasUpstreamTarget(mapping.UpstreamTargets, target) {
+			mapping.UpstreamTargets = append(mapping.UpstreamTargets, target)
+		}
+		mappedGroups[mapping.OwnGroup] = struct{}{}
+	}
+	for name := range desiredGroups {
+		if _, found := mappedGroups[name]; !found {
+			state.Mappings = append(state.Mappings, GroupMapping{OwnGroup: name, UpstreamTargets: []UpstreamGroupRef{target}})
+		}
+	}
+	cleaned := state.Mappings[:0]
+	for _, mapping := range state.Mappings {
+		if len(mapping.UpstreamTargets) > 0 {
+			cleaned = append(cleaned, mapping)
+		}
+	}
+	state.Mappings = cleaned
+	return s.repository.Save(ctx, *state)
+}
+
+func removeTarget(targets []UpstreamGroupRef, target UpstreamGroupRef) []UpstreamGroupRef {
+	result := make([]UpstreamGroupRef, 0, len(targets))
+	for _, current := range targets {
+		if current.SiteID == target.SiteID && current.GroupName == target.GroupName {
+			continue
+		}
+		result = append(result, current)
+	}
+	return result
 }
 
 // RealDisconnect 取消真实对接：根据 mode 决定是仅删除记录还是同时清理远端资源。

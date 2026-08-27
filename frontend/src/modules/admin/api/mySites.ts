@@ -7,6 +7,7 @@ import type {
   RealConnectResponse,
   RealConnection,
   RealDisconnectRequest,
+  UpdateRealConnectionGroupsRequest,
   UpstreamKeyItem,
 } from '../types/mySites'
 import {
@@ -79,6 +80,14 @@ export const realConnect = async (req: RealConnectRequest): Promise<RealConnectR
 
 export const listRealConnections = async (): Promise<RealConnection[]> =>
   requestJson<RealConnection[]>('/my-sites/real-connections')
+
+export const updateRealConnectionGroups = async (connectionId: string, request: UpdateRealConnectionGroupsRequest): Promise<RealConnection> => {
+  const response = await requestJson<{ connection: RealConnection }>(`/my-sites/real-connections/${encodeURIComponent(connectionId)}/groups`, {
+    method: 'PATCH',
+    body: JSON.stringify({ ...request, connectionId }),
+  })
+  return response.connection
+}
 
 export const listUpstreamKeys = async (siteId: string): Promise<UpstreamKeyItem[]> =>
   requestJson<UpstreamKeyItem[]>(`/my-sites/upstream-keys?siteId=${encodeURIComponent(siteId)}`)

@@ -143,6 +143,19 @@ func (r *Repository) SaveRealConnection(ctx context.Context, conn RealConnection
 	return err
 }
 
+func (r *Repository) UpdateRealConnectionGroups(ctx context.Context, id string, userID string, adminAccountID string, ownGroupIDs []string) error {
+	groupsJSON, err := json.Marshal(ownGroupIDs)
+	if err != nil {
+		return err
+	}
+	_, err = r.db.Exec(ctx, `
+		UPDATE real_connections
+		SET own_group_ids = $4::jsonb
+		WHERE id = $1 AND user_id = $2 AND workspace_admin_account_id = $3
+	`, id, userID, adminAccountID, string(groupsJSON))
+	return err
+}
+
 // ListRealConnections 查询指定用户的所有真实对接绑定记录，按创建时间倒序。
 func (r *Repository) ListRealConnections(ctx context.Context, userID string, adminAccountID string) ([]RealConnection, error) {
 	rows, err := r.db.Query(ctx, `

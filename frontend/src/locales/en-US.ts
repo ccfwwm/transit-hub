@@ -259,6 +259,8 @@ export default {
       bulk: {
         selected: '{count} selected',
         run: 'Check selected',
+        oneClickCheck: 'Run all checks',
+        oneClickSync: 'Sync and take over',
         enableMonitor: 'Enable monitor',
         disableMonitor: 'Disable monitor',
         enableDispatch: 'Enable group dispatch',
@@ -826,8 +828,10 @@ export default {
         editType: 'Edit',
         closeEdit: 'Close Group Type Editor',
         connect: 'Click to Connect',
+        editGroups: 'Edit Groups',
         closeConnect: 'Close connect dialog',
         saveConnect: 'Connect',
+        saveGroups: 'Save Groups',
         cancel: 'Cancel',
         saveType: 'Save Type'
       },
@@ -888,7 +892,9 @@ export default {
       },
       connect: {
         titleWithGroup: 'Connect {site} · {group}',
+        editTitleWithGroup: 'Edit Connected Groups · {site} · {group}',
         description: 'Choose one of your site groups to add this upstream group to its mapping.',
+        editDescription: 'The admin forwarding account and local connection mapping will be updated together.',
         ownGroupLabel: 'My Site Groups',
         ownGroupPlaceholder: 'Select my site groups',
         upstreamGroupLabel: 'Connected Group',
@@ -918,7 +924,8 @@ export default {
         bindSelectKey: 'Select Upstream Key',
         bindKeysLoading: 'Loading key list...',
         bindKeysEmpty: 'No keys available for this site',
-        bindFailed: 'Failed to bind'
+        bindFailed: 'Failed to bind',
+        updateGroupsFailed: 'Failed to update connected groups'
       },
       disconnect: {
         action: 'Disconnect',
@@ -1076,7 +1083,8 @@ export default {
     },
     mySites: {
       errors: {
-        invalidAutoPricingConfig: 'Invalid auto-pricing config: primary upstream not in linked upstreams, or min multiplier exceeds max.'
+        invalidAutoPricingConfig: 'Invalid auto-pricing config: primary upstream not in linked upstreams, or min multiplier exceeds max.',
+        invalidGroup: 'One of the selected groups no longer exists. Refresh and select again.'
       }
     },
     settings: {

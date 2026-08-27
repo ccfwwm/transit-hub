@@ -310,18 +310,19 @@ func (s *Service) ResumeRule(ctx context.Context, userID, ruleID string) (Result
 	if err != nil {
 		return Result{}, err
 	}
+	// Resume clears the manual detection pause, but keeps dispatch disabled until
+	// the first successful check confirms both the account and its balance.
 	if state != nil && conn != nil && state.Session.Platform == upstream.PlatformSub2API && strings.TrimSpace(conn.AdminAccountID) != "" {
-		if err := s.platform.SetSub2APIAdminAccountSchedulable(state.Session, conn.AdminAccountID, true); err != nil {
+		accounts, err := s.platform.ListSub2APIAdminAccounts(state.Session)
+		if err != nil {
 			return Result{}, err
 		}
-		rule.DesiredSchedulable = schedulablePtr(true)
+		rule, err = s.syncAndTakeOverRule(ctx, rule, state, conn, accounts)
+		if err != nil {
+			return Result{}, err
+		}
 	}
 	rule.ManualPaused = false
-	rule.SchedulableManaged = false
-	rule.OriginalSchedulable = nil
-	rule.LastAppliedSchedulable = nil
-	rule.SchedulableConflict = false
-	rule.AutoEnableBlocked = false
 	rule.LastStatus = StatusManualPaused
 	rule.LastMessage = "手动启动检测"
 	if err := s.store.UpdateRule(ctx, rule); err != nil {
@@ -482,6 +483,13 @@ func (s *Service) SyncAndTakeOverRule(ctx context.Context, userID, ruleID string
 	if err != nil {
 		return Rule{}, err
 	}
+	return s.syncAndTakeOverRule(ctx, rule, state, conn, accounts)
+}
+
+func (s *Service) syncAndTakeOverRule(ctx context.Context, rule Rule, state *my_sites.State, conn *my_sites.RealConnection, accounts []AdminAccountStatus) (Rule, error) {
+	if state == nil || state.Session.Platform != upstream.PlatformSub2API || conn == nil || strings.TrimSpace(conn.AdminAccountID) == "" {
+		return Rule{}, requestError("admin.channelMonitor.errors.unsupported")
+	}
 	var account *AdminAccountStatus
 	for index := range accounts {
 		if strings.TrimSpace(accounts[index].ID) == strings.TrimSpace(conn.AdminAccountID) {
@@ -515,7 +523,7 @@ func (s *Service) SyncAndTakeOverRule(ctx context.Context, userID, ruleID string
 		rule.OriginalPriority = cloneInt(account.Priority)
 		rule.LastAppliedPriority = cloneInt(account.Priority)
 	}
-	rule.LastMessage = "已同步远端状态并重新接管；自动开启调度保持关闭"
+	rule.LastMessage = "已同步远端状态并重新接管；等待检测成功后恢复调度"
 	now := time.Now()
 	rule.LastCheckedAt = &now
 	rule.UpdatedAt = now
@@ -523,6 +531,53 @@ func (s *Service) SyncAndTakeOverRule(ctx context.Context, userID, ruleID string
 		return Rule{}, err
 	}
 	return rule, nil
+}
+
+func (s *Service) BulkSyncAndTakeOverRules(ctx context.Context, userID string, req BulkRunRequest) ([]Rule, error) {
+	ruleIDs := uniqueRuleIDs(req.RuleIDs)
+	if len(ruleIDs) == 0 {
+		return nil, requestError("admin.channelMonitor.errors.request")
+	}
+	adminAccountID, err := s.currentAdminAccountID(ctx, userID)
+	if err != nil {
+		return nil, err
+	}
+	state, err := s.workspaceState(ctx, userID, adminAccountID)
+	if err != nil {
+		return nil, err
+	}
+	if state == nil || state.Session.Platform != upstream.PlatformSub2API {
+		return nil, requestError("admin.channelMonitor.errors.unsupported")
+	}
+	connections, err := s.conns.ListRealConnections(ctx, userID, adminAccountID)
+	if err != nil {
+		return nil, err
+	}
+	connectionsByID := make(map[string]*my_sites.RealConnection, len(connections))
+	for index := range connections {
+		connectionsByID[connections[index].ID] = &connections[index]
+	}
+	accounts, err := s.platform.ListSub2APIAdminAccounts(state.Session)
+	if err != nil {
+		return nil, err
+	}
+	rules := make([]Rule, 0, len(ruleIDs))
+	for _, ruleID := range ruleIDs {
+		rule, err := s.requireRule(ctx, ruleID, userID, adminAccountID)
+		if err != nil {
+			return nil, err
+		}
+		conn := connectionsByID[rule.ConnectionID]
+		if conn == nil || strings.TrimSpace(conn.AdminAccountID) == "" {
+			continue
+		}
+		rule, err = s.syncAndTakeOverRule(ctx, rule, state, conn, accounts)
+		if err != nil {
+			return nil, err
+		}
+		rules = append(rules, rule)
+	}
+	return rules, nil
 }
 
 func (s *Service) BulkSetSchedulable(ctx context.Context, userID string, req BulkSchedulableRequest) error {
@@ -1066,12 +1121,22 @@ func (s *Service) runRuleWithWorkspace(ctx context.Context, rule Rule, reason st
 	}
 
 	latency := testResult.LatencyMS
-	if (rule.LastStatus == StatusAutoPaused || rule.LastStatus == StatusBalancePaused) && !rule.AutoEnableBlocked {
+	// A takeover deliberately disables dispatch until one successful check. The
+	// managed flag distinguishes that temporary gate from a user's explicit
+	// dispatch stop, which must remain authoritative.
+	shouldRestore := rule.LastStatus == StatusAutoPaused || rule.LastStatus == StatusBalancePaused
+	if rule.AutoEnableBlocked && rule.SchedulableManaged {
+		shouldRestore = true
+		rule.AutoEnableBlocked = false
+	}
+	if shouldRestore && !rule.AutoEnableBlocked {
 		if strings.TrimSpace(conn.AdminAccountID) != "" {
 			if err := s.platform.SetSub2APIAdminAccountSchedulable(state.Session, conn.AdminAccountID, true); err != nil {
 				return finish(StatusFailed, false, "检测已恢复，但自动启用失败："+err.Error(), &latency, testResult.Model)
 			}
 			rule.DesiredSchedulable = schedulablePtr(true)
+			rule.LastAppliedSchedulable = schedulablePtr(true)
+			rule.SchedulableConflict = false
 		}
 	}
 	rule.ConsecutiveFailures = 0

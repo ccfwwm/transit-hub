@@ -259,6 +259,8 @@ export default {
       bulk: {
         selected: '已选 {count} 个',
         run: '检测选中',
+        oneClickCheck: '一键检测',
+        oneClickSync: '一键同步接管',
         enableMonitor: '启用检测',
         disableMonitor: '停用检测',
         enableDispatch: '开启分组调度',
@@ -826,8 +828,10 @@ export default {
         editType: '修改',
         closeEdit: '关闭修改分组类型',
         connect: '点击对接',
+        editGroups: '修改分组',
         closeConnect: '关闭对接窗口',
         saveConnect: '确认对接',
+        saveGroups: '保存分组',
         cancel: '取消',
         saveType: '保存类型'
       },
@@ -888,7 +892,9 @@ export default {
       },
       connect: {
         titleWithGroup: '对接 {site} · {group}',
+        editTitleWithGroup: '修改对接分组 · {site} · {group}',
         description: '选择我的站点分组后，会把当前上游分组加入该分组的对接关系。',
+        editDescription: '修改后会同步更新 admin 端转发账号的分组，并更新本地对接关系。',
         ownGroupLabel: '我的站点分组',
         ownGroupPlaceholder: '请选择我的站点分组',
         upstreamGroupLabel: '对接分组',
@@ -918,7 +924,8 @@ export default {
         bindSelectKey: '选择上游 Key',
         bindKeysLoading: '正在加载 Key 列表...',
         bindKeysEmpty: '该站点暂无可用 Key',
-        bindFailed: '手动绑定失败'
+        bindFailed: '手动绑定失败',
+        updateGroupsFailed: '修改对接分组失败'
       },
       disconnect: {
         action: '取消对接',
@@ -1076,7 +1083,8 @@ export default {
     },
     mySites: {
       errors: {
-        invalidAutoPricingConfig: '自动调价配置无效：主上游不在关联上游中，或最低倍率大于最高倍率。'
+        invalidAutoPricingConfig: '自动调价配置无效：主上游不在关联上游中，或最低倍率大于最高倍率。',
+        invalidGroup: '选择的分组已不存在，请刷新后重新选择。'
       }
     },
     settings: {

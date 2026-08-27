@@ -603,6 +603,7 @@ func TestResumeRuleRestoresManualPausedDispatch(t *testing.T) {
 	rule.ManualPaused = true
 	rule.LastStatus = StatusManualPaused
 	repo.rules[rule.ID] = rule
+	service.platform.accounts = []AdminAccountStatus{{ID: "123", Name: "A-【site】-GPT-4o", Schedulable: boolPtr(false)}}
 
 	result, err := service.ResumeRule(ctx, "user-1", rule.ID)
 	if err != nil {
@@ -1035,6 +1036,37 @@ func TestSyncAndTakeOverRuleValidatesPriorityBeforeDisablingDispatch(t *testing.
 	}
 	if len(service.platform.schedulableCalls) != 0 {
 		t.Fatalf("takeover mutated remote dispatch before validation: %+v", service.platform.schedulableCalls)
+	}
+}
+
+func TestSyncAndTakeOverRuleRestoresDispatchAfterSuccessfulCheck(t *testing.T) {
+	ctx := context.Background()
+	repo := newFakeRepository()
+	service := newTestService(repo)
+	rule := repo.mustRule("conn-1")
+	repo.rules[rule.ID] = rule
+	service.platform.accounts = []AdminAccountStatus{{ID: "123", Name: "A-【site】-GPT-4o", Schedulable: boolPtr(true)}}
+
+	if _, err := service.SyncAndTakeOverRule(ctx, "user-1", rule.ID); err != nil {
+		t.Fatalf("SyncAndTakeOverRule returned error: %v", err)
+	}
+	if updated := repo.mustRule(rule.ID); !updated.SchedulableManaged || !updated.AutoEnableBlocked {
+		t.Fatalf("takeover must wait for a check before enabling, got %+v", updated)
+	}
+
+	result, err := service.RunRule(ctx, rule.ID, "manual")
+	if err != nil {
+		t.Fatalf("RunRule returned error: %v", err)
+	}
+	if result.Status != StatusHealthy {
+		t.Fatalf("expected healthy result, got %+v", result)
+	}
+	calls := service.platform.schedulableCalls
+	if len(calls) != 2 || calls[0].Schedulable || !calls[1].Schedulable {
+		t.Fatalf("expected takeover disable followed by recovery enable, got %+v", calls)
+	}
+	if updated := repo.mustRule(rule.ID); updated.AutoEnableBlocked {
+		t.Fatalf("successful check must release takeover gate, got %+v", updated)
 	}
 }
 

@@ -158,3 +158,8 @@ export interface RealDisconnectRequest {
   connectionId: string
   mode: 'unlink' | 'full'
 }
+
+export interface UpdateRealConnectionGroupsRequest {
+  connectionId: string
+  ownGroupIds: string[]
+}
