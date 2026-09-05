@@ -39,9 +39,9 @@ import {
   updateChannelMonitorRule,
   updateChannelMonitorTestModelConfig,
 } from '../api/channelMonitor'
-import { realDisconnect } from '../api/mySites'
+import { getMySiteMappingOptions, listRealConnections, realDisconnect, updateRealConnectionGroups } from '../api/mySites'
 import type { ChannelMonitorChannel, ChannelMonitorRateRule, ChannelMonitorResult, ChannelMonitorStatus, RateGateStatus, UpdateChannelMonitorRuleRequest } from '../types/channelMonitor'
-import type { RealDisconnectRequest } from '../types/mySites'
+import type { MySiteMappingOwnGroupOption, RealDisconnectRequest } from '../types/mySites'
 
 type StatusFilter = 'all' | 'monitor_paused' | 'dispatch_paused' | ChannelMonitorStatus
 type RefreshMode = 'initial' | 'manual' | 'silent'
@@ -96,6 +96,11 @@ const isTestModelEditorOpen = ref(false)
 const disconnectingChannel = ref<ChannelMonitorChannel | null>(null)
 const disconnectMode = ref<RealDisconnectRequest['mode']>('unlink')
 const disconnectError = ref('')
+const groupEditingChannel = ref<ChannelMonitorChannel | null>(null)
+const groupEditorOwnGroups = ref<MySiteMappingOwnGroupOption[]>([])
+const groupEditorOwnGroupIds = ref<string[]>([])
+const groupEditorLoading = ref(false)
+const groupEditorError = ref('')
 const editForm = ref({ enabled: true, checkIntervalMinutes: 2, failureThreshold: 2, balanceThreshold: 1, useDefaultTestModel: true, testModelId: '' })
 const rateRuleForm = ref({ enabled: false, autoApplyOnCheck: true, updatePriority: true, stopWhenMissingRate: true })
 const testModelForm = ref({ openaiModelId: 'gpt-5.4', anthropicModelId: 'claude-sonnet-5', grokModelId: 'grok-4.5', balanceRefreshIntervalMinutes: 5 })
@@ -494,6 +499,57 @@ const openDisconnect = (channel: ChannelMonitorChannel) => {
   disconnectingChannel.value = channel
   disconnectMode.value = 'unlink'
   disconnectError.value = ''
+}
+
+const groupEditorActionKey = (channel: ChannelMonitorChannel): string => channelActionKey(channel, 'groups')
+
+const openGroupEditor = async (channel: ChannelMonitorChannel) => {
+  if (isChannelBusy(channel)) return
+  groupEditingChannel.value = channel
+  groupEditorOwnGroups.value = []
+  groupEditorOwnGroupIds.value = []
+  groupEditorError.value = ''
+  groupEditorLoading.value = true
+  try {
+    const [options, connections] = await Promise.all([getMySiteMappingOptions(), listRealConnections()])
+    const connection = connections.find(item => item.id === channel.connectionId)
+    if (!connection) throw new Error('admin.channelMonitor.groupsEditor.loadFailed')
+    groupEditorOwnGroups.value = options.ownGroups
+    groupEditorOwnGroupIds.value = [...connection.ownGroupIds]
+  } catch (error: any) {
+    groupEditorError.value = error?.message?.startsWith('admin.') ? t(error.message) : t('admin.channelMonitor.groupsEditor.loadFailed')
+  } finally {
+    groupEditorLoading.value = false
+  }
+}
+
+const closeGroupEditor = () => {
+  if (groupEditorLoading.value) return
+  groupEditingChannel.value = null
+  groupEditorOwnGroups.value = []
+  groupEditorOwnGroupIds.value = []
+  groupEditorError.value = ''
+}
+
+const saveGroupEditor = async () => {
+  const channel = groupEditingChannel.value
+  if (!channel || groupEditorLoading.value || groupEditorOwnGroupIds.value.length === 0) return
+  const actionKey = groupEditorActionKey(channel)
+  if (isActionActive(actionKey)) return
+  groupEditorLoading.value = true
+  groupEditorError.value = ''
+  activeActionKeys.value = [...activeActionKeys.value, actionKey]
+  try {
+    await updateRealConnectionGroups(channel.connectionId, { connectionId: channel.connectionId, ownGroupIds: groupEditorOwnGroupIds.value })
+    groupEditorLoading.value = false
+    closeGroupEditor()
+    await loadSummary('silent')
+  } catch (error: any) {
+    groupEditorError.value = error?.message?.startsWith('admin.') ? t(error.message) : t('admin.channelMonitor.groupsEditor.saveFailed')
+  } finally {
+    activeActionKeys.value = activeActionKeys.value.filter(key => key !== actionKey)
+    groupEditorLoading.value = false
+  }
 }
 
 const closeDisconnect = () => {
@@ -987,6 +1043,10 @@ const dispatchButtonClass = (channel: ChannelMonitorChannel): string => (
                       <PowerOff v-else class="h-3.5 w-3.5" />
                       {{ channel.schedulable === false ? t('admin.channelMonitor.actions.enableDispatchShort') : t('admin.channelMonitor.actions.disableDispatchShort') }}
                     </Button>
+                    <Button type="button" variant="secondary" size="sm" class="h-8 gap-1 !border-teal-500/30 !bg-teal-500/10 px-2 text-xs !text-teal-700 hover:!bg-teal-500/15 dark:!text-teal-300" :disabled="isChannelBusy(channel)" :title="t('admin.channelMonitor.actions.editGroups')" @click="openGroupEditor(channel)">
+                      <Settings2 class="h-3.5 w-3.5" />
+                      {{ t('admin.channelMonitor.actions.editGroupsShort') }}
+                    </Button>
                     <Button type="button" variant="ghost" size="sm" class="h-8 px-2 text-xs" :disabled="isChannelBusy(channel)" @click="openEditor(channel)">
                       <Settings2 class="h-3.5 w-3.5" />
                     </Button>
@@ -1145,6 +1205,51 @@ const dispatchButtonClass = (channel: ChannelMonitorChannel): string => (
           <Button :variant="disconnectMode === 'full' ? 'destructive' : 'default'" class="gap-2" :disabled="isActionActive(channelActionKey(disconnectingChannel, 'disconnect'))" @click="confirmDisconnect">
             <Loader2 v-if="isActionActive(channelActionKey(disconnectingChannel, 'disconnect'))" class="h-4 w-4 animate-spin" />
             {{ t('admin.channelMonitor.disconnect.confirm') }}
+          </Button>
+        </div>
+      </div>
+    </div>
+
+    <div v-if="groupEditingChannel" class="fixed inset-0 z-50 flex items-center justify-center bg-background/80 p-4 backdrop-blur-sm">
+      <div class="w-full max-w-lg rounded-xl border border-border/50 bg-card shadow-xl">
+        <div class="border-b border-border/50 px-6 py-5">
+          <h2 class="text-lg font-semibold text-foreground">{{ t('admin.channelMonitor.groupsEditor.title') }}</h2>
+          <p class="mt-1 text-sm text-muted-foreground">
+            {{ groupEditingChannel.adminAccountName || groupEditingChannel.adminAccountId }} · {{ groupEditingChannel.siteName }} · {{ groupEditingChannel.upstreamGroupName }}
+          </p>
+        </div>
+        <div v-if="groupEditorError" class="mx-6 mt-5 rounded-xl border border-warning/20 bg-warning/10 p-3 text-sm text-warning">
+          {{ groupEditorError }}
+        </div>
+        <div class="px-6 py-5">
+          <p class="text-sm text-muted-foreground">{{ t('admin.channelMonitor.groupsEditor.description') }}</p>
+          <Loader2 v-if="groupEditorLoading && groupEditorOwnGroups.length === 0" class="mt-5 h-5 w-5 animate-spin text-primary" />
+          <div v-else-if="groupEditorOwnGroups.length === 0" class="mt-5 rounded-lg border border-border/50 bg-surface p-4 text-sm text-muted-foreground">
+            {{ t('admin.channelMonitor.groupsEditor.empty') }}
+          </div>
+          <div v-else class="mt-4 max-h-72 space-y-2 overflow-y-auto pr-1">
+            <label
+              v-for="ownGroup in groupEditorOwnGroups"
+              :key="ownGroup.id"
+              :class="[
+                'flex cursor-pointer items-center justify-between gap-3 rounded-lg border px-3 py-2.5 text-sm transition-colors',
+                groupEditorOwnGroupIds.includes(ownGroup.id) ? 'border-teal-500/40 bg-teal-500/10 text-teal-800 dark:text-teal-200' : 'border-border/60 bg-surface text-foreground hover:border-teal-500/40'
+              ]"
+            >
+              <span class="min-w-0">
+                <span class="block truncate font-medium">{{ ownGroup.groupName }}</span>
+                <span class="mt-0.5 block text-xs text-muted-foreground">{{ ownGroup.platform }} · {{ formatMultiplier(ownGroup.multiplier) }}</span>
+              </span>
+              <input v-model="groupEditorOwnGroupIds" type="checkbox" :value="ownGroup.id" :disabled="groupEditorLoading" class="h-4 w-4 shrink-0 accent-teal-600" />
+            </label>
+          </div>
+          <p class="mt-3 text-xs text-muted-foreground">{{ t('admin.channelMonitor.groupsEditor.selected', { count: groupEditorOwnGroupIds.length }) }}</p>
+        </div>
+        <div class="flex justify-end gap-2 border-t border-border/50 px-6 py-4">
+          <Button variant="secondary" :disabled="groupEditorLoading" @click="closeGroupEditor">{{ t('admin.channelMonitor.actions.cancel') }}</Button>
+          <Button class="gap-2 !bg-teal-600 hover:!bg-teal-700" :disabled="groupEditorLoading || groupEditorOwnGroups.length === 0 || groupEditorOwnGroupIds.length === 0" @click="saveGroupEditor">
+            <Loader2 v-if="groupEditorLoading" class="h-4 w-4 animate-spin" />
+            {{ t('admin.channelMonitor.groupsEditor.save') }}
           </Button>
         </div>
       </div>

@@ -314,10 +314,21 @@ export default {
         enableDispatchShort: '启调度',
         disableDispatch: '停用分组调度',
         disableDispatchShort: '停调度',
+        editGroups: '修改对接分组',
+        editGroupsShort: '分组',
         syncTakeover: '同步接管并关闭调度，禁止规则自动开启',
         syncTakeoverShort: '同步接管',
         cancel: '取消',
         save: '保存'
+      },
+      groupsEditor: {
+        title: '修改对接分组',
+        description: '选择该渠道要关联的自有分组。保存后会同步更新上游 Admin 账号的分组权限。',
+        empty: '当前工作区没有可用的自有分组。',
+        selected: '已选择 {count} 个分组',
+        save: '保存分组',
+        loadFailed: '读取当前对接分组失败，请刷新后重试。',
+        saveFailed: '修改对接分组失败，请稍后重试。'
       },
       errors: {
         network: '网络异常，请检查连接后重试。',

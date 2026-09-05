@@ -314,10 +314,21 @@ export default {
         enableDispatchShort: 'Dispatch on',
         disableDispatch: 'Disable group dispatch',
         disableDispatchShort: 'Dispatch off',
+        editGroups: 'Edit connected groups',
+        editGroupsShort: 'Groups',
         syncTakeover: 'Take over, disable dispatch, and block automatic enabling',
         syncTakeoverShort: 'Sync & take over',
         cancel: 'Cancel',
         save: 'Save'
+      },
+      groupsEditor: {
+        title: 'Edit Connected Groups',
+        description: 'Choose the own groups linked to this channel. Saving also updates the upstream Admin account group permissions.',
+        empty: 'No own groups are available in the current workspace.',
+        selected: '{count} groups selected',
+        save: 'Save Groups',
+        loadFailed: 'Failed to load the current connected groups. Refresh and retry.',
+        saveFailed: 'Failed to update connected groups. Please retry later.'
       },
       errors: {
         network: 'Network error. Please retry.',
