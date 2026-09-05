@@ -698,6 +698,7 @@ export default {
           rechargeRate: '充值倍率',
           rechargeRatePlaceholder: '输入 USD 转 CNY 的倍率，如 7',
           rechargeRateHelp: '必填。人民币金额 = USD 金额 × 此倍率。',
+          loginAgreementRevision: '已在上游确认的登录协议版本（可选）',
           remark: '备注',
           remarkPlaceholder: '输入备注信息（可选）'
         }
@@ -775,6 +776,7 @@ export default {
       },
       errors: {
         invalidUrl: '站点 URL 无效，请检查后重试。',
+        loginAgreementRequired: '上游要求确认最新登录协议，请在上游确认后填写该协议版本并重新登录。',
         network: '网络或 CORS 请求失败，请检查站点地址与跨域配置。',
         auth: '登录失败，请检查账号或密码。',
         credentialsUnavailable: '未保存可用的登录密码，请编辑站点并重新输入密码。',

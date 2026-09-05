@@ -417,7 +417,7 @@ func (s *Service) Create(ctx context.Context, userID string, dto CreateRequest) 
 	}
 
 	// 登录成功：更新站点状态。
-	if err := s.savePasswordCredential(ctx, site, dto.AuthMode, dto.Password); err != nil {
+	if err := s.savePasswordCredential(ctx, site, dto.AuthMode, dto.Password, dto.LoginAgreementRevision); err != nil {
 		return Response{}, err
 	}
 	now := time.Now().UnixMilli()
@@ -472,6 +472,9 @@ func (s *Service) Update(ctx context.Context, userID string, id string, dto Upda
 	site.BaseURL = strings.TrimSpace(dto.SiteURL)
 	site.RequestedPlatform = dto.Platform
 	site.Platform = resolvedPlatform(dto.Platform)
+	if site.Session != nil {
+		site.Platform = site.Session.Platform
+	}
 	site.Account = strings.TrimSpace(dto.Account)
 	site.Remark = strings.TrimSpace(dto.Remark)
 	site.RechargeRate = dto.RechargeRate
@@ -511,7 +514,7 @@ func (s *Service) Update(ctx context.Context, userID string, id string, dto Upda
 			return response, nil
 		}
 
-		if err := s.savePasswordCredential(ctx, site, dto.AuthMode, dto.Password); err != nil {
+		if err := s.savePasswordCredential(ctx, site, dto.AuthMode, dto.Password, dto.LoginAgreementRevision); err != nil {
 			s.restoreSite(ctx, id, &previousSite)
 			return Response{}, err
 		}
@@ -570,14 +573,14 @@ func (s *Service) createLogin(dto CreateRequest) (LoginResult, error) {
 	if normalizedAuthMode(dto.AuthMode) == AuthModeToken {
 		return s.platformService.LoginWithTokenOptions(dto.SiteURL, dto.Platform, dto.Account, dto.AccessToken, dto.RefreshToken, dto.TokenType, dto.SkipTLSVerify)
 	}
-	return s.platformService.LoginWithOptions(dto.SiteURL, dto.Platform, dto.Account, dto.Password, dto.SkipTLSVerify)
+	return s.platformService.LoginWithOptions(dto.SiteURL, dto.Platform, dto.Account, dto.Password, dto.SkipTLSVerify, dto.LoginAgreementRevision)
 }
 
 func (s *Service) updateLogin(dto UpdateRequest) (LoginResult, error) {
 	if normalizedAuthMode(dto.AuthMode) == AuthModeToken {
 		return s.platformService.LoginWithTokenOptions(dto.SiteURL, dto.Platform, dto.Account, dto.AccessToken, dto.RefreshToken, dto.TokenType, dto.SkipTLSVerify)
 	}
-	return s.platformService.LoginWithOptions(dto.SiteURL, dto.Platform, dto.Account, dto.Password, dto.SkipTLSVerify)
+	return s.platformService.LoginWithOptions(dto.SiteURL, dto.Platform, dto.Account, dto.Password, dto.SkipTLSVerify, dto.LoginAgreementRevision)
 }
 
 func normalizedAuthMode(authMode AuthMode) AuthMode {
@@ -744,12 +747,15 @@ func (s *Service) SyncAllStream(ctx context.Context, userID string, emit SyncEve
 			safeEmit(SyncEvent{Event: SyncEventSyncing, SiteID: id})
 
 			response, syncErr := s.sync(ctx, id)
-			if syncErr != nil {
+			if syncErr != nil || response.Status == StatusError {
 				log.Printf("[upstream-stream] 同步失败 id=%s err=%v", id, syncErr)
 				if cached, cacheErr := s.cache.Get(ctx, id); cacheErr == nil && cached != nil {
 					response = toResponse(cached)
 				}
 				key := errorKey(syncErr)
+				if response.ErrorKey != nil {
+					key = *response.ErrorKey
+				}
 				safeEmit(SyncEvent{Event: SyncEventError, SiteID: id, ErrorKey: key, Site: &response})
 			} else {
 				log.Printf("[upstream-stream] 同步成功 id=%s", id)
@@ -863,7 +869,7 @@ func (s *Service) relogin(ctx context.Context, site *Site, automatic bool) (Resp
 		return Response{}, newRequestError(ErrorCredentialsUnavailable, "")
 	}
 	oldMetrics := site.Metrics
-	result, loginErr := s.platformService.Login(site.BaseURL, site.RequestedPlatform, site.Account, credential.Password)
+	result, loginErr := s.platformService.LoginWithOptions(site.BaseURL, site.RequestedPlatform, site.Account, credential.Password, site.SkipTLSVerify, credential.LoginAgreementRevision)
 	if loginErr != nil {
 		key := errorKey(loginErr)
 		site.Status = StatusError
@@ -967,7 +973,7 @@ func (s *Service) Remove(ctx context.Context, userID string, id string) error {
 	return nil
 }
 
-func (s *Service) savePasswordCredential(ctx context.Context, site *Site, authMode AuthMode, password string) error {
+func (s *Service) savePasswordCredential(ctx context.Context, site *Site, authMode AuthMode, password string, agreementRevision ...string) error {
 	if site == nil || normalizedAuthMode(authMode) != AuthModePassword || strings.TrimSpace(password) == "" {
 		return nil
 	}
@@ -975,9 +981,13 @@ func (s *Service) savePasswordCredential(ctx context.Context, site *Site, authMo
 		site.CanRelogin = false
 		return nil
 	}
-	if err := s.credentials.SavePassword(ctx, StoredSiteCredential{
+	credential := StoredSiteCredential{
 		SiteID: site.ID, UserID: site.UserID, AdminAccountID: site.AdminAccountID, Password: password,
-	}); err != nil {
+	}
+	if len(agreementRevision) > 0 {
+		credential.LoginAgreementRevision = strings.TrimSpace(agreementRevision[0])
+	}
+	if err := s.credentials.SavePassword(ctx, credential); err != nil {
 		return err
 	}
 	site.CanRelogin = true

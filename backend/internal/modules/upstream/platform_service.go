@@ -54,7 +54,7 @@ func (s *PlatformService) Login(baseURL string, platform Platform, account strin
 	return s.LoginWithOptions(baseURL, platform, account, password, false)
 }
 
-func (s *PlatformService) LoginWithOptions(baseURL string, platform Platform, account string, password string, insecureSkipTLS bool) (LoginResult, error) {
+func (s *PlatformService) LoginWithOptions(baseURL string, platform Platform, account string, password string, insecureSkipTLS bool, agreementRevision ...string) (LoginResult, error) {
 	normalizedURL, err := s.NormalizeURL(baseURL)
 	if err != nil {
 		return LoginResult{}, err
@@ -63,13 +63,13 @@ func (s *PlatformService) LoginWithOptions(baseURL string, platform Platform, ac
 	case PlatformNewAPI:
 		return s.loginNewAPI(normalizedURL, account, password, insecureSkipTLS)
 	case PlatformSub2API:
-		return s.loginSub2API(normalizedURL, account, password, insecureSkipTLS)
+		return s.loginSub2API(normalizedURL, account, password, insecureSkipTLS, agreementRevision...)
 	default:
 		result, err := s.loginNewAPI(normalizedURL, account, password, insecureSkipTLS)
 		if err == nil {
 			return result, nil
 		}
-		return s.loginSub2API(normalizedURL, account, password, insecureSkipTLS)
+		return s.loginSub2API(normalizedURL, account, password, insecureSkipTLS, agreementRevision...)
 	}
 }
 
@@ -154,26 +154,14 @@ func (s *PlatformService) RefreshSession(session Session) (Session, error) {
 }
 
 func (s *PlatformService) refreshNewAPISession(session Session) (Session, error) {
-	if strings.TrimSpace(session.Cookie) == "" && strings.TrimSpace(session.RefreshToken) == "" {
+	if strings.TrimSpace(session.Cookie) == "" {
 		return Session{}, newRequestError(ErrorAuth, PlatformNewAPI)
 	}
-	options := requestOptions{
+	response, err := s.httpClient.requestJSON(session.BaseURL+"/api/user/auth/refresh", requestOptions{
 		Method:          http.MethodPost,
 		Cookie:          session.Cookie,
-		AccessToken:     session.AccessToken,
-		TokenType:       session.TokenType,
 		InsecureSkipTLS: session.InsecureSkipTLS,
-	}
-	if session.RefreshToken != "" {
-		options.Body = map[string]string{"refresh_token": session.RefreshToken}
-	}
-	response, err := s.httpClient.requestJSON(session.BaseURL+"/api/user/auth/refresh", options)
-	if err != nil && errorKey(err) == ErrorRequest {
-		response, err = s.httpClient.requestJSON(session.BaseURL+"/api/auth/refresh", options)
-	}
-	if err != nil && errorKey(err) == ErrorRequest {
-		response, err = s.httpClient.requestJSON(session.BaseURL+"/api/v1/auth/refresh", options)
-	}
+	})
 	if err != nil {
 		return Session{}, err
 	}
@@ -295,12 +283,6 @@ func (s *PlatformService) VerifyNewAPIAdmin(session Session) error {
 	}
 	cookieOptions := newAPIRequestOptions(session)
 	response, err := s.httpClient.requestJSON(session.BaseURL+"/api/user/self", cookieOptions)
-	if err != nil && errorKey(err) == ErrorRequest {
-		response, err = s.httpClient.requestJSON(session.BaseURL+"/api/auth/me", cookieOptions)
-	}
-	if err != nil && errorKey(err) == ErrorRequest {
-		response, err = s.httpClient.requestJSON(session.BaseURL+"/api/v1/auth/me", cookieOptions)
-	}
 	if err != nil {
 		return err
 	}
@@ -1120,33 +1102,11 @@ func (s *PlatformService) fetchNewAPIKeyUsageToday(ctx context.Context, session 
 }
 
 func (s *PlatformService) loginNewAPI(baseURL string, username string, password string, insecureSkipTLS bool) (LoginResult, error) {
-	options := requestOptions{
+	response, err := s.httpClient.requestJSON(baseURL+"/api/user/login", requestOptions{
 		Method:          http.MethodPost,
 		Body:            map[string]string{"username": username, "password": password},
 		InsecureSkipTLS: insecureSkipTLS,
-	}
-	response, err := s.httpClient.requestJSON(baseURL+"/api/user/login", options)
-	if err != nil && errorKey(err) == ErrorRequest {
-		// Newer New-API compatible deployments expose the shared auth controller
-		// under /api/auth instead of the legacy /api/user endpoint.
-		response, err = s.httpClient.requestJSON(baseURL+"/api/auth/login", requestOptions{
-			Method:          http.MethodPost,
-			Body:            map[string]string{"username": username, "email": username, "password": password},
-			InsecureSkipTLS: insecureSkipTLS,
-		})
-	}
-	if err != nil && errorKey(err) == ErrorRequest {
-		agreementRevision := s.fetchLoginAgreementRevision(baseURL, insecureSkipTLS)
-		body := map[string]string{"username": username, "email": username, "password": password}
-		if agreementRevision != "" {
-			body["login_agreement_revision"] = agreementRevision
-		}
-		response, err = s.httpClient.requestJSON(baseURL+"/api/v1/auth/login", requestOptions{
-			Method:          http.MethodPost,
-			Body:            body,
-			InsecureSkipTLS: insecureSkipTLS,
-		})
-	}
+	})
 	if err != nil {
 		return LoginResult{}, err
 	}
@@ -1170,20 +1130,6 @@ func (s *PlatformService) loginNewAPI(baseURL string, username string, password 
 	return LoginResult{Platform: PlatformNewAPI, Session: session, Metrics: metrics}, nil
 }
 
-// fetchLoginAgreementRevision supports newer auth controllers that require the
-// current public login-agreement revision in password login requests.
-func (s *PlatformService) fetchLoginAgreementRevision(baseURL string, insecureSkipTLS bool) string {
-	response, err := s.httpClient.requestJSON(baseURL+"/api/v1/settings/public", requestOptions{InsecureSkipTLS: insecureSkipTLS})
-	if err != nil {
-		return ""
-	}
-	data := dataRecord(response.Payload)
-	if revision := firstString(data, []string{"login_agreement_revision"}); revision != nil {
-		return strings.TrimSpace(*revision)
-	}
-	return ""
-}
-
 func newAPISessionFromResponse(baseURL string, response jsonResponse, previous ...Session) (Session, error) {
 	data := dataRecord(response.Payload)
 	session := Session{
@@ -1197,9 +1143,6 @@ func newAPISessionFromResponse(baseURL string, response jsonResponse, previous .
 	}
 	if tokenType := firstString(data, []string{"token_type", "tokenType"}); tokenType != nil {
 		session.TokenType = strings.TrimSpace(*tokenType)
-	}
-	if refreshToken := firstString(data, []string{"refresh_token", "refreshToken"}); refreshToken != nil {
-		session.RefreshToken = strings.TrimSpace(*refreshToken)
 	}
 	if session.AccessToken != "" && session.TokenType == "" {
 		session.TokenType = "Bearer"
@@ -1230,10 +1173,16 @@ func newAPISessionFromResponse(baseURL string, response jsonResponse, previous .
 	return session, nil
 }
 
-func (s *PlatformService) loginSub2API(baseURL string, email string, password string, insecureSkipTLS bool) (LoginResult, error) {
+func (s *PlatformService) loginSub2API(baseURL string, email string, password string, insecureSkipTLS bool, agreementRevision ...string) (LoginResult, error) {
+	body := map[string]string{"email": email, "password": password}
+	// Reuse only the revision explicitly accepted by the operator. A newer
+	// agreement must surface to the UI instead of being silently accepted.
+	if len(agreementRevision) > 0 && strings.TrimSpace(agreementRevision[0]) != "" {
+		body["login_agreement_revision"] = strings.TrimSpace(agreementRevision[0])
+	}
 	response, err := s.httpClient.requestJSON(baseURL+"/api/v1/auth/login", requestOptions{
 		Method:          http.MethodPost,
-		Body:            map[string]string{"email": email, "password": password},
+		Body:            body,
 		InsecureSkipTLS: insecureSkipTLS,
 	})
 	if err != nil {
@@ -1268,12 +1217,6 @@ func (s *PlatformService) loginSub2API(baseURL string, email string, password st
 func (s *PlatformService) fetchNewAPIMetrics(session Session, loginData map[string]any) (Metrics, error) {
 	cookieOptions := newAPIRequestOptions(session)
 	self, err := s.httpClient.requestJSON(session.BaseURL+"/api/user/self", cookieOptions)
-	if err != nil && errorKey(err) == ErrorRequest {
-		self, err = s.httpClient.requestJSON(session.BaseURL+"/api/auth/me", cookieOptions)
-	}
-	if err != nil && errorKey(err) == ErrorRequest {
-		self, err = s.httpClient.requestJSON(session.BaseURL+"/api/v1/auth/me", cookieOptions)
-	}
 	if err != nil {
 		return Metrics{}, err
 	}
@@ -1286,12 +1229,6 @@ func (s *PlatformService) fetchNewAPIMetrics(session Session, loginData map[stri
 	groupsPayload, err := s.httpClient.requestJSON(session.BaseURL+"/api/user/self/groups", cookieOptions)
 	if err != nil {
 		groupsPayload, err = s.httpClient.requestJSON(session.BaseURL+"/api/user/groups", cookieOptions)
-	}
-	if err != nil {
-		groupsPayload, err = s.httpClient.requestJSON(session.BaseURL+"/api/groups/available", cookieOptions)
-	}
-	if err != nil {
-		groupsPayload, err = s.httpClient.requestJSON(session.BaseURL+"/api/v1/groups/available", cookieOptions)
 		if err != nil {
 			log.Printf("new-api groups request failed base_url=%s err=%v", session.BaseURL, err)
 			groupsPayload = jsonResponse{Payload: map[string]any{}}

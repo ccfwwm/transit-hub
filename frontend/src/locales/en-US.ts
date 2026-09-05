@@ -698,6 +698,7 @@ export default {
           rechargeRate: 'Recharge Multiplier',
           rechargeRatePlaceholder: 'Enter the USD to CNY multiplier, e.g. 7',
           rechargeRateHelp: 'Required. CNY amount = USD amount × this multiplier.',
+          loginAgreementRevision: 'Login agreement revision accepted on the upstream (optional)',
           remark: 'Remark',
           remarkPlaceholder: 'Enter remark (optional)'
         }
@@ -775,6 +776,7 @@ export default {
       },
       errors: {
         invalidUrl: 'The site URL is invalid. Check it and try again.',
+        loginAgreementRequired: 'The upstream requires the latest login agreement. Accept it on the upstream, then enter that revision and sign in again.',
         network: 'Network or CORS request failed. Check the site URL and cross-origin settings.',
         auth: 'Login failed. Check the account or password.',
         credentialsUnavailable: 'No saved password is available. Edit this site and enter its password again.',

@@ -128,6 +128,9 @@ func (c *HTTPClient) requestJSON(reqURL string, options requestOptions) (jsonRes
 	}
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
 		log.Printf("[http-client] 非 2xx 响应 url=%s status=%d", reqURL, response.StatusCode)
+		if record, ok := payload.(map[string]any); ok && record["reason"] == "LOGIN_AGREEMENT_REQUIRED" {
+			return jsonResponse{}, newRequestError(ErrorLoginAgreementRequired, PlatformSub2API)
+		}
 		if response.StatusCode == http.StatusUnauthorized {
 			return jsonResponse{}, newRequestError(ErrorAuth, "")
 		}

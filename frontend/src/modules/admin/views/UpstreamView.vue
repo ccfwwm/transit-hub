@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { Search, Plus, CheckCircle2, XCircle, X, Loader2, AlertCircle, Trash2, Edit2, LayoutGrid, List, RefreshCw, Settings2, LogIn } from 'lucide-vue-next'
 import { Button } from '@/components/ui/button'
@@ -7,11 +7,15 @@ import { Input } from '@/components/ui/input'
 import { Tooltip } from '@/components/ui/tooltip'
 import { getStrategySettings, saveStrategySettings } from '../api/settings'
 import { getMySiteMappingOptions, listRealConnections, realConnect, realDisconnect } from '../api/mySites'
+import { getDashboardAdminStatus } from '../api/dashboardAdmin'
+import { listGroupRates } from '../api/groupRates'
 import { useUpstreamSites } from '../composables/useUpstreamSites'
 import SiteSettingsModal from '../components/upstream/SiteSettingsModal.vue'
 import type { StrategySettings } from '../types/settings'
 import type { UpstreamGroupInfo, UpstreamMetricValue, UpstreamSite, UpstreamSiteForm, UpstreamStatus } from '../types/upstream'
 import type { MySiteMappingOwnGroupOption, RealConnection } from '../types/mySites'
+import { NEW_API_CHANNEL_TYPES } from '../types/mySites'
+import type { GroupRate } from '../types/groupRates'
 
 const { t } = useI18n()
 
@@ -42,6 +46,24 @@ const groupActionGroup = ref<UpstreamGroupInfo | null>(null)
 const groupActionSite = ref<UpstreamSite | null>(null)
 const groupActionOwnGroupIds = ref<string[]>([])
 const isGroupActionOpen = ref(false)
+const connectionsLoaded = ref(false)
+const connectionsError = ref('')
+const groupOptionsLoading = ref(false)
+const groupActionType = ref('')
+const groupChannelType = ref(1)
+const adminPlatform = ref('')
+const siteGroupRates = ref<GroupRate[]>([])
+const disconnectMode = ref<'unlink' | 'full'>('unlink')
+const normalizeType = (value?: string | null) => value?.trim().toLowerCase().replace(/^xai$/, 'grok') || ''
+const groupType = (site: UpstreamSite, group: UpstreamGroupInfo) => normalizeType(
+  siteGroupRates.value.find(rate => rate.siteId === site.id && rate.groupId === group.id)?.type
+  || group.platform || groupConnection(site, group)?.groupType,
+)
+const actionConnection = computed(() => groupActionSite.value && groupActionGroup.value
+  ? groupConnection(groupActionSite.value, groupActionGroup.value) : undefined)
+const compatibleOwnGroups = computed(() => adminPlatform.value === 'newapi' ? ownGroups.value
+  : ownGroups.value.filter(group => normalizeType(group.platform) === groupActionType.value))
+watch(groupActionType, () => { groupActionOwnGroupIds.value = [] })
 
 const countdownDisplay = computed(() => {
   if (!refreshIntervalSeconds.value) return t('admin.upstream.refresh.disabled')
@@ -236,38 +258,62 @@ const deletingSite = computed(() => upstreamSites.value.find((site) => site.id =
 const isGroupsModalOpen = ref(false)
 const selectedSiteForGroups = ref<UpstreamSite | null>(null)
 
-const openGroupsModal = (site: UpstreamSite) => {
+const openGroupsModal = async (site: UpstreamSite) => {
   selectedSiteForGroups.value = site
   isGroupsModalOpen.value = true
   groupActionError.value = ''
-  void loadGroupConnections()
+  await loadGroupConnections()
+  try {
+    const rates: GroupRate[] = []
+    let page = 1
+    let totalPages = 1
+    do {
+      const response = await listGroupRates({ page, site: site.name, search: '', platform: '', type: '' })
+      rates.push(...response.items)
+      totalPages = response.totalPages
+    } while (++page <= totalPages)
+    siteGroupRates.value = rates
+  } catch { /* Raw upstream types remain available. */ }
 }
 
 const loadGroupConnections = async () => {
   try {
-    const [connections, options] = await Promise.all([listRealConnections(), getMySiteMappingOptions()])
-    realConnections.value = connections
-    ownGroups.value = options.ownGroups.filter(group => !/^\d+$/.test(group.groupName.trim()))
+    realConnections.value = await listRealConnections()
+    connectionsLoaded.value = true
+    connectionsError.value = ''
   } catch {
-    realConnections.value = []
-    ownGroups.value = []
+    connectionsLoaded.value = false
+    connectionsError.value = t('admin.groupRates.errors.request')
   }
 }
 
 const groupConnection = (site: UpstreamSite, group: UpstreamGroupInfo) => realConnections.value.find(connection =>
   connection.upstreamSiteId === site.id
-  && (connection.upstreamGroupId === group.id || connection.upstreamGroupName === group.name),
+  && (connection.upstreamGroupId && group.id ? connection.upstreamGroupId === group.id : connection.upstreamGroupName === group.name),
 )
 
 const connectedGroupCount = (site: UpstreamSite) => site.metrics.groups.filter(group => Boolean(groupConnection(site, group))).length
 
-const openGroupAction = (site: UpstreamSite, group: UpstreamGroupInfo) => {
+const openGroupAction = async (site: UpstreamSite, group: UpstreamGroupInfo) => {
+  if (!connectionsLoaded.value || isGroupActionLoading.value) return
   groupActionSite.value = site
   groupActionGroup.value = group
   const connection = groupConnection(site, group)
   groupActionOwnGroupIds.value = connection ? [...connection.ownGroupIds] : []
   groupActionError.value = ''
   isGroupActionOpen.value = true
+  groupActionType.value = groupType(site, group)
+  disconnectMode.value = 'unlink'
+  groupOptionsLoading.value = true
+  try {
+    const [options, status] = await Promise.all([getMySiteMappingOptions(), getDashboardAdminStatus()])
+    ownGroups.value = options.ownGroups
+    adminPlatform.value = status.platform || ''
+  } catch (error) {
+    groupActionError.value = error instanceof Error ? t(error.message) : t('admin.upstream.errors.request')
+  } finally {
+    groupOptionsLoading.value = false
+  }
 }
 
 const closeGroupAction = () => {
@@ -278,30 +324,26 @@ const closeGroupAction = () => {
   groupActionOwnGroupIds.value = []
 }
 
-const toggleGroupActionOwnGroup = (id: string) => {
-  groupActionOwnGroupIds.value = groupActionOwnGroupIds.value.includes(id)
-    ? groupActionOwnGroupIds.value.filter(item => item !== id)
-    : [...groupActionOwnGroupIds.value, id]
-}
-
 const submitGroupAction = async () => {
   const site = groupActionSite.value
   const group = groupActionGroup.value
-  if (!site || !group || groupActionOwnGroupIds.value.length === 0) return
+  if (!site || !group || isGroupActionLoading.value || groupOptionsLoading.value || actionConnection.value || groupActionOwnGroupIds.value.length === 0) return
   isGroupActionLoading.value = true
   groupActionError.value = ''
   try {
-    await realConnect({
+    const result = await realConnect({
       upstreamSiteId: site.id,
       upstreamGroupId: group.id,
       upstreamGroupName: group.name,
-      groupType: (group.platform || '').toLowerCase(),
+      groupType: groupActionType.value,
+      channelType: adminPlatform.value === 'newapi' ? groupChannelType.value : undefined,
       ownGroupIds: groupActionOwnGroupIds.value,
     })
-    await loadGroupConnections()
+    realConnections.value.push(result.connection)
+    isGroupActionLoading.value = false
     closeGroupAction()
   } catch (error) {
-    groupActionError.value = error instanceof Error ? error.message : 'admin.upstream.errors.request'
+    groupActionError.value = error instanceof Error ? t(error.message) : t('admin.upstream.errors.request')
   } finally {
     isGroupActionLoading.value = false
   }
@@ -311,15 +353,16 @@ const disconnectGroupAction = async () => {
   const site = groupActionSite.value
   const group = groupActionGroup.value
   const connection = site && group ? groupConnection(site, group) : undefined
-  if (!connection) return
+  if (!connection || isGroupActionLoading.value) return
   isGroupActionLoading.value = true
   groupActionError.value = ''
   try {
-    await realDisconnect({ connectionId: connection.id, mode: 'unlink' })
-    await loadGroupConnections()
+    await realDisconnect({ connectionId: connection.id, mode: disconnectMode.value })
+    realConnections.value = realConnections.value.filter(item => item.id !== connection.id)
+    isGroupActionLoading.value = false
     closeGroupAction()
   } catch (error) {
-    groupActionError.value = error instanceof Error ? error.message : 'admin.upstream.errors.request'
+    groupActionError.value = error instanceof Error ? t(error.message) : t('admin.upstream.errors.request')
   } finally {
     isGroupActionLoading.value = false
   }
@@ -354,7 +397,7 @@ const groupedGroups = computed<Record<string, UpstreamGroupInfo[]>>(() => {
   if (!selectedSiteForGroups.value) return {}
   const groups = selectedSiteForGroups.value.metrics.groups
   return groups.reduce<Record<string, UpstreamGroupInfo[]>>((acc, group) => {
-    const platform = group.platform ?? t('admin.upstream.fields.unknownPlatform')
+    const platform = groupType(selectedSiteForGroups.value!, group) || t('admin.upstream.fields.unknownPlatform')
     if (!acc[platform]) acc[platform] = []
     acc[platform].push(group)
     return acc
@@ -378,6 +421,7 @@ const lastUpdatedDisplay = (site: UpstreamSite): string => {
 
 onMounted(() => {
   void loadRefreshSettings()
+  void loadGroupConnections()
 })
 
 onBeforeUnmount(() => {
@@ -545,7 +589,7 @@ onBeforeUnmount(() => {
             class="w-full h-9 text-xs font-medium bg-surface hover:bg-surface-elevated border-border/50 border"
             @click="openGroupsModal(site)"
           >
-            {{ t('admin.upstream.fields.viewAvailableGroups') }} · {{ connectedGroupCount(site) }}/{{ site.metrics.groups.length }}
+            {{ t('admin.upstream.fields.viewAvailableGroups') }} · {{ t('admin.upstream.fields.connected') }} {{ connectionsLoaded ? connectedGroupCount(site) : '-' }}/{{ site.metrics.groups.length }}
           </Button>
 
           <!-- Card Actions (Edit/Delete) -->
@@ -713,7 +757,7 @@ onBeforeUnmount(() => {
                     class="h-8 px-2 text-xs text-primary hover:text-primary hover:bg-primary/10"
                     @click="openGroupsModal(site)"
                   >
-                    {{ t('admin.upstream.fields.availableGroups') }} · {{ connectedGroupCount(site) }}/{{ site.metrics.groups.length }}
+                    {{ t('admin.upstream.fields.availableGroups') }} · {{ t('admin.upstream.fields.connected') }} {{ connectionsLoaded ? connectedGroupCount(site) : '-' }}/{{ site.metrics.groups.length }}
                   </Button>
                   <Tooltip :text="syncingSiteIds.has(site.id) ? t('admin.upstream.action.syncing') : t('admin.upstream.action.sync')">
                     <button
@@ -874,6 +918,8 @@ onBeforeUnmount(() => {
           </div>
 
           <div class="p-6 max-h-[60vh] overflow-y-auto space-y-6">
+            <p v-if="connectionsError" class="text-sm text-destructive">{{ connectionsError }}</p>
+            <p v-if="!selectedSiteForGroups?.metrics.groups.length" class="text-sm text-muted-foreground">{{ t('admin.groupRates.empty.title') }}</p>
             <div v-for="(groups, platform) in groupedGroups" :key="platform" class="space-y-3">
               <h4 class="text-sm font-semibold text-muted-foreground uppercase tracking-wider flex items-center gap-2">
                 <div class="w-1.5 h-1.5 rounded-full bg-primary"></div>
@@ -884,6 +930,7 @@ onBeforeUnmount(() => {
                   v-for="group in groups"
                   :key="group.name"
                   type="button"
+                  :disabled="!connectionsLoaded"
                   :class="[
                     'flex flex-col items-center justify-center p-3 rounded-xl border transition-colors text-center group',
                     groupConnection(selectedSiteForGroups!, group)
@@ -893,8 +940,9 @@ onBeforeUnmount(() => {
                   @click="selectedSiteForGroups && openGroupAction(selectedSiteForGroups, group)"
                 >
                   <span class="text-sm font-medium text-foreground truncate w-full group-hover:text-primary transition-colors">{{ group.name }}</span>
+                  <span class="mt-1 text-[10px] uppercase text-muted-foreground">{{ platform }}</span>
                   <span class="mt-1 text-[10px] font-semibold" :class="groupConnection(selectedSiteForGroups!, group) ? 'text-signal' : 'text-muted-foreground'">
-                    {{ groupConnection(selectedSiteForGroups!, group) ? t('admin.upstream.fields.connected') : t('admin.upstream.fields.disconnected') }}
+                    {{ !connectionsLoaded ? '-' : groupConnection(selectedSiteForGroups!, group) ? t('admin.upstream.fields.connected') : t('admin.upstream.fields.disconnected') }}
                   </span>
                   <span
                     v-if="group.multiplier !== null && selectedSiteForGroups && selectedSiteForGroups.rechargeRate > 0"
@@ -936,7 +984,7 @@ onBeforeUnmount(() => {
             <div>
               <h3 class="text-base font-semibold text-foreground">{{ groupActionGroup?.name }}</h3>
               <p class="mt-1 text-xs text-muted-foreground">
-                {{ groupActionSite?.name }} · {{ groupActionGroup?.platform || t('admin.upstream.fields.unknownPlatform') }}
+                {{ groupActionSite?.name }} · {{ groupActionType || t('admin.upstream.fields.unknownPlatform') }}
               </p>
             </div>
             <button type="button" class="rounded-md p-1 text-muted-foreground hover:bg-surface-elevated hover:text-foreground" @click="closeGroupAction">
@@ -946,6 +994,10 @@ onBeforeUnmount(() => {
           <div v-if="groupActionError" class="mt-4 rounded-lg border border-warning/30 bg-warning/10 px-3 py-2 text-sm text-warning">{{ groupActionError }}</div>
           <template v-if="groupActionSite && groupActionGroup && groupConnection(groupActionSite, groupActionGroup)">
             <p class="mt-5 text-sm text-foreground">{{ t('admin.upstream.fields.connected') }} · {{ groupConnection(groupActionSite, groupActionGroup)?.adminAccountName }}</p>
+            <label class="mt-4 flex gap-2 text-sm"><input v-model="disconnectMode" type="radio" value="unlink" :disabled="isGroupActionLoading" />{{ t('admin.groupRates.disconnect.unlinkOnly') }}</label>
+            <p class="mt-1 text-xs text-muted-foreground">{{ t('admin.groupRates.disconnect.unlinkOnlyHint') }}</p>
+            <label class="mt-3 flex gap-2 text-sm"><input v-model="disconnectMode" type="radio" value="full" :disabled="isGroupActionLoading" />{{ t('admin.groupRates.disconnect.deleteAll') }}</label>
+            <p class="mt-1 text-xs text-muted-foreground">{{ t('admin.groupRates.disconnect.deleteAllHint') }}</p>
             <div class="mt-5 flex justify-end gap-2">
               <Button variant="secondary" :disabled="isGroupActionLoading" @click="closeGroupAction">{{ t('admin.groupRates.actions.cancel') }}</Button>
               <Button variant="destructive" :disabled="isGroupActionLoading" @click="disconnectGroupAction">
@@ -955,25 +1007,38 @@ onBeforeUnmount(() => {
             </div>
           </template>
           <template v-else>
+            <label v-if="groupActionSite && groupActionGroup && !groupType(groupActionSite, groupActionGroup)" class="mt-4 block text-sm">
+              {{ t('admin.groupRates.connect.groupTypeLabel') }}
+              <select v-model="groupActionType" :disabled="isGroupActionLoading" class="mt-2 h-9 w-full rounded-lg border border-border bg-surface px-2">
+                <option value="">{{ t('admin.groupRates.connect.groupTypePlaceholder') }}</option>
+                <option v-for="type in ['openai', 'anthropic', 'gemini', 'grok', 'antigravity']" :key="type" :value="type">{{ type }}</option>
+              </select>
+            </label>
+            <label v-if="adminPlatform === 'newapi'" class="mt-4 block text-sm">
+              {{ t('admin.groupRates.connect.channelTypeLabel') }}
+              <select v-model="groupChannelType" :disabled="isGroupActionLoading" class="mt-2 h-9 w-full rounded-lg border border-border bg-surface px-2">
+                <option v-for="type in NEW_API_CHANNEL_TYPES" :key="type.id" :value="type.id">{{ type.name }}</option>
+              </select>
+            </label>
             <p class="mt-5 text-sm text-muted-foreground">{{ t('admin.groupRates.connect.ownGroupLabel') }}</p>
+            <Loader2 v-if="groupOptionsLoading" class="mt-3 h-5 w-5 animate-spin text-primary" />
+            <p v-else-if="!compatibleOwnGroups.length" class="mt-3 text-sm text-muted-foreground">{{ t('admin.groupRateCampaigns.editor.groupsEmpty') }}</p>
             <div class="mt-3 max-h-56 space-y-2 overflow-y-auto">
-              <button
-                v-for="ownGroup in ownGroups"
+              <label
+                v-for="ownGroup in compatibleOwnGroups"
                 :key="ownGroup.id"
-                type="button"
                 :class="[
                   'flex w-full items-center justify-between rounded-lg border px-3 py-2 text-left text-sm transition-colors',
                   groupActionOwnGroupIds.includes(ownGroup.id) ? 'border-primary bg-primary/10 text-primary' : 'border-border/60 bg-surface text-foreground hover:border-primary/50'
                 ]"
-                @click="toggleGroupActionOwnGroup(ownGroup.id)"
               >
-                <span>{{ ownGroup.groupName }}</span>
-                <CheckCircle2 v-if="groupActionOwnGroupIds.includes(ownGroup.id)" class="h-4 w-4" />
-              </button>
+                <span>{{ ownGroup.groupName }} <span class="text-xs text-muted-foreground">{{ ownGroup.platform }}</span></span>
+                <input v-model="groupActionOwnGroupIds" type="checkbox" :value="ownGroup.id" :disabled="isGroupActionLoading || groupOptionsLoading" class="h-4 w-4 accent-primary" />
+              </label>
             </div>
             <div class="mt-5 flex justify-end gap-2">
               <Button variant="secondary" :disabled="isGroupActionLoading" @click="closeGroupAction">{{ t('admin.groupRates.actions.cancel') }}</Button>
-              <Button :disabled="isGroupActionLoading || groupActionOwnGroupIds.length === 0" @click="submitGroupAction">
+              <Button :disabled="isGroupActionLoading || groupOptionsLoading || !!groupActionError || groupActionOwnGroupIds.length === 0 || (adminPlatform !== 'newapi' && !groupActionType)" @click="submitGroupAction">
                 <Loader2 v-if="isGroupActionLoading" class="h-4 w-4 animate-spin" />
                 {{ t('admin.groupRates.actions.connect') }}
               </Button>
@@ -1130,6 +1195,10 @@ onBeforeUnmount(() => {
                 <p v-if="editingSiteId" class="text-xs leading-5 text-muted-foreground">
                   {{ t('admin.upstream.modal.form.passwordEditHelp') }}
                 </p>
+                <label v-if="newSiteForm.platform !== 'newapi'" class="mt-3 block text-xs text-muted-foreground">
+                  {{ t('admin.upstream.modal.form.loginAgreementRevision') }}
+                  <Input :model-value="newSiteForm.loginAgreementRevision || ''" @update:model-value="newSiteForm.loginAgreementRevision = $event" :disabled="isAdding" class="mt-1 h-9" />
+                </label>
               </div>
 
               <template v-else>

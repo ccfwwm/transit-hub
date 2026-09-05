@@ -15,6 +15,7 @@ type StoredSiteCredential struct {
 	UserID                          string
 	AdminAccountID                  string
 	Password                        string
+	LoginAgreementRevision          string
 	LastAutomaticReloginAtUnixMilli int64
 }
 
@@ -54,7 +55,8 @@ func (r *CredentialRepository) EnsureSchema(ctx context.Context) error {
 			last_automatic_relogin_at bigint NOT NULL DEFAULT 0,
 			created_at timestamptz NOT NULL DEFAULT now(),
 			updated_at timestamptz NOT NULL DEFAULT now()
-		)
+		);
+		ALTER TABLE upstream_site_credentials ADD COLUMN IF NOT EXISTS login_agreement_revision text NOT NULL DEFAULT '';
 	`)
 	return err
 }
@@ -65,15 +67,16 @@ func (r *CredentialRepository) SavePassword(ctx context.Context, credential Stor
 		return err
 	}
 	_, err = r.db.Exec(ctx, `
-		INSERT INTO upstream_site_credentials (site_id, user_id, admin_account_id, password_ciphertext, last_automatic_relogin_at)
-		VALUES ($1, $2, $3, $4, $5)
+		INSERT INTO upstream_site_credentials (site_id, user_id, admin_account_id, password_ciphertext, last_automatic_relogin_at, login_agreement_revision)
+		VALUES ($1, $2, $3, $4, $5, $6)
 		ON CONFLICT (site_id) DO UPDATE SET
 			user_id = EXCLUDED.user_id,
 			admin_account_id = EXCLUDED.admin_account_id,
 			password_ciphertext = EXCLUDED.password_ciphertext,
+			login_agreement_revision = EXCLUDED.login_agreement_revision,
 			last_automatic_relogin_at = EXCLUDED.last_automatic_relogin_at,
 			updated_at = now()
-	`, credential.SiteID, credential.UserID, credential.AdminAccountID, ciphertext, credential.LastAutomaticReloginAtUnixMilli)
+	`, credential.SiteID, credential.UserID, credential.AdminAccountID, ciphertext, credential.LastAutomaticReloginAtUnixMilli, credential.LoginAgreementRevision)
 	return err
 }
 
@@ -81,10 +84,10 @@ func (r *CredentialRepository) LoadPassword(ctx context.Context, userID, adminAc
 	var ciphertext string
 	credential := StoredSiteCredential{SiteID: siteID, UserID: userID, AdminAccountID: adminAccountID}
 	err := r.db.QueryRow(ctx, `
-		SELECT password_ciphertext, last_automatic_relogin_at
+		SELECT password_ciphertext, last_automatic_relogin_at, login_agreement_revision
 		FROM upstream_site_credentials
 		WHERE site_id = $1 AND user_id = $2 AND admin_account_id = $3
-	`, siteID, userID, adminAccountID).Scan(&ciphertext, &credential.LastAutomaticReloginAtUnixMilli)
+	`, siteID, userID, adminAccountID).Scan(&ciphertext, &credential.LastAutomaticReloginAtUnixMilli, &credential.LoginAgreementRevision)
 	if err != nil {
 		if err == pgx.ErrNoRows {
 			return StoredSiteCredential{}, false, nil

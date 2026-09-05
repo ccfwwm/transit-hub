@@ -31,6 +31,7 @@ const (
 	ErrorInvalidResponse        = "admin.upstream.errors.invalidResponse"
 	ErrorUnknown                = "admin.upstream.errors.unknown"
 	ErrorCredentialsUnavailable = "admin.upstream.errors.credentialsUnavailable"
+	ErrorLoginAgreementRequired = "admin.upstream.errors.loginAgreementRequired"
 )
 
 // SSE 同步流事件类型。
@@ -108,33 +109,35 @@ type Metrics struct {
 }
 
 type CreateRequest struct {
-	Name          string   `json:"name"`
-	SiteURL       string   `json:"siteUrl"`
-	Platform      Platform `json:"platform"`
-	AuthMode      AuthMode `json:"authMode"`
-	Account       string   `json:"account"`
-	Password      string   `json:"password"`
-	AccessToken   string   `json:"accessToken"`
-	RefreshToken  string   `json:"refreshToken"`
-	TokenType     string   `json:"tokenType"`
-	Remark        string   `json:"remark"`
-	RechargeRate  float64  `json:"rechargeRate"`
-	SkipTLSVerify bool     `json:"skipTlsVerify"`
+	LoginAgreementRevision string   `json:"loginAgreementRevision"`
+	Name                   string   `json:"name"`
+	SiteURL                string   `json:"siteUrl"`
+	Platform               Platform `json:"platform"`
+	AuthMode               AuthMode `json:"authMode"`
+	Account                string   `json:"account"`
+	Password               string   `json:"password"`
+	AccessToken            string   `json:"accessToken"`
+	RefreshToken           string   `json:"refreshToken"`
+	TokenType              string   `json:"tokenType"`
+	Remark                 string   `json:"remark"`
+	RechargeRate           float64  `json:"rechargeRate"`
+	SkipTLSVerify          bool     `json:"skipTlsVerify"`
 }
 
 type UpdateRequest struct {
-	Name          string   `json:"name"`
-	SiteURL       string   `json:"siteUrl"`
-	Platform      Platform `json:"platform"`
-	AuthMode      AuthMode `json:"authMode"`
-	Account       string   `json:"account"`
-	Password      string   `json:"password"`
-	AccessToken   string   `json:"accessToken"`
-	RefreshToken  string   `json:"refreshToken"`
-	TokenType     string   `json:"tokenType"`
-	Remark        string   `json:"remark"`
-	RechargeRate  float64  `json:"rechargeRate"`
-	SkipTLSVerify bool     `json:"skipTlsVerify"`
+	LoginAgreementRevision string   `json:"loginAgreementRevision"`
+	Name                   string   `json:"name"`
+	SiteURL                string   `json:"siteUrl"`
+	Platform               Platform `json:"platform"`
+	AuthMode               AuthMode `json:"authMode"`
+	Account                string   `json:"account"`
+	Password               string   `json:"password"`
+	AccessToken            string   `json:"accessToken"`
+	RefreshToken           string   `json:"refreshToken"`
+	TokenType              string   `json:"tokenType"`
+	Remark                 string   `json:"remark"`
+	RechargeRate           float64  `json:"rechargeRate"`
+	SkipTLSVerify          bool     `json:"skipTlsVerify"`
 }
 
 // SiteSettings 站点级预警覆盖配置。nil 表示使用全局默认值。

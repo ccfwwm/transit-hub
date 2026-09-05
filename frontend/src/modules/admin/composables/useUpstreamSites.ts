@@ -81,6 +81,10 @@ export const useUpstreamSites = () => {
       if (index >= 0) {
         sites.value[index] = normalizeSite(nextSite, sites.value[index].logoBg)
       }
+      if (nextSite.status === 'error') {
+        addErrorKey.value = nextSite.errorKey || 'admin.upstream.errors.auth'
+        return false
+      }
       return true
     } catch (error) {
       addErrorKey.value = error instanceof Error ? error.message : 'admin.upstream.errors.unknown'

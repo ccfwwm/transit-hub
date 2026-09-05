@@ -7,6 +7,7 @@ export type UpstreamStatus = 'connecting' | 'syncing' | 'connected' | 'error'
 export type UpstreamAuthMode = 'password' | 'token'
 
 export interface UpstreamSiteForm {
+  loginAgreementRevision?: string
   name: string
   siteUrl: string
   platform: UpstreamPlatform
