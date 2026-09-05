@@ -282,7 +282,7 @@ export default {
         testModel: '检测模型',
         inheritTestModel: '继承统一模型',
         customTestModel: '自定义模型',
-        testModelPlaceholder: '例如 claude-sonnet-4-6',
+        testModelPlaceholder: '例如 claude-sonnet-5',
         inheritTestModelHelp: '当前将使用统一配置：{model}',
         customTestModelHelp: '此渠道检测时固定使用自定义模型。',
         modelRequired: '请选择继承统一模型，或填写自定义模型。'

@@ -7,7 +7,7 @@ const (
 	DefaultFailureThreshold      = 2
 	DefaultBalanceThreshold      = 1.0
 	DefaultOpenAITestModel       = "gpt-5.4"
-	DefaultAnthropicTestModel    = "claude-sonnet-4-6"
+	DefaultAnthropicTestModel    = "claude-sonnet-5"
 	DefaultGrokTestModel         = "grok-4.5"
 	DefaultBalanceRefreshMinutes = 5
 )

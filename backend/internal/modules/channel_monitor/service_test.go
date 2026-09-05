@@ -259,6 +259,27 @@ func TestRunRuleUsesDefaultAnthropicTestModel(t *testing.T) {
 	}
 }
 
+func TestRunRuleUsesDefaultAnthropicTestModelForClaudeGroup(t *testing.T) {
+	ctx := context.Background()
+	repo := newFakeRepository()
+	service := newTestService(repo)
+	conn := service.conns.connections[0]
+	conn.GroupType = "claude"
+	service.conns.connections[0] = conn
+	rule := repo.mustRule("conn-1")
+
+	_, err := service.RunRule(ctx, rule.ID, "manual")
+	if err != nil {
+		t.Fatalf("RunRule returned error: %v", err)
+	}
+	if len(service.platform.testOptions) != 1 {
+		t.Fatalf("expected one test option, got %d", len(service.platform.testOptions))
+	}
+	if service.platform.testOptions[0].ModelID != DefaultAnthropicTestModel {
+		t.Fatalf("expected default claude model %q, got %q", DefaultAnthropicTestModel, service.platform.testOptions[0].ModelID)
+	}
+}
+
 func TestRunRuleUsesDefaultGrokTestModel(t *testing.T) {
 	ctx := context.Background()
 	repo := newFakeRepository()

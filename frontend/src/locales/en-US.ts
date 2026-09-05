@@ -282,7 +282,7 @@ export default {
         testModel: 'Check model',
         inheritTestModel: 'Use global model',
         customTestModel: 'Custom model',
-        testModelPlaceholder: 'e.g. claude-sonnet-4-6',
+        testModelPlaceholder: 'e.g. claude-sonnet-5',
         inheritTestModelHelp: 'This channel uses the global model: {model}',
         customTestModelHelp: 'This channel always uses the custom model for checks.',
         modelRequired: 'Choose the global model or enter a custom model.'

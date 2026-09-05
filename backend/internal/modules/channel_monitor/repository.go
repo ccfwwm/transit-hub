@@ -157,7 +157,7 @@ func (r *Repository) EnsureSchema(ctx context.Context) error {
 			user_id text NOT NULL,
 			admin_account_id text NOT NULL,
 			openai_model_id text NOT NULL DEFAULT 'gpt-5.4',
-			anthropic_model_id text NOT NULL DEFAULT 'claude-sonnet-4-6',
+			anthropic_model_id text NOT NULL DEFAULT 'claude-sonnet-5',
 			grok_model_id text NOT NULL DEFAULT 'grok-4.5',
 			balance_refresh_interval_minutes integer NOT NULL DEFAULT 5,
 			updated_at timestamptz NOT NULL DEFAULT now(),
@@ -169,6 +169,15 @@ func (r *Repository) EnsureSchema(ctx context.Context) error {
 	if _, err := r.db.Exec(ctx, `
 		ALTER TABLE channel_monitor_test_model_configs
 		ADD COLUMN IF NOT EXISTS balance_refresh_interval_minutes integer NOT NULL DEFAULT 5
+	`); err != nil {
+		return err
+	}
+	if _, err := r.db.Exec(ctx, `
+		ALTER TABLE channel_monitor_test_model_configs
+		ALTER COLUMN anthropic_model_id SET DEFAULT 'claude-sonnet-5';
+		UPDATE channel_monitor_test_model_configs
+		SET anthropic_model_id = 'claude-sonnet-5', updated_at = now()
+		WHERE anthropic_model_id = 'claude-sonnet-4-6';
 	`); err != nil {
 		return err
 	}
