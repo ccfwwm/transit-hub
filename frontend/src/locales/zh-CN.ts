@@ -324,6 +324,7 @@ export default {
       groupsEditor: {
         title: '修改对接分组',
         description: '选择该渠道要关联的自有分组。保存后会同步更新上游 Admin 账号的分组权限。',
+        staleGroups: '已忽略 {count} 个已不存在的历史分组，请从当前列表重新选择。',
         empty: '当前工作区没有可用的自有分组。',
         selected: '已选择 {count} 个分组',
         save: '保存分组',

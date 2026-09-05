@@ -324,6 +324,7 @@ export default {
       groupsEditor: {
         title: 'Edit Connected Groups',
         description: 'Choose the own groups linked to this channel. Saving also updates the upstream Admin account group permissions.',
+        staleGroups: '{count} historical groups no longer exist and were ignored. Choose again from the current list.',
         empty: 'No own groups are available in the current workspace.',
         selected: '{count} groups selected',
         save: 'Save Groups',

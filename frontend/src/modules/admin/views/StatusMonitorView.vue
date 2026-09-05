@@ -99,6 +99,7 @@ const disconnectError = ref('')
 const groupEditingChannel = ref<ChannelMonitorChannel | null>(null)
 const groupEditorOwnGroups = ref<MySiteMappingOwnGroupOption[]>([])
 const groupEditorOwnGroupIds = ref<string[]>([])
+const groupEditorStaleCount = ref(0)
 const groupEditorLoading = ref(false)
 const groupEditorError = ref('')
 const editForm = ref({ enabled: true, checkIntervalMinutes: 2, failureThreshold: 2, balanceThreshold: 1, useDefaultTestModel: true, testModelId: '' })
@@ -508,6 +509,7 @@ const openGroupEditor = async (channel: ChannelMonitorChannel) => {
   groupEditingChannel.value = channel
   groupEditorOwnGroups.value = []
   groupEditorOwnGroupIds.value = []
+  groupEditorStaleCount.value = 0
   groupEditorError.value = ''
   groupEditorLoading.value = true
   try {
@@ -515,7 +517,10 @@ const openGroupEditor = async (channel: ChannelMonitorChannel) => {
     const connection = connections.find(item => item.id === channel.connectionId)
     if (!connection) throw new Error('admin.channelMonitor.groupsEditor.loadFailed')
     groupEditorOwnGroups.value = options.ownGroups
-    groupEditorOwnGroupIds.value = [...connection.ownGroupIds]
+    const availableGroupIDs = new Set(options.ownGroups.map(group => group.id))
+    const validGroupIDs = connection.ownGroupIds.filter(groupID => availableGroupIDs.has(groupID))
+    groupEditorStaleCount.value = connection.ownGroupIds.length - validGroupIDs.length
+    groupEditorOwnGroupIds.value = validGroupIDs
   } catch (error: any) {
     groupEditorError.value = error?.message?.startsWith('admin.') ? t(error.message) : t('admin.channelMonitor.groupsEditor.loadFailed')
   } finally {
@@ -528,6 +533,7 @@ const closeGroupEditor = () => {
   groupEditingChannel.value = null
   groupEditorOwnGroups.value = []
   groupEditorOwnGroupIds.value = []
+  groupEditorStaleCount.value = 0
   groupEditorError.value = ''
 }
 
@@ -1223,6 +1229,9 @@ const dispatchButtonClass = (channel: ChannelMonitorChannel): string => (
         </div>
         <div class="px-6 py-5">
           <p class="text-sm text-muted-foreground">{{ t('admin.channelMonitor.groupsEditor.description') }}</p>
+          <p v-if="groupEditorStaleCount > 0" class="mt-3 rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-700 dark:text-amber-300">
+            {{ t('admin.channelMonitor.groupsEditor.staleGroups', { count: groupEditorStaleCount }) }}
+          </p>
           <Loader2 v-if="groupEditorLoading && groupEditorOwnGroups.length === 0" class="mt-5 h-5 w-5 animate-spin text-primary" />
           <div v-else-if="groupEditorOwnGroups.length === 0" class="mt-5 rounded-lg border border-border/50 bg-surface p-4 text-sm text-muted-foreground">
             {{ t('admin.channelMonitor.groupsEditor.empty') }}
