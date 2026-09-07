@@ -156,9 +156,10 @@ func (r *Repository) EnsureSchema(ctx context.Context) error {
 		CREATE TABLE IF NOT EXISTS channel_monitor_test_model_configs (
 			user_id text NOT NULL,
 			admin_account_id text NOT NULL,
-			openai_model_id text NOT NULL DEFAULT 'gpt-5.4',
+			openai_model_id text NOT NULL DEFAULT 'gpt-5.6-sol',
 			anthropic_model_id text NOT NULL DEFAULT 'claude-sonnet-5',
 			grok_model_id text NOT NULL DEFAULT 'grok-4.5',
+			group_models_json jsonb NOT NULL DEFAULT '[]'::jsonb,
 			balance_refresh_interval_minutes integer NOT NULL DEFAULT 5,
 			updated_at timestamptz NOT NULL DEFAULT now(),
 			PRIMARY KEY (user_id, admin_account_id)
@@ -168,7 +169,29 @@ func (r *Repository) EnsureSchema(ctx context.Context) error {
 	}
 	if _, err := r.db.Exec(ctx, `
 		ALTER TABLE channel_monitor_test_model_configs
-		ADD COLUMN IF NOT EXISTS balance_refresh_interval_minutes integer NOT NULL DEFAULT 5
+		ADD COLUMN IF NOT EXISTS balance_refresh_interval_minutes integer NOT NULL DEFAULT 5,
+		ADD COLUMN IF NOT EXISTS group_models_json jsonb NOT NULL DEFAULT '[]'::jsonb
+	`); err != nil {
+		return err
+	}
+	if _, err := r.db.Exec(ctx, `
+		ALTER TABLE channel_monitor_test_model_configs
+		ALTER COLUMN openai_model_id SET DEFAULT 'gpt-5.6-sol';
+		UPDATE channel_monitor_test_model_configs
+		SET openai_model_id = 'gpt-5.6-sol', updated_at = now()
+		WHERE openai_model_id IN ('gpt-5.4', 'gpt-5.5');
+	`); err != nil {
+		return err
+	}
+	if _, err := r.db.Exec(ctx, `
+		ALTER TABLE channel_monitor_rules ADD COLUMN IF NOT EXISTS test_model_id text NULL
+	`); err != nil {
+		return err
+	}
+	if _, err := r.db.Exec(ctx, `
+		UPDATE channel_monitor_rules AS rules
+		SET test_model_id = 'gpt-5.6-sol', updated_at = now()
+		WHERE rules.test_model_id IN ('gpt-5.4', 'gpt-5.5')
 	`); err != nil {
 		return err
 	}
@@ -184,11 +207,6 @@ func (r *Repository) EnsureSchema(ctx context.Context) error {
 	if _, err := r.db.Exec(ctx, `
 		ALTER TABLE channel_monitor_test_model_configs
 		ADD COLUMN IF NOT EXISTS grok_model_id text NOT NULL DEFAULT 'grok-4.5'
-	`); err != nil {
-		return err
-	}
-	if _, err := r.db.Exec(ctx, `
-		ALTER TABLE channel_monitor_rules ADD COLUMN IF NOT EXISTS test_model_id text NULL
 	`); err != nil {
 		return err
 	}
@@ -450,7 +468,7 @@ func (r *Repository) GetLastRateApplyResult(ctx context.Context, userID, adminAc
 
 func (r *Repository) GetTestModelConfig(ctx context.Context, userID, adminAccountID string) (*TestModelConfig, error) {
 	rows, err := r.db.Query(ctx, `
-		SELECT user_id, admin_account_id, openai_model_id, anthropic_model_id, grok_model_id, balance_refresh_interval_minutes, updated_at
+		SELECT user_id, admin_account_id, openai_model_id, anthropic_model_id, grok_model_id, group_models_json, balance_refresh_interval_minutes, updated_at
 		FROM channel_monitor_test_model_configs
 		WHERE user_id = $1 AND admin_account_id = $2
 	`, userID, adminAccountID)
@@ -462,33 +480,52 @@ func (r *Repository) GetTestModelConfig(ctx context.Context, userID, adminAccoun
 		return nil, rows.Err()
 	}
 	var config TestModelConfig
+	var groupModelsJSON []byte
 	if err := rows.Scan(
 		&config.UserID,
 		&config.AdminAccountID,
 		&config.OpenAIModelID,
 		&config.AnthropicModelID,
 		&config.GrokModelID,
+		&groupModelsJSON,
 		&config.BalanceRefreshIntervalMinutes,
 		&config.UpdatedAt,
 	); err != nil {
 		return nil, err
 	}
+	if len(groupModelsJSON) > 0 {
+		if err := json.Unmarshal(groupModelsJSON, &config.GroupModels); err != nil {
+			return nil, err
+		}
+	}
+	if config.GroupModels == nil {
+		config.GroupModels = []TestModelGroupConfig{}
+	}
 	return &config, rows.Err()
 }
 
 func (r *Repository) SaveTestModelConfig(ctx context.Context, config TestModelConfig) error {
-	_, err := r.db.Exec(ctx, `
+	groupModels := config.GroupModels
+	if groupModels == nil {
+		groupModels = []TestModelGroupConfig{}
+	}
+	groupModelsJSON, err := json.Marshal(groupModels)
+	if err != nil {
+		return err
+	}
+	_, err = r.db.Exec(ctx, `
 		INSERT INTO channel_monitor_test_model_configs (
-			user_id, admin_account_id, openai_model_id, anthropic_model_id, grok_model_id, balance_refresh_interval_minutes, updated_at
+			user_id, admin_account_id, openai_model_id, anthropic_model_id, grok_model_id, group_models_json, balance_refresh_interval_minutes, updated_at
 		)
-		VALUES ($1, $2, $3, $4, $5, $6, now())
+		VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7, now())
 		ON CONFLICT (user_id, admin_account_id) DO UPDATE SET
 			openai_model_id = EXCLUDED.openai_model_id,
 			anthropic_model_id = EXCLUDED.anthropic_model_id,
 			grok_model_id = EXCLUDED.grok_model_id,
+			group_models_json = EXCLUDED.group_models_json,
 			balance_refresh_interval_minutes = EXCLUDED.balance_refresh_interval_minutes,
 			updated_at = now()
-	`, config.UserID, config.AdminAccountID, config.OpenAIModelID, config.AnthropicModelID, config.GrokModelID, config.BalanceRefreshIntervalMinutes)
+	`, config.UserID, config.AdminAccountID, config.OpenAIModelID, config.AnthropicModelID, config.GrokModelID, string(groupModelsJSON), config.BalanceRefreshIntervalMinutes)
 	return err
 }
 

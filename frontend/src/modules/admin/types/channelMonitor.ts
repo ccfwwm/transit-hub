@@ -19,6 +19,7 @@ export interface ChannelMonitorStats {
 }
 
 export interface ChannelMonitorGroup {
+  groupId: string
   groupName: string
   platform: string
   total: number
@@ -77,7 +78,7 @@ export interface ChannelMonitorChannel {
   uptimePercent: number
   testModelId: string
   effectiveTestModelId: string
-  testModelSource: 'custom' | 'global'
+  testModelSource: 'custom' | 'group' | 'global'
 }
 
 export interface ChannelMonitorSummary {
@@ -199,13 +200,21 @@ export interface ChannelMonitorTestModelConfig {
   openaiModelId: string
   anthropicModelId: string
   grokModelId: string
+  groupModels: ChannelMonitorGroupModelConfig[]
   balanceRefreshIntervalMinutes: number
   updatedAt: string
+}
+
+export interface ChannelMonitorGroupModelConfig {
+  groupId: string
+  groupName: string
+  modelId: string
 }
 
 export interface UpdateChannelMonitorTestModelConfigRequest {
   openaiModelId?: string
   anthropicModelId?: string
   grokModelId?: string
+  groupModels?: ChannelMonitorGroupModelConfig[]
   balanceRefreshIntervalMinutes?: number
 }

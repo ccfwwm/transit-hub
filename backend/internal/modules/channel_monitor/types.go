@@ -6,7 +6,7 @@ const (
 	DefaultCheckIntervalMinutes  = 2
 	DefaultFailureThreshold      = 2
 	DefaultBalanceThreshold      = 1.0
-	DefaultOpenAITestModel       = "gpt-5.4"
+	DefaultOpenAITestModel       = "gpt-5.6-sol"
 	DefaultAnthropicTestModel    = "claude-sonnet-5"
 	DefaultGrokTestModel         = "grok-4.5"
 	DefaultBalanceRefreshMinutes = 5
@@ -115,6 +115,7 @@ type SummaryStats struct {
 }
 
 type GroupSummary struct {
+	GroupID        string     `json:"groupId"`
 	GroupName      string     `json:"groupName"`
 	Platform       string     `json:"platform"`
 	Total          int        `json:"total"`
@@ -210,20 +211,30 @@ type BulkRunRequest struct {
 }
 
 type TestModelConfig struct {
-	UserID                        string    `json:"-"`
-	AdminAccountID                string    `json:"-"`
-	OpenAIModelID                 string    `json:"openaiModelId"`
-	AnthropicModelID              string    `json:"anthropicModelId"`
-	GrokModelID                   string    `json:"grokModelId"`
-	BalanceRefreshIntervalMinutes int       `json:"balanceRefreshIntervalMinutes"`
-	UpdatedAt                     time.Time `json:"updatedAt"`
+	UserID                        string                 `json:"-"`
+	AdminAccountID                string                 `json:"-"`
+	OpenAIModelID                 string                 `json:"openaiModelId"`
+	AnthropicModelID              string                 `json:"anthropicModelId"`
+	GrokModelID                   string                 `json:"grokModelId"`
+	GroupModels                   []TestModelGroupConfig `json:"groupModels"`
+	BalanceRefreshIntervalMinutes int                    `json:"balanceRefreshIntervalMinutes"`
+	UpdatedAt                     time.Time              `json:"updatedAt"`
 }
 
 type UpdateTestModelConfigRequest struct {
-	OpenAIModelID                 *string `json:"openaiModelId"`
-	AnthropicModelID              *string `json:"anthropicModelId"`
-	GrokModelID                   *string `json:"grokModelId"`
-	BalanceRefreshIntervalMinutes *int    `json:"balanceRefreshIntervalMinutes"`
+	OpenAIModelID                 *string                 `json:"openaiModelId"`
+	AnthropicModelID              *string                 `json:"anthropicModelId"`
+	GrokModelID                   *string                 `json:"grokModelId"`
+	GroupModels                   *[]TestModelGroupConfig `json:"groupModels"`
+	BalanceRefreshIntervalMinutes *int                    `json:"balanceRefreshIntervalMinutes"`
+}
+
+// TestModelGroupConfig overrides the platform default for one own group.
+// The group ID is authoritative; the name is retained for a readable UI label.
+type TestModelGroupConfig struct {
+	GroupID   string `json:"groupId"`
+	GroupName string `json:"groupName"`
+	ModelID   string `json:"modelId"`
 }
 
 type RateRule struct {
@@ -328,6 +339,7 @@ func DefaultTestModelConfig(userID, adminAccountID string) TestModelConfig {
 		OpenAIModelID:                 DefaultOpenAITestModel,
 		AnthropicModelID:              DefaultAnthropicTestModel,
 		GrokModelID:                   DefaultGrokTestModel,
+		GroupModels:                   []TestModelGroupConfig{},
 		BalanceRefreshIntervalMinutes: DefaultBalanceRefreshMinutes,
 		UpdatedAt:                     time.Now(),
 	}

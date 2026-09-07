@@ -362,6 +362,26 @@ func TestRunRuleUsesPerRuleTestModelOverride(t *testing.T) {
 	}
 }
 
+func TestRunRuleUsesOwnGroupDefaultTestModel(t *testing.T) {
+	ctx := context.Background()
+	repo := newFakeRepository()
+	repo.testModelConfig = &TestModelConfig{
+		UserID:         "user-1",
+		AdminAccountID: "admin-1",
+		OpenAIModelID:  "global-gpt",
+		GroupModels:    []TestModelGroupConfig{{GroupID: "own-1", GroupName: "codex-fast", ModelID: "gpt-5.6-sol"}},
+	}
+	service := newTestService(repo)
+	rule := repo.mustRule("conn-1")
+
+	if _, err := service.RunRule(ctx, rule.ID, "manual"); err != nil {
+		t.Fatalf("RunRule returned error: %v", err)
+	}
+	if len(service.platform.testOptions) != 1 || service.platform.testOptions[0].ModelID != "gpt-5.6-sol" {
+		t.Fatalf("expected own-group model, got %#v", service.platform.testOptions)
+	}
+}
+
 func TestUpdateRuleClearsPerRuleTestModelOverride(t *testing.T) {
 	ctx := context.Background()
 	repo := newFakeRepository()

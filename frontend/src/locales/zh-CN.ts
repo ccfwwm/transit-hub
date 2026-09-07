@@ -185,6 +185,7 @@ export default {
         threshold: '阈值 {value}',
         next: '下次 {value}',
         customModel: '单条自定义',
+        groupModel: '分组默认',
         globalModel: '统一配置'
       },
       timeline: {
@@ -252,6 +253,9 @@ export default {
         openai: 'OpenAI 检测模型',
         anthropic: 'Anthropic 检测模型',
         grok: 'Grok 检测模型',
+        groupDefaults: '分组默认检测模型',
+        groupDefaultsHelp: '配置后优先于平台统一模型，单条自定义模型优先级最高。清空即可取消分组覆盖。',
+        noGroups: '当前没有可配置的自有分组。',
         balanceRefreshInterval: '余额刷新间隔',
         minutes: '分钟',
         current: '当前：OpenAI {openai} / Anthropic {anthropic} / Grok {grok} / 余额 {minutes} 分钟刷新'

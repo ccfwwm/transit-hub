@@ -40,7 +40,7 @@ import {
   updateChannelMonitorTestModelConfig,
 } from '../api/channelMonitor'
 import { getMySiteMappingOptions, listRealConnections, realDisconnect, updateRealConnectionGroups } from '../api/mySites'
-import type { ChannelMonitorChannel, ChannelMonitorRateRule, ChannelMonitorResult, ChannelMonitorStatus, RateGateStatus, UpdateChannelMonitorRuleRequest } from '../types/channelMonitor'
+import type { ChannelMonitorChannel, ChannelMonitorGroup, ChannelMonitorGroupModelConfig, ChannelMonitorRateRule, ChannelMonitorResult, ChannelMonitorStatus, RateGateStatus, UpdateChannelMonitorRuleRequest } from '../types/channelMonitor'
 import type { MySiteMappingOwnGroupOption, RealDisconnectRequest } from '../types/mySites'
 
 type StatusFilter = 'all' | 'monitor_paused' | 'dispatch_paused' | ChannelMonitorStatus
@@ -81,9 +81,10 @@ const summary = ref({
     lastResult: null,
   },
   testModelConfig: {
-    openaiModelId: 'gpt-5.4',
+    openaiModelId: 'gpt-5.6-sol',
     anthropicModelId: 'claude-sonnet-5',
     grokModelId: 'grok-4.5',
+    groupModels: [],
     balanceRefreshIntervalMinutes: 5,
     updatedAt: '',
   },
@@ -104,7 +105,7 @@ const groupEditorLoading = ref(false)
 const groupEditorError = ref('')
 const editForm = ref({ enabled: true, checkIntervalMinutes: 2, failureThreshold: 2, balanceThreshold: 1, useDefaultTestModel: true, testModelId: '' })
 const rateRuleForm = ref({ enabled: false, autoApplyOnCheck: true, updatePriority: true, stopWhenMissingRate: true })
-const testModelForm = ref({ openaiModelId: 'gpt-5.4', anthropicModelId: 'claude-sonnet-5', grokModelId: 'grok-4.5', balanceRefreshIntervalMinutes: 5 })
+const testModelForm = ref({ openaiModelId: 'gpt-5.6-sol', anthropicModelId: 'claude-sonnet-5', grokModelId: 'grok-4.5', groupModels: [] as { groupId: string, groupName: string, modelId: string }[], balanceRefreshIntervalMinutes: 5 })
 const priorityDrafts = ref<Record<string, number | null>>({})
 
 const syncSummaryState = (next: Awaited<ReturnType<typeof getChannelMonitorSummary>>) => {
@@ -382,9 +383,10 @@ const closeRateRuleEditor = () => {
 
 const openTestModelEditor = () => {
   testModelForm.value = {
-    openaiModelId: summary.value.testModelConfig.openaiModelId || 'gpt-5.4',
+    openaiModelId: summary.value.testModelConfig.openaiModelId || 'gpt-5.6-sol',
     anthropicModelId: summary.value.testModelConfig.anthropicModelId || 'claude-sonnet-5',
     grokModelId: summary.value.testModelConfig.grokModelId || 'grok-4.5',
+    groupModels: summary.value.testModelConfig.groupModels?.map(model => ({ ...model })) ?? [],
     balanceRefreshIntervalMinutes: summary.value.testModelConfig.balanceRefreshIntervalMinutes || 5,
   }
   isTestModelEditorOpen.value = true
@@ -394,12 +396,40 @@ const closeTestModelEditor = () => {
   isTestModelEditorOpen.value = false
 }
 
+const configurableGroups = computed(() => summary.value.groups
+  .filter((group: ChannelMonitorGroup) => Boolean(group.groupId))
+  .sort((a: ChannelMonitorGroup, b: ChannelMonitorGroup) => a.groupName.localeCompare(b.groupName)))
+
+const groupModelValue = (groupID: string): string =>
+  testModelForm.value.groupModels.find(model => model.groupId === groupID)?.modelId ?? ''
+
+const updateGroupModel = (group: ChannelMonitorGroup, value: string) => {
+  const modelID = value.trim()
+  const index = testModelForm.value.groupModels.findIndex(model => model.groupId === group.groupId)
+  if (!modelID) {
+    if (index >= 0) testModelForm.value.groupModels.splice(index, 1)
+    return
+  }
+  const config: ChannelMonitorGroupModelConfig = { groupId: group.groupId, groupName: group.groupName, modelId: modelID }
+  if (index >= 0) testModelForm.value.groupModels[index] = config
+  else testModelForm.value.groupModels.push(config)
+}
+
+const handleGroupModelInput = (group: ChannelMonitorGroup, event: Event) => {
+  const target = event.target as HTMLInputElement | null
+  updateGroupModel(group, target?.value ?? '')
+}
+
 const saveTestModelConfig = async () => {
   await runAction(async () => {
+    const currentGroupIDs = new Set(configurableGroups.value.map(group => group.groupId))
     const config = await updateChannelMonitorTestModelConfig({
       openaiModelId: testModelForm.value.openaiModelId,
       anthropicModelId: testModelForm.value.anthropicModelId,
       grokModelId: testModelForm.value.grokModelId,
+      groupModels: testModelForm.value.groupModels
+        .filter(model => currentGroupIDs.has(model.groupId) && model.modelId.trim())
+        .map(model => ({ ...model, modelId: model.modelId.trim() })),
       balanceRefreshIntervalMinutes: Number(testModelForm.value.balanceRefreshIntervalMinutes),
     })
     summary.value.testModelConfig = config
@@ -998,7 +1028,7 @@ const dispatchButtonClass = (channel: ChannelMonitorChannel): string => (
                     {{ channel.effectiveTestModelId || '-' }}
                   </div>
                   <div class="text-[11px] text-muted-foreground">
-                    {{ channel.testModelSource === 'custom' ? t('admin.channelMonitor.channels.customModel') : t('admin.channelMonitor.channels.globalModel') }}
+                    {{ channel.testModelSource === 'custom' ? t('admin.channelMonitor.channels.customModel') : channel.testModelSource === 'group' ? t('admin.channelMonitor.channels.groupModel') : t('admin.channelMonitor.channels.globalModel') }}
                   </div>
                 </td>
                 <td class="px-3 py-3 align-top">
@@ -1132,13 +1162,13 @@ const dispatchButtonClass = (channel: ChannelMonitorChannel): string => (
     </div>
 
     <div v-if="isTestModelEditorOpen" class="fixed inset-0 z-50 flex items-center justify-center bg-background/80 p-4 backdrop-blur-sm">
-      <div class="w-full max-w-lg rounded-xl border border-border/50 bg-card p-6 shadow-xl">
+      <div class="w-full max-w-2xl rounded-xl border border-border/50 bg-card p-6 shadow-xl">
         <h2 class="text-lg font-semibold text-foreground">{{ t('admin.channelMonitor.testModel.title') }}</h2>
         <p class="mt-1 text-sm text-muted-foreground">{{ t('admin.channelMonitor.testModel.description') }}</p>
         <div class="mt-5 grid gap-4">
           <label class="block space-y-2">
             <span class="text-sm font-medium text-foreground">{{ t('admin.channelMonitor.testModel.openai') }}</span>
-            <input v-model.trim="testModelForm.openaiModelId" type="text" class="h-10 w-full rounded-xl border border-border/50 bg-surface px-3 font-mono text-sm outline-none focus:border-primary focus:ring-1 focus:ring-primary" placeholder="gpt-5.4" />
+            <input v-model.trim="testModelForm.openaiModelId" type="text" class="h-10 w-full rounded-xl border border-border/50 bg-surface px-3 font-mono text-sm outline-none focus:border-primary focus:ring-1 focus:ring-primary" placeholder="gpt-5.6-sol" />
           </label>
           <label class="block space-y-2">
             <span class="text-sm font-medium text-foreground">{{ t('admin.channelMonitor.testModel.anthropic') }}</span>
@@ -1148,6 +1178,27 @@ const dispatchButtonClass = (channel: ChannelMonitorChannel): string => (
             <span class="text-sm font-medium text-foreground">{{ t('admin.channelMonitor.testModel.grok') }}</span>
             <input v-model.trim="testModelForm.grokModelId" type="text" class="h-10 w-full rounded-xl border border-border/50 bg-surface px-3 font-mono text-sm outline-none focus:border-primary focus:ring-1 focus:ring-primary" placeholder="grok-4.5" />
           </label>
+          <div class="space-y-2">
+            <div>
+              <span class="text-sm font-medium text-foreground">{{ t('admin.channelMonitor.testModel.groupDefaults') }}</span>
+              <p class="mt-1 text-xs text-muted-foreground">{{ t('admin.channelMonitor.testModel.groupDefaultsHelp') }}</p>
+            </div>
+            <div v-if="configurableGroups.length === 0" class="rounded-lg border border-border/50 bg-surface px-3 py-3 text-sm text-muted-foreground">
+              {{ t('admin.channelMonitor.testModel.noGroups') }}
+            </div>
+            <div v-else class="max-h-52 space-y-2 overflow-y-auto rounded-lg border border-border/50 bg-surface p-3">
+              <label v-for="group in configurableGroups" :key="group.groupId" class="grid grid-cols-[minmax(0,1fr)_minmax(12rem,18rem)] items-center gap-3">
+                <span class="min-w-0 truncate text-sm text-foreground" :title="group.groupName">{{ group.groupName }}</span>
+                <input
+                  :value="groupModelValue(group.groupId)"
+                  type="text"
+                  class="h-9 w-full rounded-lg border border-border/50 bg-card px-3 font-mono text-sm outline-none focus:border-primary focus:ring-1 focus:ring-primary"
+                  :placeholder="summary.testModelConfig.openaiModelId || 'gpt-5.6-sol'"
+                  @input="handleGroupModelInput(group, $event)"
+                />
+              </label>
+            </div>
+          </div>
           <label class="block space-y-2">
             <span class="text-sm font-medium text-foreground">{{ t('admin.channelMonitor.testModel.balanceRefreshInterval') }}</span>
             <div class="flex items-center gap-2">

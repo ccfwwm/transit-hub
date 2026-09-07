@@ -153,6 +153,7 @@ func (s *Service) Summary(ctx context.Context, userID string) (SummaryResponse, 
 	}
 	groupMap := map[string]*GroupSummary{}
 	groupPlatformByName := map[string]string{}
+	groupIDByName := map[string]string{}
 	if state != nil {
 		for _, ownGroup := range state.OwnGroups {
 			name := strings.TrimSpace(ownGroup.Name)
@@ -161,7 +162,8 @@ func (s *Service) Summary(ctx context.Context, userID string) (SummaryResponse, 
 			}
 			platform := strings.TrimSpace(ownGroup.Platform)
 			groupPlatformByName[name] = platform
-			groupMap[name+"|"+platform] = &GroupSummary{GroupName: name, Platform: platform}
+			groupIDByName[name] = strings.TrimSpace(ownGroup.ID)
+			groupMap[name+"|"+platform] = &GroupSummary{GroupID: strings.TrimSpace(ownGroup.ID), GroupName: name, Platform: platform}
 		}
 	}
 	for _, conn := range connections {
@@ -184,7 +186,7 @@ func (s *Service) Summary(ctx context.Context, userID string) (SummaryResponse, 
 			key := groupName + "|" + platform
 			group := groupMap[key]
 			if group == nil {
-				group = &GroupSummary{GroupName: groupName, Platform: platform}
+				group = &GroupSummary{GroupID: groupIDByName[groupName], GroupName: groupName, Platform: platform}
 				groupMap[key] = group
 			}
 			group.Total++
@@ -738,6 +740,12 @@ func (s *Service) UpdateTestModelConfig(ctx context.Context, userID string, req 
 	if req.GrokModelID != nil {
 		config.GrokModelID = defaultIfBlank(*req.GrokModelID, DefaultGrokTestModel)
 	}
+	if req.GroupModels != nil {
+		config.GroupModels, err = normalizeGroupModelConfigs(*req.GroupModels)
+		if err != nil {
+			return TestModelConfig{}, err
+		}
+	}
 	if req.BalanceRefreshIntervalMinutes != nil {
 		config.BalanceRefreshIntervalMinutes = clampInt(*req.BalanceRefreshIntervalMinutes, 1, 24*60)
 	}
@@ -1124,7 +1132,7 @@ func (s *Service) runRuleWithWorkspace(ctx context.Context, rule Rule, reason st
 		return finish(StatusBalancePaused, false, fmt.Sprintf("余额 %.2f 低于阈值 %.2f，已自动停止", *balance, rule.BalanceThreshold), nil, "")
 	}
 
-	testModel, _ := effectiveTestModel(rule, conn.GroupType, testModelConfig)
+	testModel, _ := effectiveTestModel(rule, *conn, state, testModelConfig)
 	testResult, testErr := s.platform.TestSub2APIAdminAccount(state.Session, conn.AdminAccountID, AccountTestOptions{ModelID: testModel})
 	if strings.TrimSpace(testResult.Model) == "" {
 		testResult.Model = testModel
@@ -1252,7 +1260,7 @@ func (s *Service) workspaceState(ctx context.Context, userID, adminAccountID str
 }
 
 func (s *Service) channelStatus(ctx context.Context, conn my_sites.RealConnection, rule Rule, state *my_sites.State, accountsByID map[string]AdminAccountStatus, testModelConfig TestModelConfig) ChannelStatus {
-	effectiveTestModelID, testModelSource := effectiveTestModel(rule, conn.GroupType, testModelConfig)
+	effectiveTestModelID, testModelSource := effectiveTestModel(rule, conn, state, testModelConfig)
 	row := ChannelStatus{
 		RuleID:               rule.ID,
 		ConnectionID:         conn.ID,
@@ -1368,6 +1376,7 @@ func (s *Service) ensureTestModelConfig(ctx context.Context, userID, adminAccoun
 		config.OpenAIModelID = defaultIfBlank(config.OpenAIModelID, DefaultOpenAITestModel)
 		config.AnthropicModelID = defaultIfBlank(config.AnthropicModelID, DefaultAnthropicTestModel)
 		config.GrokModelID = defaultIfBlank(config.GrokModelID, DefaultGrokTestModel)
+		config.GroupModels, _ = normalizeGroupModelConfigs(config.GroupModels)
 		config.BalanceRefreshIntervalMinutes = clampInt(config.BalanceRefreshIntervalMinutes, 1, 24*60)
 		return *config, nil
 	}
@@ -1722,11 +1731,44 @@ func testModelForGroupType(groupType string, config TestModelConfig) string {
 	}
 }
 
-func effectiveTestModel(rule Rule, groupType string, config TestModelConfig) (string, string) {
+func effectiveTestModel(rule Rule, conn my_sites.RealConnection, state *my_sites.State, config TestModelConfig) (string, string) {
 	if modelID := strings.TrimSpace(rule.TestModelID); modelID != "" {
 		return modelID, "custom"
 	}
-	return testModelForGroupType(groupType, config), "global"
+	for _, ownGroupID := range conn.OwnGroupIDs {
+		groupID := strings.TrimSpace(ownGroupID)
+		if groupID == "" {
+			continue
+		}
+		for _, groupModel := range config.GroupModels {
+			if strings.TrimSpace(groupModel.GroupID) == groupID && strings.TrimSpace(groupModel.ModelID) != "" {
+				return strings.TrimSpace(groupModel.ModelID), "group"
+			}
+		}
+	}
+	return testModelForGroupType(conn.GroupType, config), "global"
+}
+
+func normalizeGroupModelConfigs(configs []TestModelGroupConfig) ([]TestModelGroupConfig, error) {
+	result := make([]TestModelGroupConfig, 0, len(configs))
+	seen := make(map[string]struct{}, len(configs))
+	for _, config := range configs {
+		groupID := strings.TrimSpace(config.GroupID)
+		modelID := strings.TrimSpace(config.ModelID)
+		if groupID == "" || modelID == "" {
+			return nil, requestError("admin.channelMonitor.errors.request")
+		}
+		if _, exists := seen[groupID]; exists {
+			return nil, requestError("admin.channelMonitor.errors.request")
+		}
+		seen[groupID] = struct{}{}
+		result = append(result, TestModelGroupConfig{
+			GroupID:   groupID,
+			GroupName: strings.TrimSpace(config.GroupName),
+			ModelID:   modelID,
+		})
+	}
+	return result, nil
 }
 
 func convertedBalance(site *upstream.Site) *float64 {

@@ -185,6 +185,7 @@ export default {
         threshold: 'Threshold {value}',
         next: 'Next {value}',
         customModel: 'Per-channel',
+        groupModel: 'Group default',
         globalModel: 'Global'
       },
       timeline: {
@@ -252,6 +253,9 @@ export default {
         openai: 'OpenAI check model',
         anthropic: 'Anthropic check model',
         grok: 'Grok check model',
+        groupDefaults: 'Group default check models',
+        groupDefaultsHelp: 'Group defaults override platform defaults; per-channel custom models still have the highest priority. Clear a field to remove the override.',
+        noGroups: 'No own groups are available for configuration.',
         balanceRefreshInterval: 'Balance refresh interval',
         minutes: 'minutes',
         current: 'Current: OpenAI {openai} / Anthropic {anthropic} / Grok {grok} / balance every {minutes} min'
