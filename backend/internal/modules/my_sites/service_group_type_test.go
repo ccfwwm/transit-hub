@@ -29,3 +29,23 @@ func TestGrokGroupTypeMappings(t *testing.T) {
 		t.Fatalf("extra.openai_passthrough = %v, want true", extra["openai_passthrough"])
 	}
 }
+
+func TestDynamicGroupTypeMappingsDoNotFallBackToOpenAI(t *testing.T) {
+	tests := map[string]int{
+		"kimi":            25,
+		"zhipu":           16,
+		"deepseek":        43,
+		"codex":           57,
+		"future-provider": 0,
+	}
+	for groupType, want := range tests {
+		if got := groupTypeToNewAPIChannelType(groupType); got != want {
+			t.Fatalf("groupTypeToNewAPIChannelType(%q) = %d, want %d", groupType, got, want)
+		}
+	}
+
+	payload := buildAccountPayload("future-provider", "https://api.example.com", "sk-test", []int{7}, "dynamic-account")
+	if got := payload["platform"]; got != "future-provider" {
+		t.Fatalf("dynamic platform = %v, want future-provider", got)
+	}
+}

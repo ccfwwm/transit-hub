@@ -1133,6 +1133,9 @@ func (s *Service) runRuleWithWorkspace(ctx context.Context, rule Rule, reason st
 	}
 
 	testModel, _ := effectiveTestModel(rule, *conn, state, testModelConfig)
+	if strings.TrimSpace(testModel) == "" {
+		return finish(StatusUnsupported, false, "当前分组未配置主动检测模型，已跳过检测和自动停启", nil, "")
+	}
 	testResult, testErr := s.platform.TestSub2APIAdminAccount(state.Session, conn.AdminAccountID, AccountTestOptions{ModelID: testModel})
 	if strings.TrimSpace(testResult.Model) == "" {
 		testResult.Model = testModel
@@ -1305,6 +1308,9 @@ func (s *Service) channelStatus(ctx context.Context, conn my_sites.RealConnectio
 		row.Schedulable = rule.DesiredSchedulable
 	}
 	if !row.Supported {
+		row.Status = StatusUnsupported
+	}
+	if strings.TrimSpace(effectiveTestModelID) == "" {
 		row.Status = StatusUnsupported
 	}
 	site, err := s.upstreams.GetSite(ctx, conn.UpstreamSiteID)
@@ -1722,12 +1728,14 @@ func defaultIfBlank(value, fallback string) string {
 
 func testModelForGroupType(groupType string, config TestModelConfig) string {
 	switch strings.ToLower(strings.TrimSpace(groupType)) {
+	case "openai":
+		return defaultIfBlank(config.OpenAIModelID, DefaultOpenAITestModel)
 	case "anthropic", "claude":
 		return defaultIfBlank(config.AnthropicModelID, DefaultAnthropicTestModel)
 	case "grok", "xai":
 		return defaultIfBlank(config.GrokModelID, DefaultGrokTestModel)
 	default:
-		return defaultIfBlank(config.OpenAIModelID, DefaultOpenAITestModel)
+		return ""
 	}
 }
 
@@ -1746,7 +1754,11 @@ func effectiveTestModel(rule Rule, conn my_sites.RealConnection, state *my_sites
 			}
 		}
 	}
-	return testModelForGroupType(conn.GroupType, config), "global"
+	modelID := testModelForGroupType(conn.GroupType, config)
+	if modelID == "" {
+		return "", "unsupported"
+	}
+	return modelID, "global"
 }
 
 func normalizeGroupModelConfigs(configs []TestModelGroupConfig) ([]TestModelGroupConfig, error) {

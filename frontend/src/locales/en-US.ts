@@ -186,7 +186,8 @@ export default {
         next: 'Next {value}',
         customModel: 'Per-channel',
         groupModel: 'Group default',
-        globalModel: 'Global'
+        globalModel: 'Global',
+        unsupportedModel: 'Model not configured'
       },
       timeline: {
         window: 'Recent 60 checks',

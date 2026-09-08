@@ -565,13 +565,18 @@ func (s *PlatformService) fetchSub2APIAvailableGroupsWithRates(session Session) 
 		if name == defaultDisplay {
 			continue
 		}
-		platform := firstString(item, []string{"platform"})
+		platform := normalizedGroupPlatform(firstString(item, []string{"platform"}))
+		status := "active"
+		if value := firstString(item, []string{"status"}); value != nil && strings.TrimSpace(*value) != "" {
+			status = strings.ToLower(strings.TrimSpace(*value))
+		}
 		defaultRate := firstNumber(item, []string{"rate_multiplier"})
 
 		group := GroupInfo{
 			ID:                       id,
 			Name:                     name,
 			Platform:                 platform,
+			Status:                   status,
 			Multiplier:               defaultRate,
 			MultiplierDisplay:        multiplier(defaultRate),
 			DefaultMultiplier:        defaultRate,
@@ -676,7 +681,7 @@ func (s *PlatformService) FetchSub2APIAdminAllGroups(session Session) ([]AdminGr
 		}
 		platform := ""
 		if value := firstString(item, []string{"platform"}); value != nil {
-			platform = *value
+			platform = normalizeGroupPlatform(*value)
 		}
 		// status 为字符串，如 active / inactive
 		status := ""
@@ -1917,6 +1922,13 @@ func (s *PlatformService) fetchNewAPIAdminAllGroups(session Session) ([]AdminGro
 
 	// new-api /api/group/ 返回 data: ["default", "vip", ...]
 	var groupNames []string
+	if names, ok := groupListPayload.Payload.([]any); ok {
+		for _, name := range names {
+			if s, ok := name.(string); ok && strings.TrimSpace(s) != "" {
+				groupNames = append(groupNames, s)
+			}
+		}
+	}
 	groupListData := dataRecord(groupListPayload.Payload)
 	if arr, ok := groupListData["data"]; ok {
 		if names, ok := arr.([]any); ok {
@@ -1954,7 +1966,7 @@ func (s *PlatformService) fetchNewAPIAdminAllGroups(session Session) ([]AdminGro
 		rate := ratioMap[name]
 		platform := ""
 		if p := platformMap[name]; p != nil {
-			platform = *p
+			platform = normalizeGroupPlatform(*p)
 		}
 		groups = append(groups, AdminGroupInfo{
 			ID:                name,

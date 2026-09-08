@@ -88,6 +88,39 @@ func TestFetchSub2APIAdminGroups_DedicatedMultiplier(t *testing.T) {
 	}
 }
 
+func TestFetchSub2APIAdminGroupsPreservesDynamicPlatforms(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/v1/groups/available":
+			writeJSON(w, map[string]any{"data": []map[string]any{
+				{"id": 11, "name": "kimi", "platform": "kimi", "rate_multiplier": 1.0},
+				{"id": 12, "name": "xai", "platform": "xai", "rate_multiplier": 1.0},
+				{"id": 13, "name": "claude", "platform": "claude", "rate_multiplier": 1.0},
+			}})
+		case "/api/v1/groups/rates":
+			writeJSON(w, map[string]any{"data": map[string]any{}})
+		default:
+			t.Fatalf("unexpected path: %s", r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	service := NewPlatformService(NewHTTPClient(server.Client()))
+	groups, err := service.FetchSub2APIAdminGroups(Session{Platform: PlatformSub2API, BaseURL: server.URL, AccessToken: "token"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	platforms := map[string]string{}
+	for _, group := range groups {
+		if group.Platform != nil {
+			platforms[group.Name] = *group.Platform
+		}
+	}
+	if platforms["kimi"] != "kimi" || platforms["xai"] != "grok" || platforms["claude"] != "anthropic" {
+		t.Fatalf("unexpected normalized platforms: %#v", platforms)
+	}
+}
+
 // TestFetchSub2APIAdminGroups_RatesMissingID 单独验证：/groups/rates 缺失某个分组 ID 时，
 // 该分组必须保留 /groups/available 的默认倍率，不受其它分组覆盖影响。
 func TestFetchSub2APIAdminGroups_RatesMissingID(t *testing.T) {
@@ -408,4 +441,4 @@ func TestSub2APIGroupRateOverrides(t *testing.T) {
 			t.Errorf("unexpected overrides: %v", got)
 		}
 	})
-}
+}

@@ -78,7 +78,7 @@ export interface ChannelMonitorChannel {
   uptimePercent: number
   testModelId: string
   effectiveTestModelId: string
-  testModelSource: 'custom' | 'group' | 'global'
+  testModelSource: 'custom' | 'group' | 'global' | 'unsupported'
 }
 
 export interface ChannelMonitorSummary {

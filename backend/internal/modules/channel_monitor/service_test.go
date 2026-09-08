@@ -59,6 +59,24 @@ func TestDefaultRuleUsesProductionSafetyThresholds(t *testing.T) {
 	}
 }
 
+func TestRunRuleSkipsUnknownPlatformWithoutConfiguredModel(t *testing.T) {
+	ctx := context.Background()
+	repo := newFakeRepository()
+	service := newTestService(repo)
+	service.conns.connections[0].GroupType = "kimi"
+
+	result, err := service.RunRule(ctx, repo.mustRule("conn-1").ID, "manual")
+	if err != nil {
+		t.Fatalf("RunRule returned error: %v", err)
+	}
+	if result.Status != StatusUnsupported || result.Success {
+		t.Fatalf("expected unsupported result, got %+v", result)
+	}
+	if len(service.platform.testSessions) != 0 || len(service.platform.schedulableCalls) != 0 {
+		t.Fatalf("unknown platform must not be tested or mutated")
+	}
+}
+
 func TestSummaryRefreshesAllAdminGroupsAndDropsDeletedGroupFallback(t *testing.T) {
 	ctx := context.Background()
 	repo := newFakeRepository()

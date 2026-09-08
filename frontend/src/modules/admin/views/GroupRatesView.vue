@@ -86,7 +86,11 @@ const firstMappedOwnGroupForRate = (rate: GroupRate): string => mappedOwnGroupsF
 
 const normalizeGroupType = (value: string | null | undefined): string => {
   const normalized = (value || '').trim().toLowerCase()
-  return normalized === 'xai' ? 'grok' : normalized
+  return normalized.replace(/\bxai\b/g, 'grok').replace(/\bclaude\b/g, 'anthropic')
+}
+const channelTypeForGroupType: Record<string, number> = {
+  openai: 1, anthropic: 14, gemini: 24, grok: 48, kimi: 25, moonshot: 25,
+  zhipu: 16, deepseek: 43, codex: 57,
 }
 
 const filteredOwnGroups = computed(() => {
@@ -94,9 +98,23 @@ const filteredOwnGroups = computed(() => {
   if (isAdminNewAPI.value) return ownGroups.value
   const upstreamType = normalizeGroupType(connectingRate.value?.type || selectedGroupType.value)
   if (upstreamType) {
-    return ownGroups.value.filter(g => normalizeGroupType(g.platform) === upstreamType)
+    const matching = ownGroups.value.filter(g => normalizeGroupType(g.platform) === upstreamType)
+    return matching.length > 0 ? matching : ownGroups.value
   }
   return ownGroups.value
+})
+
+const dynamicGroupTypes = computed(() => {
+  const values = new Set<string>()
+  for (const value of types.value.flatMap(type => normalizeGroupType(type).split(',').map(item => item.trim()))) {
+    if (value) values.add(value)
+  }
+  for (const group of ownGroups.value) {
+    const type = normalizeGroupType(group.platform)
+    if (type) values.add(type)
+  }
+  if (connectingRate.value?.type) values.add(normalizeGroupType(connectingRate.value.type))
+  return Array.from(values).sort()
 })
 
 const realConnectionForRate = (rate: GroupRate): RealConnection | undefined =>
@@ -158,7 +176,7 @@ const canGoPrevious = computed(() => page.value > 1 && !isLoading.value)
 const canGoNext = computed(() => page.value < totalPages.value && !isLoading.value)
 
 const isAdminNewAPI = computed(() => adminPlatform.value === 'newapi')
-const needsGroupTypeSelection = computed(() => !editingConnectionGroups.value && !connectingRate.value?.type && !isAdminNewAPI.value)
+const needsGroupTypeSelection = computed(() => !editingConnectionGroups.value && (!connectingRate.value?.type || connectingRate.value.type.includes(',')) && !isAdminNewAPI.value)
 const needsChannelTypeSelection = computed(() => !editingConnectionGroups.value && isAdminNewAPI.value)
 
 watch(searchQuery, (value) => {
@@ -320,6 +338,10 @@ const openConnector = async (rate: GroupRate) => {
   connectMode.value = 'real'
   selectedGroupType.value = ''
   selectedChannelType.value = 0
+  const normalizedType = normalizeGroupType(rate.type)
+  selectedChannelType.value = channelTypeForGroupType[normalizedType]
+    ?? NEW_API_CHANNEL_TYPES.find(type => normalizeGroupType(type.name) === normalizedType)?.id
+    ?? 0
   await loadMySiteMappingData()
 }
 
@@ -948,11 +970,7 @@ const historyRowKey = (row: GroupRateHistoryRow, index: number): string => (
                 :disabled="isActionLoading"
               >
                 <option value="">{{ t('admin.groupRates.connect.groupTypePlaceholder') }}</option>
-                <option value="openai">{{ t('admin.groupRates.connect.groupTypeOpenai') }}</option>
-                <option value="anthropic">{{ t('admin.groupRates.connect.groupTypeAnthropic') }}</option>
-                <option value="gemini">{{ t('admin.groupRates.connect.groupTypeGemini') }}</option>
-                <option value="antigravity">{{ t('admin.groupRates.connect.groupTypeAntigravity') }}</option>
-                <option value="grok">{{ t('admin.groupRates.connect.groupTypeGrok') }}</option>
+                <option v-for="type in dynamicGroupTypes" :key="type" :value="type">{{ type }}</option>
               </select>
               <div class="absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none text-muted-foreground">
                 <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg>
@@ -1148,4 +1166,4 @@ const historyRowKey = (row: GroupRateHistoryRow, index: number): string => (
       </div>
     </div>
   </div>
-</template>
+</template>

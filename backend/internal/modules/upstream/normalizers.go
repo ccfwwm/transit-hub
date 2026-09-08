@@ -5,11 +5,50 @@ import (
 	"math"
 	"net"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 )
 
 const defaultDisplay = "-"
+
+// normalizeGroupPlatform keeps upstream platform values data-driven while
+// folding aliases that refer to the same provider.
+func normalizeGroupPlatform(value string) string {
+	parts := strings.Split(strings.ToLower(strings.TrimSpace(value)), ",")
+	values := make([]string, 0, len(parts))
+	seen := make(map[string]struct{}, len(parts))
+	for _, part := range parts {
+		normalized := strings.TrimSpace(part)
+		switch normalized {
+		case "xai":
+			normalized = "grok"
+		case "claude":
+			normalized = "anthropic"
+		}
+		if normalized == "" {
+			continue
+		}
+		if _, ok := seen[normalized]; ok {
+			continue
+		}
+		seen[normalized] = struct{}{}
+		values = append(values, normalized)
+	}
+	sort.Strings(values)
+	return strings.Join(values, ", ")
+}
+
+func normalizedGroupPlatform(value *string) *string {
+	if value == nil {
+		return nil
+	}
+	normalized := normalizeGroupPlatform(*value)
+	if normalized == "" {
+		return nil
+	}
+	return &normalized
+}
 
 // hostDomainPattern 校验域名：至少包含一个点，各 label 由字母数字与连字符组成，
 // 顶级域为 2-63 位字母。用于在登录时拦截明显写错的站点地址。
@@ -57,6 +96,9 @@ func dataRecord(value any) map[string]any {
 }
 
 func dataArray(value any) []any {
+	if items, ok := value.([]any); ok {
+		return items
+	}
 	record, ok := value.(map[string]any)
 	if !ok {
 		return []any{}
@@ -300,10 +342,7 @@ func newAPIGroups(groupsPayload any, pricingPayload any) []GroupInfo {
 			return
 		}
 		ratio := groupRatios[name]
-		if ratio == nil {
-			return
-		}
-		platform := platforms[name]
+		platform := normalizedGroupPlatform(platforms[name])
 		result = append(result, GroupInfo{ID: name, Name: name, Platform: platform, Multiplier: ratio, MultiplierDisplay: multiplier(ratio)})
 		seen[name] = struct{}{}
 	}
@@ -340,6 +379,7 @@ func newAPIGroupPlatforms(pricingPayload any) map[string]*string {
 		for name := range platforms {
 			names = append(names, name)
 		}
+		sort.Strings(names)
 		value := strings.Join(names, ", ")
 		result[group] = &value
 	}
@@ -348,7 +388,7 @@ func newAPIGroupPlatforms(pricingPayload any) map[string]*string {
 
 func addGroupPlatform(groups map[string]map[string]struct{}, group string, platform string) {
 	group = strings.TrimSpace(group)
-	platform = strings.TrimSpace(platform)
+	platform = normalizeGroupPlatform(platform)
 	if group == "" || platform == "" {
 		return
 	}

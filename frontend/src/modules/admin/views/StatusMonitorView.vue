@@ -1028,7 +1028,7 @@ const dispatchButtonClass = (channel: ChannelMonitorChannel): string => (
                     {{ channel.effectiveTestModelId || '-' }}
                   </div>
                   <div class="text-[11px] text-muted-foreground">
-                    {{ channel.testModelSource === 'custom' ? t('admin.channelMonitor.channels.customModel') : channel.testModelSource === 'group' ? t('admin.channelMonitor.channels.groupModel') : t('admin.channelMonitor.channels.globalModel') }}
+                    {{ channel.testModelSource === 'custom' ? t('admin.channelMonitor.channels.customModel') : channel.testModelSource === 'group' ? t('admin.channelMonitor.channels.groupModel') : channel.testModelSource === 'unsupported' ? t('admin.channelMonitor.channels.unsupportedModel') : t('admin.channelMonitor.channels.globalModel') }}
                   </div>
                 </td>
                 <td class="px-3 py-3 align-top">

@@ -314,8 +314,9 @@ func (s *Service) RealConnect(ctx context.Context, userID string, req RealConnec
 	}
 
 	groupType, multiplierDisplay := resolveGroupInfo(upstreamSite.Metrics.Groups, req.UpstreamGroupID)
-	if groupType == "" && strings.TrimSpace(req.GroupType) != "" {
-		groupType = req.GroupType
+	requestedGroupType := normalizeConnectionGroupType(req.GroupType)
+	if (groupType == "" || strings.Contains(groupType, ",")) && requestedGroupType != "" {
+		groupType = requestedGroupType
 	}
 	// new-api 的分组是纯名称，不强制要求分组平台类型；sub2api 仍然必填。
 	if groupType == "" && upstreamSite.Platform != upstream.PlatformNewAPI {
@@ -477,6 +478,10 @@ func (s *Service) createAdminTargetForNewAPIUpstream(adminSession upstream.Sessi
 		if channelType <= 0 {
 			channelType = groupTypeToNewAPIChannelType(groupType)
 		}
+		if channelType <= 0 {
+			log.Printf("[real-connect] 无法确定 new-api 渠道类型 site=%s group=%s type=%s", upstreamSite.Name, groupName, groupType)
+			return "", "", requestError(ErrorRequest)
+		}
 		channelTypeName := newAPIChannelTypeName(channelType)
 		channelName := fmt.Sprintf("%s-【%s】-%s", channelTypeName, upstreamSite.Name, groupName)
 		channelID, err := s.platformService.CreateNewAPIChannel(adminSession, channelName, upstreamSite.BaseURL, tokenKey, channelType, req.OwnGroupIDs)
@@ -494,19 +499,133 @@ func (s *Service) createAdminTargetForNewAPIUpstream(adminSession upstream.Sessi
 
 // groupTypeToNewAPIChannelType 将分组平台类型映射为 new-api channel type 数字（回退用）。
 func groupTypeToNewAPIChannelType(groupType string) int {
-	switch strings.ToLower(groupType) {
+	switch strings.ToLower(strings.TrimSpace(groupType)) {
 	case "openai":
 		return 1
-	case "anthropic":
+	case "anthropic", "claude":
 		return 14
 	case "gemini":
 		return 24
+	case "zhipu":
+		return 16
+	case "kimi", "moonshot":
+		return 25
 	case "deepseek":
 		return 43
 	case "grok", "xai":
 		return 48
+	case "codex":
+		return 57
+	case "custom", "advanced_custom":
+		return 8
+	case "midjourney":
+		return 2
+	case "azure":
+		return 3
+	case "ollama":
+		return 4
+	case "midjourneyplus", "midjourney_plus":
+		return 5
+	case "openaimax":
+		return 6
+	case "ohmygpt":
+		return 7
+	case "ails":
+		return 9
+	case "aiproxy":
+		return 10
+	case "palm":
+		return 11
+	case "api2gpt":
+		return 12
+	case "aigc2d":
+		return 13
+	case "baidu":
+		return 15
+	case "ali":
+		return 17
+	case "xunfei":
+		return 18
+	case "360":
+		return 19
+	case "openrouter":
+		return 20
+	case "aiproxylibrary", "aiproxy_library":
+		return 21
+	case "fastgpt":
+		return 22
+	case "tencent":
+		return 23
+	case "perplexity":
+		return 27
+	case "lingyiwanwu":
+		return 31
+	case "aws":
+		return 33
+	case "cohere":
+		return 34
+	case "minimax":
+		return 35
+	case "sunoapi":
+		return 36
+	case "dify":
+		return 37
+	case "jina":
+		return 38
+	case "cloudflare":
+		return 39
+	case "siliconflow":
+		return 40
+	case "vertexai":
+		return 41
+	case "mistral":
+		return 42
+	case "mokaai":
+		return 44
+	case "volcengine":
+		return 45
+	case "baiduv2":
+		return 46
+	case "xinference":
+		return 47
+	case "coze":
+		return 49
+	case "kling":
+		return 50
+	case "jimeng":
+		return 51
+	case "vidu":
+		return 52
+	case "submodel":
+		return 53
+	case "doubaovideo":
+		return 54
+	case "sora":
+		return 55
+	case "replicate":
+		return 56
+	case "advancedcustom":
+		return 58
+	case "sub2api":
+		return 59
+	case "newapi":
+		return 60
+	case "taskplugin":
+		return 61
 	default:
-		return 1
+		return 0
+	}
+}
+
+func normalizeConnectionGroupType(groupType string) string {
+	normalized := strings.ToLower(strings.TrimSpace(groupType))
+	switch normalized {
+	case "xai":
+		return "grok"
+	case "claude":
+		return "anthropic"
+	default:
+		return normalized
 	}
 }
 
@@ -526,12 +645,12 @@ func newAPIChannelTypeName(channelType int) string {
 		45: "VolcEngine", 46: "BaiduV2", 47: "Xinference", 48: "xAI",
 		49: "Coze", 50: "Kling", 51: "Jimeng", 52: "Vidu",
 		53: "Submodel", 54: "DoubaoVideo", 55: "Sora", 56: "Replicate",
-		57: "Codex",
+		57: "Codex", 58: "Advanced Custom", 59: "Sub2API", 60: "New API", 61: "Task Plugin",
 	}
 	if name, ok := names[channelType]; ok {
 		return name
 	}
-	return "OpenAI"
+	return "Channel"
 }
 
 // safeKeyPreview 返回 key 的安全预览（前8个字符）。
@@ -1115,9 +1234,9 @@ func groupTypePrefix(groupType string) string {
 // 返回小写的平台名（如 "openai"、"anthropic"）和倍率显示文本（如 "1.5x"），未找到时返回空字符串。
 func resolveGroupInfo(groups []upstream.GroupInfo, groupID string) (groupType string, multiplierDisplay string) {
 	for _, g := range groups {
-		if g.ID == groupID {
+		if g.ID == groupID || (strings.TrimSpace(g.ID) == "" && g.Name == groupID) {
 			if g.Platform != nil && strings.TrimSpace(*g.Platform) != "" {
-				groupType = strings.ToLower(strings.TrimSpace(*g.Platform))
+				groupType = normalizeConnectionGroupType(*g.Platform)
 			}
 			multiplierDisplay = g.MultiplierDisplay
 			return
@@ -1180,7 +1299,10 @@ func buildAccountPayload(groupType, baseURL, apiKey string, ownGroupIDs []int, a
 		payload["extra"] = map[string]any{"openai_passthrough": true}
 		payload["concurrency"] = 1000
 	default:
-		payload["platform"] = groupType
+		// Preserve dynamic upstream platform values. Sub2API supports newer
+		// providers without requiring TransitHub to know every provider-specific
+		// credential shape; the generic API-key payload is intentional here.
+		payload["platform"] = strings.ToLower(strings.TrimSpace(groupType))
 		payload["concurrency"] = 100
 	}
 

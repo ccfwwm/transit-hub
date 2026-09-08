@@ -115,6 +115,10 @@ export const NEW_API_CHANNEL_TYPES: NewAPIChannelType[] = [
   { id: 55, name: 'Sora' },
   { id: 56, name: 'Replicate' },
   { id: 57, name: 'Codex' },
+  { id: 58, name: 'Advanced Custom' },
+  { id: 59, name: 'Sub2API' },
+  { id: 60, name: 'New API' },
+  { id: 61, name: 'Task Plugin' },
 ]
 
 export interface RealConnection {
@@ -162,4 +166,4 @@ export interface RealDisconnectRequest {
 export interface UpdateRealConnectionGroupsRequest {
   connectionId: string
   ownGroupIds: string[]
-}
+}

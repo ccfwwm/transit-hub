@@ -73,6 +73,7 @@ type GroupInfo struct {
 	ID                string   `json:"id"`
 	Name              string   `json:"name"`
 	Platform          *string  `json:"platform"`
+	Status            string   `json:"status,omitempty"`
 	Multiplier        *float64 `json:"multiplier"`
 	MultiplierDisplay string   `json:"multiplierDisplay"`
 	// 以下字段为 sub2api 专属倍率合并规则新增的向后兼容字段：/groups/available 默认倍率

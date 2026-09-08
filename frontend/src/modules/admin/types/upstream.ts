@@ -31,6 +31,7 @@ export interface UpstreamGroupInfo {
   id: string
   name: string
   platform: string | null
+  status?: string
   multiplier: number | null
   multiplierDisplay: string
   // 以下字段为 sub2api 专属倍率展示新增的可选字段：旧后端/旧缓存数据没有这些字段时，
@@ -112,4 +113,4 @@ export type SiteSyncPhase = 'idle' | 'syncing' | 'done' | 'error'
 export interface SiteSyncState {
   phase: SiteSyncPhase
   errorKey?: string
-}
+}

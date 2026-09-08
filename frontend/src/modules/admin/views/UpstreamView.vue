@@ -50,19 +50,44 @@ const connectionsLoaded = ref(false)
 const connectionsError = ref('')
 const groupOptionsLoading = ref(false)
 const groupActionType = ref('')
-const groupChannelType = ref(1)
+const groupChannelType = ref(0)
 const adminPlatform = ref('')
 const siteGroupRates = ref<GroupRate[]>([])
 const disconnectMode = ref<'unlink' | 'full'>('unlink')
-const normalizeType = (value?: string | null) => value?.trim().toLowerCase().replace(/^xai$/, 'grok') || ''
+const normalizeType = (value?: string | null) => value?.trim().toLowerCase().replace(/\bxai\b/g, 'grok').replace(/\bclaude\b/g, 'anthropic') || ''
+const channelTypeForGroupType: Record<string, number> = {
+  openai: 1, anthropic: 14, gemini: 24, grok: 48, kimi: 25, moonshot: 25,
+  zhipu: 16, deepseek: 43, codex: 57,
+}
 const groupType = (site: UpstreamSite, group: UpstreamGroupInfo) => normalizeType(
-  siteGroupRates.value.find(rate => rate.siteId === site.id && rate.groupId === group.id)?.type
-  || group.platform || groupConnection(site, group)?.groupType,
+  group.platform
+  || siteGroupRates.value.find(rate => rate.siteId === site.id && rate.groupId === group.id)?.type
+  || groupConnection(site, group)?.groupType,
 )
 const actionConnection = computed(() => groupActionSite.value && groupActionGroup.value
   ? groupConnection(groupActionSite.value, groupActionGroup.value) : undefined)
-const compatibleOwnGroups = computed(() => adminPlatform.value === 'newapi' ? ownGroups.value
-  : ownGroups.value.filter(group => normalizeType(group.platform) === groupActionType.value))
+const dynamicGroupTypes = computed(() => {
+  const values = new Set<string>()
+  for (const site of upstreamSites.value) {
+    for (const group of site.metrics.groups) {
+      for (const type of groupType(site, group).split(',').map(item => item.trim())) {
+        if (type) values.add(type)
+      }
+    }
+  }
+  for (const group of ownGroups.value) {
+    for (const type of normalizeType(group.platform).split(',').map(item => item.trim())) {
+      if (type) values.add(type)
+    }
+  }
+  return Array.from(values).sort()
+})
+
+const compatibleOwnGroups = computed(() => {
+  if (adminPlatform.value === 'newapi' || !groupActionType.value) return ownGroups.value
+  const matching = ownGroups.value.filter(group => normalizeType(group.platform) === groupActionType.value)
+  return matching.length > 0 ? matching : ownGroups.value
+})
 watch(groupActionType, () => { groupActionOwnGroupIds.value = [] })
 
 const countdownDisplay = computed(() => {
@@ -303,6 +328,9 @@ const openGroupAction = async (site: UpstreamSite, group: UpstreamGroupInfo) => 
   groupActionError.value = ''
   isGroupActionOpen.value = true
   groupActionType.value = groupType(site, group)
+  groupChannelType.value = channelTypeForGroupType[groupActionType.value]
+    ?? NEW_API_CHANNEL_TYPES.find(type => normalizeType(type.name) === groupActionType.value)?.id
+    ?? 0
   disconnectMode.value = 'unlink'
   groupOptionsLoading.value = true
   try {
@@ -1007,16 +1035,17 @@ onBeforeUnmount(() => {
             </div>
           </template>
           <template v-else>
-            <label v-if="groupActionSite && groupActionGroup && !groupType(groupActionSite, groupActionGroup)" class="mt-4 block text-sm">
+            <label v-if="groupActionSite && groupActionGroup && adminPlatform !== 'newapi' && (!groupActionType || groupActionType.includes(','))" class="mt-4 block text-sm">
               {{ t('admin.groupRates.connect.groupTypeLabel') }}
               <select v-model="groupActionType" :disabled="isGroupActionLoading" class="mt-2 h-9 w-full rounded-lg border border-border bg-surface px-2">
                 <option value="">{{ t('admin.groupRates.connect.groupTypePlaceholder') }}</option>
-                <option v-for="type in ['openai', 'anthropic', 'gemini', 'grok', 'antigravity']" :key="type" :value="type">{{ type }}</option>
+                <option v-for="type in dynamicGroupTypes" :key="type" :value="type">{{ type }}</option>
               </select>
             </label>
             <label v-if="adminPlatform === 'newapi'" class="mt-4 block text-sm">
               {{ t('admin.groupRates.connect.channelTypeLabel') }}
               <select v-model="groupChannelType" :disabled="isGroupActionLoading" class="mt-2 h-9 w-full rounded-lg border border-border bg-surface px-2">
+                <option :value="0">{{ t('admin.groupRates.connect.channelTypePlaceholder') }}</option>
                 <option v-for="type in NEW_API_CHANNEL_TYPES" :key="type.id" :value="type.id">{{ type.name }}</option>
               </select>
             </label>
@@ -1038,7 +1067,7 @@ onBeforeUnmount(() => {
             </div>
             <div class="mt-5 flex justify-end gap-2">
               <Button variant="secondary" :disabled="isGroupActionLoading" @click="closeGroupAction">{{ t('admin.groupRates.actions.cancel') }}</Button>
-              <Button :disabled="isGroupActionLoading || groupOptionsLoading || !!groupActionError || groupActionOwnGroupIds.length === 0 || (adminPlatform !== 'newapi' && !groupActionType)" @click="submitGroupAction">
+              <Button :disabled="isGroupActionLoading || groupOptionsLoading || !!groupActionError || groupActionOwnGroupIds.length === 0 || (adminPlatform !== 'newapi' && !groupActionType) || (adminPlatform === 'newapi' && groupChannelType <= 0)" @click="submitGroupAction">
                 <Loader2 v-if="isGroupActionLoading" class="h-4 w-4 animate-spin" />
                 {{ t('admin.groupRates.actions.connect') }}
               </Button>

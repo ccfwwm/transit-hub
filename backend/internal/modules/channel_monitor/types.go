@@ -174,7 +174,7 @@ type ChannelStatus struct {
 	UptimePercent               float64    `json:"uptimePercent"`
 	TestModelID                 string     `json:"testModelId"`
 	EffectiveTestModelID        string     `json:"effectiveTestModelId"`
-	TestModelSource             string     `json:"testModelSource"`
+	TestModelSource             string     `json:"testModelSource"` // custom, group, global, unsupported
 }
 
 type UpdateRuleRequest struct {

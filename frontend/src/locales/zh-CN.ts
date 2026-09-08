@@ -186,7 +186,8 @@ export default {
         next: '下次 {value}',
         customModel: '单条自定义',
         groupModel: '分组默认',
-        globalModel: '统一配置'
+        globalModel: '统一配置',
+        unsupportedModel: '待配置模型'
       },
       timeline: {
         window: '近 60 次记录',
