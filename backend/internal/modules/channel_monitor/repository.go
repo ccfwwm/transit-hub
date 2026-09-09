@@ -245,8 +245,8 @@ func (r *Repository) EnsureRulesForExistingConnections(ctx context.Context) erro
 			last_status, next_check_at, created_at, updated_at
 		)
 		SELECT
-			rc.id, rc.user_id, rc.workspace_admin_account_id, rc.id, true, $1,
-			$2, $3, false, 0, $4,
+			rc.id, rc.user_id, rc.workspace_admin_account_id, rc.id, true, $1::integer,
+			$2::integer, $3::double precision, false, 0, $4::text,
 			now() + ($1::double precision * interval '1 minute' * rc.stagger_position::double precision / greatest(rc.stagger_total, 1)),
 			now(), now()
 		FROM missing_connections AS rc
