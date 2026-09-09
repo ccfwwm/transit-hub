@@ -303,3 +303,19 @@ type BalanceBreakdownItem struct {
 	LastSyncedAt *int64
 	Status       Status
 }
+
+type APIKeyProbeOptions struct {
+	BaseURL         string
+	APIKey          string
+	Platform        string
+	ModelID         string
+	Prompt          string
+	InsecureSkipTLS bool
+}
+
+type APIKeyProbeResult struct {
+	Success   bool
+	Message   string
+	LatencyMS int
+	Model     string
+}

@@ -59,7 +59,7 @@ type UpstreamLookup interface {
 }
 
 type MonitorPlatform interface {
-	TestSub2APIAdminAccount(session upstream.Session, accountID string, options AccountTestOptions) (AccountTestResult, error)
+	ProbeUpstreamConnection(ctx context.Context, site upstream.Site, connection my_sites.RealConnection, options AccountTestOptions) (AccountTestResult, error)
 	SetSub2APIAdminAccountSchedulable(session upstream.Session, accountID string, schedulable bool) error
 	ListSub2APIAdminAccounts(session upstream.Session) ([]AdminAccountStatus, error)
 	UpdateSub2APIAdminAccountPriority(session upstream.Session, accountID string, priority int) error
@@ -81,22 +81,16 @@ type Service struct {
 	stopScheduler    chan struct{}
 	balanceRefreshes singleflight.Group
 	schedulerRunMu   sync.Mutex
-	testStartMu      sync.Mutex
-	nextTestStart    time.Time
-	testSlots        chan struct{}
-	testSpacing      time.Duration
 }
 
 func NewService(store Store, conns ConnectionStore, states StateStore, upstreams UpstreamLookup, platform MonitorPlatform, accounts AdminAccountResolver) *Service {
 	return &Service{
-		store:       store,
-		conns:       conns,
-		states:      states,
-		upstreams:   upstreams,
-		platform:    platform,
-		accounts:    accounts,
-		testSlots:   make(chan struct{}, 1),
-		testSpacing: 120 * time.Second,
+		store:     store,
+		conns:     conns,
+		states:    states,
+		upstreams: upstreams,
+		platform:  platform,
+		accounts:  accounts,
 	}
 }
 
@@ -928,18 +922,6 @@ func (s *Service) runDue(ctx context.Context, limit, workers int) int {
 		log.Printf("[channel-monitor] list due rules failed: %v", err)
 		return 0
 	}
-	workspaceStates := map[string]workspaceStateResult{}
-	for _, rule := range rules {
-		key := workspaceKey(rule.UserID, rule.AdminAccountID)
-		if _, exists := workspaceStates[key]; !exists {
-			var workspace workspaceStateResult
-			workspace.state, workspace.err = s.workspaceState(ctx, rule.UserID, rule.AdminAccountID)
-			if workspace.err == nil && workspace.state != nil && workspace.state.Session.Platform == upstream.PlatformSub2API {
-				workspace.accounts, workspace.accountsErr = s.platform.ListSub2APIAdminAccounts(workspace.state.Session)
-			}
-			workspaceStates[key] = workspace
-		}
-	}
 	type dueResult struct {
 		rule   Rule
 		result Result
@@ -953,8 +935,7 @@ func (s *Service) runDue(ctx context.Context, limit, workers int) int {
 		go func() {
 			defer waitGroup.Done()
 			for rule := range jobs {
-				workspace := workspaceStates[workspaceKey(rule.UserID, rule.AdminAccountID)]
-				result, err := s.runRuleWithWorkspace(ctx, rule, "scheduled", &workspace)
+				result, err := s.runRule(ctx, rule, "scheduled")
 				results <- dueResult{rule: rule, result: result, err: err}
 			}
 		}()
@@ -969,19 +950,12 @@ func (s *Service) runDue(ctx context.Context, limit, workers int) int {
 	}()
 
 	checked := 0
-	healthyWorkspaces := map[string]Rule{}
 	for outcome := range results {
 		if outcome.err != nil {
 			log.Printf("[channel-monitor] run rule failed rule_id=%s err=%v", outcome.rule.ID, outcome.err)
 			continue
 		}
 		checked++
-		if outcome.result.Status == StatusHealthy {
-			healthyWorkspaces[workspaceKey(outcome.rule.UserID, outcome.rule.AdminAccountID)] = outcome.rule
-		}
-	}
-	for _, rule := range healthyWorkspaces {
-		s.applyRateRuleAfterCheck(ctx, rule.UserID, rule.AdminAccountID)
 	}
 	return checked
 }
@@ -992,7 +966,7 @@ func (s *Service) StartScheduler(ctx context.Context) {
 	}
 	s.stopScheduler = make(chan struct{})
 	go func() {
-		ticker := time.NewTicker(120 * time.Second)
+		ticker := time.NewTicker(30 * time.Second)
 		defer ticker.Stop()
 		for {
 			select {
@@ -1001,7 +975,7 @@ func (s *Service) StartScheduler(ctx context.Context) {
 			case <-s.stopScheduler:
 				return
 			case <-ticker.C:
-				s.runDue(context.Background(), 1, 1)
+				s.runDue(context.Background(), 30, 5)
 			}
 		}
 	}()
@@ -1014,22 +988,11 @@ func (s *Service) StopScheduler() {
 	}
 }
 
-type workspaceStateResult struct {
-	state       *my_sites.State
-	err         error
-	accounts    []AdminAccountStatus
-	accountsErr error
-}
-
 func workspaceKey(userID, adminAccountID string) string {
 	return strings.TrimSpace(userID) + "|" + strings.TrimSpace(adminAccountID)
 }
 
 func (s *Service) runRule(ctx context.Context, rule Rule, reason string) (Result, error) {
-	return s.runRuleWithWorkspace(ctx, rule, reason, nil)
-}
-
-func (s *Service) runRuleWithWorkspace(ctx context.Context, rule Rule, reason string, workspace *workspaceStateResult) (Result, error) {
 	started := time.Now()
 	result := Result{
 		ID:           newResultID(),
@@ -1076,44 +1039,35 @@ func (s *Service) runRuleWithWorkspace(ctx context.Context, rule Rule, reason st
 	if conn == nil {
 		return finish(StatusFailed, false, "真实对接记录不存在", nil, "")
 	}
-	var state *my_sites.State
-	if workspace == nil {
-		state, err = s.workspaceState(ctx, rule.UserID, rule.AdminAccountID)
-	} else {
-		state, err = workspace.state, workspace.err
-	}
-	if err != nil {
-		rule.ConsecutiveFailures = 0
-		return finish(StatusUnknown, true, "admin 登录会话失效，已跳过本次检测："+err.Error(), nil, "")
-	}
-	if state == nil || state.Session.Platform != upstream.PlatformSub2API {
-		rule.ConsecutiveFailures = 0
-		return finish(StatusUnsupported, false, "当前 admin 平台暂不支持主动监控", nil, "")
-	}
-	if strings.TrimSpace(conn.AdminAccountID) == "" {
-		rule.ConsecutiveFailures = 0
-		return finish(StatusUnsupported, false, "真实对接记录缺少远端 admin 账号，已跳过主动监控", nil, "")
-	}
-	var accounts []AdminAccountStatus
-	var accountErr error
-	if workspace != nil {
-		accounts, accountErr = workspace.accounts, workspace.accountsErr
-	} else {
-		accounts, accountErr = s.platform.ListSub2APIAdminAccounts(state.Session)
-	}
-	if accountErr != nil {
-		return finish(StatusUnknown, true, "无法确认远端 admin 账号，已跳过本次检测："+accountErr.Error(), nil, "")
-	}
-	accountFound := false
-	for _, account := range accounts {
-		if strings.TrimSpace(account.ID) == strings.TrimSpace(conn.AdminAccountID) {
-			accountFound = account.Schedulable != nil
-			break
+	previousStatus := rule.LastStatus
+	setSchedulableOnTransition := func(schedulable bool) error {
+		if strings.TrimSpace(conn.AdminAccountID) == "" {
+			return requestError("admin.channelMonitor.errors.unsupported")
 		}
+		state, stateErr := s.workspaceState(ctx, rule.UserID, rule.AdminAccountID)
+		if stateErr != nil {
+			return stateErr
+		}
+		if state == nil || state.Session.Platform != upstream.PlatformSub2API {
+			return requestError("admin.channelMonitor.errors.unsupported")
+		}
+		if err := s.platform.SetSub2APIAdminAccountSchedulable(state.Session, conn.AdminAccountID, schedulable); err != nil {
+			return err
+		}
+		rule.DesiredSchedulable = schedulablePtr(schedulable)
+		if !rule.SchedulableManaged {
+			rule.OriginalSchedulable = schedulablePtr(!schedulable)
+		}
+		rule.SchedulableManaged = true
+		rule.LastAppliedSchedulable = schedulablePtr(schedulable)
+		rule.SchedulableConflict = false
+		return nil
 	}
-	if !accountFound {
-		rule.ConsecutiveFailures = 0
-		return finish(StatusUnsupported, false, "远端 admin 账号不存在或已删除，已跳过主动监控", nil, "")
+	disableOnTransition := func() (bool, error) {
+		if isMonitorDispatchPaused(previousStatus) {
+			return false, nil
+		}
+		return true, setSchedulableOnTransition(false)
 	}
 	testModelConfig, err := s.ensureTestModelConfig(ctx, rule.UserID, rule.AdminAccountID)
 	if err != nil {
@@ -1128,15 +1082,20 @@ func (s *Service) runRuleWithWorkspace(ctx context.Context, rule Rule, reason st
 	}
 	if refreshedSite, refreshErr := s.refreshSiteBalanceIfStale(ctx, site, testModelConfig.BalanceRefreshIntervalMinutes); refreshErr != nil {
 		message := "余额刷新失败：" + refreshErr.Error()
+		if isMonitorDispatchPaused(previousStatus) {
+			rule.ConsecutiveFailures = 0
+			return finish(previousStatus, false, message+"；保持自动停止", nil, "")
+		}
 		rule.ConsecutiveFailures++
 		if rule.ConsecutiveFailures >= rule.FailureThreshold {
-			if strings.TrimSpace(conn.AdminAccountID) != "" {
-				if err := s.platform.SetSub2APIAdminAccountSchedulable(state.Session, conn.AdminAccountID, false); err != nil {
-					return finish(StatusFailed, false, message+"；自动停止失败："+err.Error(), nil, "")
-				}
-				rule.DesiredSchedulable = schedulablePtr(false)
+			changed, changeErr := disableOnTransition()
+			if changeErr != nil {
+				return finish(StatusFailed, false, message+"；自动停止失败："+changeErr.Error(), nil, "")
 			}
 			rule.ConsecutiveFailures = 0
+			if !changed {
+				return finish(StatusAutoPaused, false, fmt.Sprintf("%s；连续失败达到 %d 次，保持自动停止", message, rule.FailureThreshold), nil, "")
+			}
 			return finish(StatusAutoPaused, false, fmt.Sprintf("%s；连续失败达到 %d 次，已自动停止", message, rule.FailureThreshold), nil, "")
 		}
 		return finish(StatusFailed, false, message, nil, "")
@@ -1145,39 +1104,45 @@ func (s *Service) runRuleWithWorkspace(ctx context.Context, rule Rule, reason st
 	}
 	if balance := convertedBalance(site); balance != nil && *balance < rule.BalanceThreshold {
 		rule.ConsecutiveFailures = 0
-		if strings.TrimSpace(conn.AdminAccountID) != "" {
-			if err := s.platform.SetSub2APIAdminAccountSchedulable(state.Session, conn.AdminAccountID, false); err != nil {
-				return finish(StatusBalancePaused, false, fmt.Sprintf("余额 %.2f 低于阈值 %.2f，停用失败：%v", *balance, rule.BalanceThreshold, err), nil, "")
-			}
-			rule.DesiredSchedulable = schedulablePtr(false)
+		changed, changeErr := disableOnTransition()
+		if changeErr != nil {
+			return finish(StatusBalancePaused, false, fmt.Sprintf("余额 %.2f 低于阈值 %.2f，停用失败：%v", *balance, rule.BalanceThreshold, changeErr), nil, "")
+		}
+		if !changed {
+			return finish(StatusBalancePaused, false, fmt.Sprintf("余额 %.2f 低于阈值 %.2f，保持自动停止", *balance, rule.BalanceThreshold), nil, "")
 		}
 		return finish(StatusBalancePaused, false, fmt.Sprintf("余额 %.2f 低于阈值 %.2f，已自动停止", *balance, rule.BalanceThreshold), nil, "")
 	}
 
-	testModel, _ := effectiveTestModel(rule, *conn, state, testModelConfig)
+	testModel, _ := effectiveTestModel(rule, *conn, nil, testModelConfig)
 	if strings.TrimSpace(testModel) == "" {
 		return finish(StatusUnsupported, false, "当前分组未配置主动检测模型，已跳过检测和自动停启", nil, "")
 	}
-	testResult, testErr := s.testSub2APIAdminAccount(ctx, state.Session, conn.AdminAccountID, AccountTestOptions{ModelID: testModel}, reason)
+	testResult, testErr := s.platform.ProbeUpstreamConnection(ctx, *site, *conn, AccountTestOptions{ModelID: testModel})
 	if strings.TrimSpace(testResult.Model) == "" {
 		testResult.Model = testModel
 	}
 	if testErr != nil || !testResult.Success {
-		message := "账号测试失败"
+		message := "上游 Key 直连检测失败"
 		if testErr != nil {
 			message = testErr.Error()
 		} else if strings.TrimSpace(testResult.Message) != "" {
 			message = testResult.Message
 		}
+		if isMonitorDispatchPaused(previousStatus) {
+			rule.ConsecutiveFailures = 0
+			return finish(previousStatus, false, message+"；保持自动停止", nil, testResult.Model)
+		}
 		rule.ConsecutiveFailures++
 		if rule.ConsecutiveFailures >= rule.FailureThreshold {
-			if strings.TrimSpace(conn.AdminAccountID) != "" {
-				if err := s.platform.SetSub2APIAdminAccountSchedulable(state.Session, conn.AdminAccountID, false); err != nil {
-					return finish(StatusFailed, false, message+"；自动停止失败："+err.Error(), nil, testResult.Model)
-				}
-				rule.DesiredSchedulable = schedulablePtr(false)
+			changed, changeErr := disableOnTransition()
+			if changeErr != nil {
+				return finish(StatusFailed, false, message+"；自动停止失败："+changeErr.Error(), nil, testResult.Model)
 			}
 			rule.ConsecutiveFailures = 0
+			if !changed {
+				return finish(StatusAutoPaused, false, fmt.Sprintf("%s；连续失败达到 %d 次，保持自动停止", message, rule.FailureThreshold), nil, testResult.Model)
+			}
 			return finish(StatusAutoPaused, false, fmt.Sprintf("%s；连续失败达到 %d 次，已自动停止", message, rule.FailureThreshold), nil, testResult.Model)
 		}
 		return finish(StatusFailed, false, message, nil, testResult.Model)
@@ -1193,13 +1158,8 @@ func (s *Service) runRuleWithWorkspace(ctx context.Context, rule Rule, reason st
 		rule.AutoEnableBlocked = false
 	}
 	if shouldRestore && !rule.AutoEnableBlocked {
-		if strings.TrimSpace(conn.AdminAccountID) != "" {
-			if err := s.platform.SetSub2APIAdminAccountSchedulable(state.Session, conn.AdminAccountID, true); err != nil {
-				return finish(StatusFailed, false, "检测已恢复，但自动启用失败："+err.Error(), &latency, testResult.Model)
-			}
-			rule.DesiredSchedulable = schedulablePtr(true)
-			rule.LastAppliedSchedulable = schedulablePtr(true)
-			rule.SchedulableConflict = false
+		if err := setSchedulableOnTransition(true); err != nil {
+			return finish(StatusFailed, false, "检测已恢复，但自动启用失败："+err.Error(), &latency, testResult.Model)
 		}
 	}
 	rule.ConsecutiveFailures = 0
@@ -1207,44 +1167,7 @@ func (s *Service) runRuleWithWorkspace(ctx context.Context, rule Rule, reason st
 	if message == "" {
 		message = "账号测试通过"
 	}
-	result, err = finish(StatusHealthy, true, message, &latency, testResult.Model)
-	if err == nil && reason != "scheduled" {
-		s.applyRateRuleAfterCheck(ctx, rule.UserID, rule.AdminAccountID)
-	}
-	return result, err
-}
-
-func (s *Service) testSub2APIAdminAccount(ctx context.Context, session upstream.Session, accountID string, options AccountTestOptions, reason string) (AccountTestResult, error) {
-	select {
-	case s.testSlots <- struct{}{}:
-		defer func() { <-s.testSlots }()
-	case <-ctx.Done():
-		return AccountTestResult{}, ctx.Err()
-	}
-
-	if reason == "scheduled" {
-		s.testStartMu.Lock()
-		wait := time.Until(s.nextTestStart)
-		if wait > 0 {
-			timer := time.NewTimer(wait)
-			select {
-			case <-timer.C:
-			case <-ctx.Done():
-				if !timer.Stop() {
-					select {
-					case <-timer.C:
-					default:
-					}
-				}
-				s.testStartMu.Unlock()
-				return AccountTestResult{}, ctx.Err()
-			}
-		}
-		s.nextTestStart = time.Now().Add(s.testSpacing)
-		s.testStartMu.Unlock()
-	}
-
-	return s.platform.TestSub2APIAdminAccount(session, accountID, options)
+	return finish(StatusHealthy, true, message, &latency, testResult.Model)
 }
 
 func (s *Service) applyRateRuleAfterCheck(ctx context.Context, userID, adminAccountID string) {
@@ -1762,6 +1685,10 @@ func shouldProtectPausedRule(rule Rule) bool {
 
 func ratesEqual(left, right float64) bool {
 	return math.Abs(left-right) < 1e-9
+}
+
+func isMonitorDispatchPaused(status string) bool {
+	return status == StatusAutoPaused || status == StatusBalancePaused
 }
 
 func firstNonBlank(values ...string) string {

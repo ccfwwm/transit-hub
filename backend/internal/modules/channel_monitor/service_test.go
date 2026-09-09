@@ -73,7 +73,7 @@ func TestRunRuleSkipsUnknownPlatformWithoutConfiguredModel(t *testing.T) {
 	if result.Status != StatusUnsupported || result.Success {
 		t.Fatalf("expected unsupported result, got %+v", result)
 	}
-	if len(service.platform.testSessions) != 0 || len(service.platform.schedulableCalls) != 0 {
+	if len(service.platform.testOptions) != 0 || len(service.platform.schedulableCalls) != 0 {
 		t.Fatalf("unknown platform must not be tested or mutated")
 	}
 }
@@ -167,7 +167,7 @@ func TestRunRuleSuccessWritesHealthyResultWithoutPausing(t *testing.T) {
 	}
 }
 
-func TestRunDueReusesWorkspaceSessionAcrossRules(t *testing.T) {
+func TestRunDueDoesNotLoadAdminSessionForHealthyProbes(t *testing.T) {
 	ctx := context.Background()
 	repo := newFakeRepository()
 	second := DefaultRule("user-1", "admin-1", "conn-2")
@@ -190,20 +190,18 @@ func TestRunDueReusesWorkspaceSessionAcrossRules(t *testing.T) {
 	if checked := service.RunDue(ctx, 20); checked != 2 {
 		t.Fatalf("expected two due rules checked, got %d", checked)
 	}
-	if sessions.calls != 1 {
-		t.Fatalf("expected one session validation per workspace batch, got %d", sessions.calls)
+	if sessions.calls != 0 {
+		t.Fatalf("healthy probes must not call the admin session provider, got %d calls", sessions.calls)
 	}
 }
 
-func TestRunDueSpacesScheduledAccountTests(t *testing.T) {
+func TestRunDueExecutesMultipleDirectUpstreamProbes(t *testing.T) {
 	ctx := context.Background()
 	repo := newFakeRepository()
 	second := DefaultRule("user-1", "admin-1", "conn-2")
 	repo.rules[second.ID] = second
 	repo.dueRules = []Rule{repo.mustRule("conn-1"), second}
 	service := newTestService(repo)
-	service.testSpacing = 40 * time.Millisecond
-	service.platform.accounts = append(service.platform.accounts, AdminAccountStatus{ID: "456", Name: "A-【site】-GPT-4.1", Schedulable: boolPtr(true)})
 	service.conns.connections = append(service.conns.connections, my_sites.RealConnection{
 		ID:                "conn-2",
 		UpstreamSiteID:    "site-1",
@@ -222,10 +220,7 @@ func TestRunDueSpacesScheduledAccountTests(t *testing.T) {
 	started := append([]time.Time(nil), service.platform.testStartedAt...)
 	service.platform.mu.Unlock()
 	if len(started) != 2 {
-		t.Fatalf("expected two account tests, got %d", len(started))
-	}
-	if gap := started[1].Sub(started[0]); gap < 35*time.Millisecond {
-		t.Fatalf("expected scheduled account test starts to be spaced, got %s", gap)
+		t.Fatalf("expected two direct upstream probes, got %d", len(started))
 	}
 }
 
@@ -260,31 +255,27 @@ func TestRunDueSkipsOverlappingBatch(t *testing.T) {
 	}
 }
 
-func TestRunRuleUsesSessionProviderSession(t *testing.T) {
+func TestRunRuleHealthyProbeDoesNotUseAdminSession(t *testing.T) {
 	ctx := context.Background()
 	repo := newFakeRepository()
 	service := newTestService(repo)
-	service.SetSessionProvider(fakeSessionProvider{session: upstream.Session{
-		Platform:    upstream.PlatformSub2API,
-		BaseURL:     "https://admin.example.com",
-		AccessToken: "fresh-admin-token",
-		TokenType:   "Bearer",
-	}})
+	sessions := &countingSessionProvider{session: service.state().Session}
+	service.SetSessionProvider(sessions)
 	rule := repo.mustRule("conn-1")
 
-	_, err := service.RunRule(ctx, rule.ID, "manual")
+	result, err := service.RunRule(ctx, rule.ID, "manual")
 	if err != nil {
 		t.Fatalf("RunRule returned error: %v", err)
 	}
-	if len(service.platform.testSessions) != 1 {
-		t.Fatalf("expected one test call, got %d", len(service.platform.testSessions))
+	if result.Status != StatusHealthy || len(service.platform.probeConnections) != 1 {
+		t.Fatalf("expected one healthy direct probe, got result=%+v probes=%d", result, len(service.platform.probeConnections))
 	}
-	if service.platform.testSessions[0].AccessToken != "fresh-admin-token" {
-		t.Fatalf("expected refreshed session token, got %q", service.platform.testSessions[0].AccessToken)
+	if sessions.calls != 0 {
+		t.Fatalf("healthy direct probe unexpectedly loaded admin session %d times", sessions.calls)
 	}
 }
 
-func TestRunRuleSkipsMissingRemoteAccount(t *testing.T) {
+func TestRunRuleDoesNotListRemoteAdminAccountForProbe(t *testing.T) {
 	ctx := context.Background()
 	repo := newFakeRepository()
 	service := newTestService(repo)
@@ -295,11 +286,11 @@ func TestRunRuleSkipsMissingRemoteAccount(t *testing.T) {
 	if err != nil {
 		t.Fatalf("RunRule returned error: %v", err)
 	}
-	if result.Status != StatusUnsupported || result.Success {
-		t.Fatalf("expected missing remote account to be unsupported, got %+v", result)
+	if result.Status != StatusHealthy || !result.Success {
+		t.Fatalf("expected direct upstream probe to remain healthy, got %+v", result)
 	}
-	if len(service.platform.testSessions) != 0 || len(service.platform.schedulableCalls) != 0 {
-		t.Fatalf("missing remote account must not be tested or mutated")
+	if len(service.platform.probeConnections) != 1 || len(service.platform.schedulableCalls) != 0 {
+		t.Fatalf("expected probe without admin mutation")
 	}
 }
 
@@ -509,7 +500,7 @@ func TestSummaryReportsEffectiveModelAndSource(t *testing.T) {
 	}
 }
 
-func TestRunRuleSkipsWhenAdminSessionCannotBeRecovered(t *testing.T) {
+func TestRunRuleHealthyProbeWorksWhenAdminSessionCannotBeRecovered(t *testing.T) {
 	ctx := context.Background()
 	repo := newFakeRepository()
 	service := newTestService(repo)
@@ -520,15 +511,15 @@ func TestRunRuleSkipsWhenAdminSessionCannotBeRecovered(t *testing.T) {
 	if err != nil {
 		t.Fatalf("RunRule returned error: %v", err)
 	}
-	if result.Status != StatusUnknown || !result.Success {
-		t.Fatalf("expected unknown successful skip result, got %+v", result)
+	if result.Status != StatusHealthy || !result.Success {
+		t.Fatalf("expected healthy direct probe, got %+v", result)
 	}
 	updated := repo.mustRule("conn-1")
 	if updated.ConsecutiveFailures != 0 {
 		t.Fatalf("admin auth failure should not count against channel, got %d", updated.ConsecutiveFailures)
 	}
-	if len(service.platform.testSessions) != 0 {
-		t.Fatalf("expected no account test when admin session cannot be recovered")
+	if len(service.platform.probeConnections) != 1 {
+		t.Fatalf("expected one direct probe when admin session cannot be recovered")
 	}
 	if len(service.platform.schedulableCalls) != 0 {
 		t.Fatalf("expected no schedulable changes when admin session cannot be recovered")
@@ -567,6 +558,29 @@ func TestRunRulePausesAfterFailureThreshold(t *testing.T) {
 	}
 }
 
+func TestRunRuleDoesNotRepeatDisableWhileFailurePersists(t *testing.T) {
+	ctx := context.Background()
+	repo := newFakeRepository()
+	service := newTestService(repo)
+	service.platform.testErr = errors.New("upstream timeout")
+	rule := repo.mustRule("conn-1")
+	rule.FailureThreshold = 2
+	repo.rules[rule.ID] = rule
+
+	for index := 0; index < 4; index++ {
+		result, err := service.RunRule(ctx, rule.ID, "scheduled")
+		if err != nil {
+			t.Fatalf("RunRule %d returned error: %v", index+1, err)
+		}
+		if index >= 1 && result.Status != StatusAutoPaused {
+			t.Fatalf("expected persistent auto pause on run %d, got %+v", index+1, result)
+		}
+	}
+	if got := service.platform.schedulableCalls; len(got) != 1 || got[0].Schedulable {
+		t.Fatalf("persistent failure must issue exactly one disable, got %+v", got)
+	}
+}
+
 func TestRunRulePausesWhenBalanceBelowThreshold(t *testing.T) {
 	ctx := context.Background()
 	repo := newFakeRepository()
@@ -585,6 +599,28 @@ func TestRunRulePausesWhenBalanceBelowThreshold(t *testing.T) {
 	}
 	if got := service.platform.schedulableCalls; len(got) != 1 || got[0].Schedulable {
 		t.Fatalf("expected one disable call, got %+v", got)
+	}
+}
+
+func TestRunRuleDoesNotRepeatDisableWhileBalanceRemainsLow(t *testing.T) {
+	ctx := context.Background()
+	repo := newFakeRepository()
+	service := newTestService(repo)
+	balance := 0.5
+	service.upstreams.site.Metrics.Balance.Value = &balance
+	rule := repo.mustRule("conn-1")
+
+	for index := 0; index < 3; index++ {
+		result, err := service.RunRule(ctx, rule.ID, "scheduled")
+		if err != nil {
+			t.Fatalf("RunRule %d returned error: %v", index+1, err)
+		}
+		if result.Status != StatusBalancePaused {
+			t.Fatalf("expected balance pause on run %d, got %+v", index+1, result)
+		}
+	}
+	if got := service.platform.schedulableCalls; len(got) != 1 || got[0].Schedulable {
+		t.Fatalf("persistent low balance must issue exactly one disable, got %+v", got)
 	}
 }
 
@@ -1502,7 +1538,8 @@ type fakeMonitorPlatform struct {
 	mu               sync.Mutex
 	testErr          error
 	accounts         []AdminAccountStatus
-	testSessions     []upstream.Session
+	probeSites       []upstream.Site
+	probeConnections []my_sites.RealConnection
 	testOptions      []AccountTestOptions
 	testStartedAt    []time.Time
 	testStarted      chan<- struct{}
@@ -1521,9 +1558,10 @@ type priorityCall struct {
 	Priority  int
 }
 
-func (f *fakeMonitorPlatform) TestSub2APIAdminAccount(session upstream.Session, _ string, options AccountTestOptions) (AccountTestResult, error) {
+func (f *fakeMonitorPlatform) ProbeUpstreamConnection(_ context.Context, site upstream.Site, connection my_sites.RealConnection, options AccountTestOptions) (AccountTestResult, error) {
 	f.mu.Lock()
-	f.testSessions = append(f.testSessions, session)
+	f.probeSites = append(f.probeSites, site)
+	f.probeConnections = append(f.probeConnections, connection)
 	f.testOptions = append(f.testOptions, options)
 	f.testStartedAt = append(f.testStartedAt, time.Now())
 	f.mu.Unlock()
@@ -1636,7 +1674,6 @@ func newTestService(repo *fakeRepository) *testService {
 	}
 	conns := &fakeConnections{connections: []my_sites.RealConnection{conn}}
 	service := NewService(repo, conns, fakeStateStore{state: state}, upstreams, platform, fakeAccounts{})
-	service.testSpacing = 0
 	return &testService{Service: service, platform: platform, upstreams: upstreams, conns: conns}
 }
 

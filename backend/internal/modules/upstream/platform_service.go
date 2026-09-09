@@ -1,9 +1,11 @@
 package upstream
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"math"
 	"net/http"
@@ -2313,4 +2315,112 @@ func (s *PlatformService) updateNewAPIGroupRatio(session Session, groupName stri
 		return err
 	}
 	return nil
+}
+
+// ProbeAPIKey sends a normal model request through the upstream key. It does
+// not use the Sub2API admin account test endpoint, so routine health checks do
+// not create admin.accounts.test.create audit records.
+func (s *PlatformService) ProbeAPIKey(ctx context.Context, options APIKeyProbeOptions) (APIKeyProbeResult, error) {
+	baseURL, err := s.NormalizeURL(options.BaseURL)
+	if err != nil {
+		return APIKeyProbeResult{}, err
+	}
+	apiKey := strings.TrimSpace(options.APIKey)
+	modelID := strings.TrimSpace(options.ModelID)
+	if apiKey == "" || modelID == "" {
+		return APIKeyProbeResult{}, newRequestError(ErrorRequest, "")
+	}
+
+	platform := normalizeGroupPlatform(options.Platform)
+	prompt := strings.TrimSpace(options.Prompt)
+	if prompt == "" {
+		prompt = "Reply OK"
+	}
+	endpoint := apiProbeEndpoint(baseURL, platform)
+	body := map[string]any{}
+	headers := map[string]string{"Accept": "application/json", "Content-Type": "application/json"}
+	switch platform {
+	case "anthropic":
+		headers["x-api-key"] = apiKey
+		headers["anthropic-version"] = "2023-06-01"
+		body = map[string]any{
+			"model": modelID, "max_tokens": 1,
+			"messages": []map[string]any{{"role": "user", "content": prompt}},
+		}
+	default:
+		headers["Authorization"] = "Bearer " + apiKey
+		body = map[string]any{
+			"model": modelID, "max_tokens": 1, "stream": false,
+			"messages": []map[string]any{{"role": "user", "content": prompt}},
+		}
+	}
+	encoded, err := json.Marshal(body)
+	if err != nil {
+		return APIKeyProbeResult{}, newRequestError(ErrorInvalidResponse, "")
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(encoded))
+	if err != nil {
+		return APIKeyProbeResult{}, newRequestError(ErrorInvalidURL, "")
+	}
+	for name, value := range headers {
+		req.Header.Set(name, value)
+	}
+	req.Header.Set("User-Agent", BrowserUserAgent)
+
+	started := time.Now()
+	response, err := s.httpClient.requestClient(options.InsecureSkipTLS).Do(req)
+	latency := int(time.Since(started).Milliseconds())
+	if err != nil {
+		log.Printf("[channel-monitor] upstream key probe failed url=%s err=%v", endpoint, err)
+		return APIKeyProbeResult{}, newRequestError(ErrorNetwork, "")
+	}
+	defer response.Body.Close()
+	data, readErr := io.ReadAll(io.LimitReader(response.Body, 64<<10))
+	if readErr != nil {
+		return APIKeyProbeResult{}, newRequestError(ErrorInvalidResponse, "")
+	}
+	if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
+		return APIKeyProbeResult{
+			Success: false, Message: apiProbeErrorMessage(response.StatusCode, data),
+			LatencyMS: latency, Model: modelID,
+		}, nil
+	}
+	return APIKeyProbeResult{Success: true, Message: "上游 Key 直连检测通过", LatencyMS: latency, Model: modelID}, nil
+}
+
+func apiProbeEndpoint(baseURL, platform string) string {
+	base := strings.TrimRight(baseURL, "/")
+	suffix := "/v1/chat/completions"
+	if platform == "anthropic" {
+		suffix = "/v1/messages"
+	}
+	if strings.HasSuffix(strings.ToLower(base), "/v1") {
+		return base + strings.TrimPrefix(suffix, "/v1")
+	}
+	return base + suffix
+}
+
+func apiProbeErrorMessage(status int, data []byte) string {
+	message := ""
+	var payload map[string]any
+	if json.Unmarshal(data, &payload) == nil {
+		if value, ok := payload["message"].(string); ok {
+			message = strings.TrimSpace(value)
+		}
+		if nested, ok := payload["error"].(map[string]any); ok {
+			if value, ok := nested["message"].(string); ok {
+				message = strings.TrimSpace(value)
+			}
+		}
+	}
+	if message == "" {
+		message = strings.TrimSpace(string(data))
+	}
+	if len(message) > 200 {
+		message = message[:200]
+	}
+	if message == "" {
+		return fmt.Sprintf("上游 Key 直连检测失败（HTTP %d）", status)
+	}
+	return fmt.Sprintf("上游 Key 直连检测失败（HTTP %d）：%s", status, message)
 }

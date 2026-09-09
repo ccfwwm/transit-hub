@@ -1,6 +1,11 @@
 package channel_monitor
 
-import "transithub/backend/internal/modules/upstream"
+import (
+	"context"
+
+	"transithub/backend/internal/modules/my_sites"
+	"transithub/backend/internal/modules/upstream"
+)
 
 type PlatformAdapter struct {
 	platform *upstream.PlatformService
@@ -10,10 +15,14 @@ func NewPlatformAdapter(platform *upstream.PlatformService) PlatformAdapter {
 	return PlatformAdapter{platform: platform}
 }
 
-func (a PlatformAdapter) TestSub2APIAdminAccount(session upstream.Session, accountID string, options AccountTestOptions) (AccountTestResult, error) {
-	result, err := a.platform.TestSub2APIAdminAccount(session, accountID, upstream.Sub2APIAccountTestOptions{
-		ModelID: options.ModelID,
-		Prompt:  options.Prompt,
+func (a PlatformAdapter) ProbeUpstreamConnection(ctx context.Context, site upstream.Site, connection my_sites.RealConnection, options AccountTestOptions) (AccountTestResult, error) {
+	result, err := a.platform.ProbeAPIKey(ctx, upstream.APIKeyProbeOptions{
+		BaseURL:         site.BaseURL,
+		APIKey:          connection.UpstreamKey,
+		Platform:        connection.GroupType,
+		ModelID:         options.ModelID,
+		Prompt:          options.Prompt,
+		InsecureSkipTLS: site.SkipTLSVerify || (site.Session != nil && site.Session.InsecureSkipTLS),
 	})
 	if err != nil {
 		return AccountTestResult{}, err
