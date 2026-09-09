@@ -218,7 +218,27 @@ func (r *Repository) EnsureSchema(ctx context.Context) error {
 }
 
 func (r *Repository) EnsureRulesForExistingConnections(ctx context.Context) error {
+	if _, err := r.db.Exec(ctx, `
+		DELETE FROM channel_monitor_rules AS rules
+		WHERE NOT EXISTS (
+			SELECT 1
+			FROM real_connections AS rc
+			WHERE rc.id = rules.connection_id
+				AND rc.user_id = rules.user_id
+				AND rc.workspace_admin_account_id = rules.admin_account_id
+		)
+	`); err != nil {
+		return err
+	}
 	_, err := r.db.Exec(ctx, `
+		WITH missing_connections AS (
+			SELECT rc.*,
+				row_number() OVER (ORDER BY rc.id) - 1 AS stagger_position,
+				count(*) OVER () AS stagger_total
+			FROM real_connections AS rc
+			WHERE rc.user_id <> '' AND rc.workspace_admin_account_id <> ''
+				AND NOT EXISTS (SELECT 1 FROM channel_monitor_rules AS rules WHERE rules.id = rc.id)
+		)
 		INSERT INTO channel_monitor_rules (
 			id, user_id, admin_account_id, connection_id, enabled, check_interval_minutes,
 			failure_threshold, balance_threshold, manual_paused, consecutive_failures,
@@ -226,9 +246,10 @@ func (r *Repository) EnsureRulesForExistingConnections(ctx context.Context) erro
 		)
 		SELECT
 			rc.id, rc.user_id, rc.workspace_admin_account_id, rc.id, true, $1,
-			$2, $3, false, 0, $4, now(), now(), now()
-		FROM real_connections AS rc
-		WHERE rc.user_id <> '' AND rc.workspace_admin_account_id <> ''
+			$2, $3, false, 0, $4,
+			now() + ($1::double precision * interval '1 minute' * rc.stagger_position::double precision / greatest(rc.stagger_total, 1)),
+			now(), now()
+		FROM missing_connections AS rc
 		ON CONFLICT (id) DO NOTHING
 	`, DefaultCheckIntervalMinutes, DefaultFailureThreshold, DefaultBalanceThreshold, StatusUnknown)
 	return err
@@ -372,6 +393,13 @@ func (r *Repository) ListDueRules(ctx context.Context, limit int) ([]Rule, error
 			COALESCE(test_model_id, '') AS test_model_id
 		FROM channel_monitor_rules
 		WHERE enabled = true AND (next_check_at IS NULL OR next_check_at <= now())
+			AND EXISTS (
+				SELECT 1
+				FROM real_connections AS rc
+				WHERE rc.id = channel_monitor_rules.connection_id
+					AND rc.user_id = channel_monitor_rules.user_id
+					AND rc.workspace_admin_account_id = channel_monitor_rules.admin_account_id
+			)
 		ORDER BY next_check_at ASC NULLS FIRST, created_at ASC
 		LIMIT $1
 	`, limit)

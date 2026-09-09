@@ -3,6 +3,7 @@ package channel_monitor
 import (
 	"context"
 	"errors"
+	"sync"
 	"testing"
 	"time"
 
@@ -191,6 +192,71 @@ func TestRunDueReusesWorkspaceSessionAcrossRules(t *testing.T) {
 	}
 	if sessions.calls != 1 {
 		t.Fatalf("expected one session validation per workspace batch, got %d", sessions.calls)
+	}
+}
+
+func TestRunDueSpacesScheduledAccountTests(t *testing.T) {
+	ctx := context.Background()
+	repo := newFakeRepository()
+	second := DefaultRule("user-1", "admin-1", "conn-2")
+	repo.rules[second.ID] = second
+	repo.dueRules = []Rule{repo.mustRule("conn-1"), second}
+	service := newTestService(repo)
+	service.testSpacing = 40 * time.Millisecond
+	service.platform.accounts = append(service.platform.accounts, AdminAccountStatus{ID: "456", Name: "A-【site】-GPT-4.1", Schedulable: boolPtr(true)})
+	service.conns.connections = append(service.conns.connections, my_sites.RealConnection{
+		ID:                "conn-2",
+		UpstreamSiteID:    "site-1",
+		UpstreamGroupID:   "g-upstream-2",
+		UpstreamGroupName: "GPT-4.1",
+		AdminAccountID:    "456",
+		AdminAccountName:  "A-【site】-GPT-4.1",
+		OwnGroupIDs:       []string{"own-1"},
+		GroupType:         "openai",
+	})
+
+	if checked := service.runDue(ctx, 20, 2); checked != 2 {
+		t.Fatalf("expected two due rules checked, got %d", checked)
+	}
+	service.platform.mu.Lock()
+	started := append([]time.Time(nil), service.platform.testStartedAt...)
+	service.platform.mu.Unlock()
+	if len(started) != 2 {
+		t.Fatalf("expected two account tests, got %d", len(started))
+	}
+	if gap := started[1].Sub(started[0]); gap < 35*time.Millisecond {
+		t.Fatalf("expected scheduled account test starts to be spaced, got %s", gap)
+	}
+}
+
+func TestRunDueSkipsOverlappingBatch(t *testing.T) {
+	ctx := context.Background()
+	repo := newFakeRepository()
+	repo.dueRules = []Rule{repo.mustRule("conn-1")}
+	service := newTestService(repo)
+	started := make(chan struct{}, 1)
+	blocked := make(chan struct{})
+	service.platform.testStarted = started
+	service.platform.testBlock = blocked
+	done := make(chan int, 1)
+	go func() { done <- service.runDue(ctx, 20, 1) }()
+
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for first scheduler batch")
+	}
+	if checked := service.runDue(ctx, 20, 1); checked != 0 {
+		t.Fatalf("expected overlapping scheduler batch to be skipped, got %d", checked)
+	}
+	close(blocked)
+	select {
+	case checked := <-done:
+		if checked != 1 {
+			t.Fatalf("expected first scheduler batch to finish one rule, got %d", checked)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for first scheduler batch to finish")
 	}
 }
 
@@ -854,6 +920,38 @@ func TestBulkUpdateRulesAppliesSelectedRules(t *testing.T) {
 	}
 }
 
+func TestBulkUpdateRulesStaggersNextChecks(t *testing.T) {
+	ctx := context.Background()
+	repo := newFakeRepository()
+	second := DefaultRule("user-1", "admin-1", "conn-2")
+	repo.rules[second.ID] = second
+	service := newTestService(repo)
+	service.conns.connections = append(service.conns.connections, my_sites.RealConnection{
+		ID:                "conn-2",
+		UpstreamSiteID:    "site-1",
+		UpstreamGroupID:   "g-upstream-2",
+		UpstreamGroupName: "GPT-4.1",
+		AdminAccountID:    "456",
+		AdminAccountName:  "A-【site】-GPT-4.1",
+		OwnGroupIDs:       []string{"own-1"},
+		GroupType:         "openai",
+	})
+
+	updated, err := service.BulkUpdateRules(ctx, "user-1", BulkUpdateRuleRequest{
+		RuleIDs:              []string{"conn-1", "conn-2"},
+		CheckIntervalMinutes: intPtr(2),
+	})
+	if err != nil {
+		t.Fatalf("BulkUpdateRules returned error: %v", err)
+	}
+	if len(updated) != 2 || updated[0].NextCheckAt == nil || updated[1].NextCheckAt == nil {
+		t.Fatalf("expected two scheduled rules, got %+v", updated)
+	}
+	if gap := updated[1].NextCheckAt.Sub(*updated[0].NextCheckAt); gap < 55*time.Second {
+		t.Fatalf("expected next checks distributed across interval, got %s", gap)
+	}
+}
+
 func TestSummaryIncludesRemoteSchedulableAndRecentResults(t *testing.T) {
 	ctx := context.Background()
 	repo := newFakeRepository()
@@ -1401,10 +1499,14 @@ func (fakeAccounts) RequireCurrentID(context.Context, string) (string, error) {
 }
 
 type fakeMonitorPlatform struct {
+	mu               sync.Mutex
 	testErr          error
 	accounts         []AdminAccountStatus
 	testSessions     []upstream.Session
 	testOptions      []AccountTestOptions
+	testStartedAt    []time.Time
+	testStarted      chan<- struct{}
+	testBlock        <-chan struct{}
 	schedulableCalls []schedulableCall
 	priorityCalls    []priorityCall
 }
@@ -1420,8 +1522,20 @@ type priorityCall struct {
 }
 
 func (f *fakeMonitorPlatform) TestSub2APIAdminAccount(session upstream.Session, _ string, options AccountTestOptions) (AccountTestResult, error) {
+	f.mu.Lock()
 	f.testSessions = append(f.testSessions, session)
 	f.testOptions = append(f.testOptions, options)
+	f.testStartedAt = append(f.testStartedAt, time.Now())
+	f.mu.Unlock()
+	if f.testStarted != nil {
+		select {
+		case f.testStarted <- struct{}{}:
+		default:
+		}
+	}
+	if f.testBlock != nil {
+		<-f.testBlock
+	}
 	if f.testErr != nil {
 		return AccountTestResult{}, f.testErr
 	}
@@ -1522,6 +1636,7 @@ func newTestService(repo *fakeRepository) *testService {
 	}
 	conns := &fakeConnections{connections: []my_sites.RealConnection{conn}}
 	service := NewService(repo, conns, fakeStateStore{state: state}, upstreams, platform, fakeAccounts{})
+	service.testSpacing = 0
 	return &testService{Service: service, platform: platform, upstreams: upstreams, conns: conns}
 }
 

@@ -80,16 +80,23 @@ type Service struct {
 	accounts         AdminAccountResolver
 	stopScheduler    chan struct{}
 	balanceRefreshes singleflight.Group
+	schedulerRunMu   sync.Mutex
+	testStartMu      sync.Mutex
+	nextTestStart    time.Time
+	testSlots        chan struct{}
+	testSpacing      time.Duration
 }
 
 func NewService(store Store, conns ConnectionStore, states StateStore, upstreams UpstreamLookup, platform MonitorPlatform, accounts AdminAccountResolver) *Service {
 	return &Service{
-		store:     store,
-		conns:     conns,
-		states:    states,
-		upstreams: upstreams,
-		platform:  platform,
-		accounts:  accounts,
+		store:       store,
+		conns:       conns,
+		states:      states,
+		upstreams:   upstreams,
+		platform:    platform,
+		accounts:    accounts,
+		testSlots:   make(chan struct{}, 1),
+		testSpacing: 120 * time.Second,
 	}
 }
 
@@ -374,7 +381,8 @@ func (s *Service) BulkUpdateRules(ctx context.Context, userID string, req BulkUp
 		return nil, requestError("admin.channelMonitor.errors.request")
 	}
 	updated := make([]Rule, 0, len(ruleIDs))
-	for _, ruleID := range ruleIDs {
+	batchStarted := time.Now()
+	for index, ruleID := range ruleIDs {
 		rule, err := s.UpdateRule(ctx, userID, ruleID, UpdateRuleRequest{
 			Enabled:              req.Enabled,
 			CheckIntervalMinutes: req.CheckIntervalMinutes,
@@ -383,6 +391,14 @@ func (s *Service) BulkUpdateRules(ctx context.Context, userID string, req BulkUp
 		})
 		if err != nil {
 			return nil, err
+		}
+		if rule.Enabled && len(ruleIDs) > 1 {
+			window := time.Duration(rule.CheckIntervalMinutes) * time.Minute
+			next := batchStarted.Add(window * time.Duration(index) / time.Duration(len(ruleIDs)))
+			rule.NextCheckAt = &next
+			if err := s.store.UpdateRule(ctx, rule); err != nil {
+				return nil, err
+			}
 		}
 		updated = append(updated, rule)
 	}
@@ -894,6 +910,12 @@ func (s *Service) RunDue(ctx context.Context, limit int) int {
 }
 
 func (s *Service) runDue(ctx context.Context, limit, workers int) int {
+	if !s.schedulerRunMu.TryLock() {
+		log.Printf("[channel-monitor] previous scheduler batch still running; skipped overlapping batch")
+		return 0
+	}
+	defer s.schedulerRunMu.Unlock()
+
 	if limit <= 0 {
 		limit = 20
 	}
@@ -970,7 +992,7 @@ func (s *Service) StartScheduler(ctx context.Context) {
 	}
 	s.stopScheduler = make(chan struct{})
 	go func() {
-		ticker := time.NewTicker(30 * time.Second)
+		ticker := time.NewTicker(120 * time.Second)
 		defer ticker.Stop()
 		for {
 			select {
@@ -979,7 +1001,7 @@ func (s *Service) StartScheduler(ctx context.Context) {
 			case <-s.stopScheduler:
 				return
 			case <-ticker.C:
-				s.runDue(context.Background(), 100, 10)
+				s.runDue(context.Background(), 1, 1)
 			}
 		}
 	}()
@@ -1136,7 +1158,7 @@ func (s *Service) runRuleWithWorkspace(ctx context.Context, rule Rule, reason st
 	if strings.TrimSpace(testModel) == "" {
 		return finish(StatusUnsupported, false, "当前分组未配置主动检测模型，已跳过检测和自动停启", nil, "")
 	}
-	testResult, testErr := s.platform.TestSub2APIAdminAccount(state.Session, conn.AdminAccountID, AccountTestOptions{ModelID: testModel})
+	testResult, testErr := s.testSub2APIAdminAccount(ctx, state.Session, conn.AdminAccountID, AccountTestOptions{ModelID: testModel}, reason)
 	if strings.TrimSpace(testResult.Model) == "" {
 		testResult.Model = testModel
 	}
@@ -1190,6 +1212,39 @@ func (s *Service) runRuleWithWorkspace(ctx context.Context, rule Rule, reason st
 		s.applyRateRuleAfterCheck(ctx, rule.UserID, rule.AdminAccountID)
 	}
 	return result, err
+}
+
+func (s *Service) testSub2APIAdminAccount(ctx context.Context, session upstream.Session, accountID string, options AccountTestOptions, reason string) (AccountTestResult, error) {
+	select {
+	case s.testSlots <- struct{}{}:
+		defer func() { <-s.testSlots }()
+	case <-ctx.Done():
+		return AccountTestResult{}, ctx.Err()
+	}
+
+	if reason == "scheduled" {
+		s.testStartMu.Lock()
+		wait := time.Until(s.nextTestStart)
+		if wait > 0 {
+			timer := time.NewTimer(wait)
+			select {
+			case <-timer.C:
+			case <-ctx.Done():
+				if !timer.Stop() {
+					select {
+					case <-timer.C:
+					default:
+					}
+				}
+				s.testStartMu.Unlock()
+				return AccountTestResult{}, ctx.Err()
+			}
+		}
+		s.nextTestStart = time.Now().Add(s.testSpacing)
+		s.testStartMu.Unlock()
+	}
+
+	return s.platform.TestSub2APIAdminAccount(session, accountID, options)
 }
 
 func (s *Service) applyRateRuleAfterCheck(ctx context.Context, userID, adminAccountID string) {
