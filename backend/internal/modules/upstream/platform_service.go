@@ -2337,51 +2337,38 @@ func (s *PlatformService) ProbeAPIKey(ctx context.Context, options APIKeyProbeOp
 		prompt = "Reply OK"
 	}
 	endpoint := apiProbeEndpoint(baseURL, platform)
-	body := map[string]any{}
+	body := apiProbeBody(platform, modelID, prompt)
 	headers := map[string]string{"Accept": "application/json", "Content-Type": "application/json"}
 	switch platform {
 	case "anthropic":
 		headers["x-api-key"] = apiKey
 		headers["anthropic-version"] = "2023-06-01"
-		body = map[string]any{
-			"model": modelID, "max_tokens": 1,
-			"messages": []map[string]any{{"role": "user", "content": prompt}},
-		}
 	default:
 		headers["Authorization"] = "Bearer " + apiKey
-		body = map[string]any{
-			"model": modelID, "max_tokens": 1, "stream": false,
-			"messages": []map[string]any{{"role": "user", "content": prompt}},
-		}
 	}
-	encoded, err := json.Marshal(body)
-	if err != nil {
-		return APIKeyProbeResult{}, newRequestError(ErrorInvalidResponse, "")
-	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(encoded))
-	if err != nil {
-		return APIKeyProbeResult{}, newRequestError(ErrorInvalidURL, "")
-	}
-	for name, value := range headers {
-		req.Header.Set(name, value)
-	}
-	req.Header.Set("User-Agent", BrowserUserAgent)
 
 	started := time.Now()
-	response, err := s.httpClient.requestClient(options.InsecureSkipTLS).Do(req)
-	latency := int(time.Since(started).Milliseconds())
+	status, data, err := s.sendAPIKeyProbe(ctx, endpoint, headers, body, options.InsecureSkipTLS)
 	if err != nil {
 		log.Printf("[channel-monitor] upstream key probe failed url=%s err=%v", endpoint, err)
 		return APIKeyProbeResult{}, newRequestError(ErrorNetwork, "")
 	}
-	defer response.Body.Close()
-	data, readErr := io.ReadAll(io.LimitReader(response.Body, 64<<10))
-	if readErr != nil {
-		return APIKeyProbeResult{}, newRequestError(ErrorInvalidResponse, "")
+
+	// OpenAI API-key accounts in Sub2API use Responses by default. Some older
+	// compatible gateways only implement Chat Completions, so retry that
+	// protocol only when the endpoint itself is explicitly unsupported.
+	if platform == "openai" && (status == http.StatusNotFound || status == http.StatusMethodNotAllowed) {
+		endpoint = apiProbeURL(baseURL, "/v1/chat/completions")
+		status, data, err = s.sendAPIKeyProbe(ctx, endpoint, headers, apiChatCompletionsProbeBody(modelID, prompt), options.InsecureSkipTLS)
+		if err != nil {
+			log.Printf("[channel-monitor] upstream key probe fallback failed url=%s err=%v", endpoint, err)
+			return APIKeyProbeResult{}, newRequestError(ErrorNetwork, "")
+		}
 	}
-	if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
+	latency := int(time.Since(started).Milliseconds())
+	if status < http.StatusOK || status >= http.StatusMultipleChoices {
 		return APIKeyProbeResult{
-			Success: false, Message: apiProbeErrorMessage(response.StatusCode, data),
+			Success: false, Message: apiProbeErrorMessage(status, data),
 			LatencyMS: latency, Model: modelID,
 		}, nil
 	}
@@ -2389,15 +2376,77 @@ func (s *PlatformService) ProbeAPIKey(ctx context.Context, options APIKeyProbeOp
 }
 
 func apiProbeEndpoint(baseURL, platform string) string {
-	base := strings.TrimRight(baseURL, "/")
 	suffix := "/v1/chat/completions"
-	if platform == "anthropic" {
+	switch platform {
+	case "openai":
+		suffix = "/v1/responses"
+	case "anthropic":
 		suffix = "/v1/messages"
 	}
+	return apiProbeURL(baseURL, suffix)
+}
+
+func apiProbeURL(baseURL, suffix string) string {
+	base := strings.TrimRight(baseURL, "/")
 	if strings.HasSuffix(strings.ToLower(base), "/v1") {
 		return base + strings.TrimPrefix(suffix, "/v1")
 	}
 	return base + suffix
+}
+
+func apiProbeBody(platform, modelID, prompt string) map[string]any {
+	switch platform {
+	case "openai":
+		return map[string]any{
+			"model": modelID,
+			"input": []map[string]any{{
+				"role":    "user",
+				"content": []map[string]any{{"type": "input_text", "text": prompt}},
+			}},
+			"instructions": "Reply with OK only.",
+			"stream":       false,
+		}
+	case "anthropic":
+		return map[string]any{
+			"model": modelID, "max_tokens": 1,
+			"messages": []map[string]any{{"role": "user", "content": prompt}},
+		}
+	default:
+		return apiChatCompletionsProbeBody(modelID, prompt)
+	}
+}
+
+func apiChatCompletionsProbeBody(modelID, prompt string) map[string]any {
+	return map[string]any{
+		"model": modelID, "max_tokens": 1, "stream": false,
+		"messages": []map[string]any{{"role": "user", "content": prompt}},
+	}
+}
+
+func (s *PlatformService) sendAPIKeyProbe(ctx context.Context, endpoint string, headers map[string]string, body map[string]any, insecureSkipTLS bool) (int, []byte, error) {
+	encoded, err := json.Marshal(body)
+	if err != nil {
+		return 0, nil, err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(encoded))
+	if err != nil {
+		return 0, nil, err
+	}
+	for name, value := range headers {
+		req.Header.Set(name, value)
+	}
+	req.Header.Set("User-Agent", BrowserUserAgent)
+
+	response, err := s.httpClient.requestClient(insecureSkipTLS).Do(req)
+	if err != nil {
+		return 0, nil, err
+	}
+	defer response.Body.Close()
+	data, err := io.ReadAll(io.LimitReader(response.Body, 64<<10))
+	if err != nil {
+		return 0, nil, err
+	}
+	return response.StatusCode, data, nil
 }
 
 func apiProbeErrorMessage(status int, data []byte) string {
