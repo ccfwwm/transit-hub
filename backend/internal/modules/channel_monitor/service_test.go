@@ -1702,3 +1702,18 @@ func cloneSite(site *upstream.Site) *upstream.Site {
 	next := *site
 	return &next
 }
+
+func (r *fakeRepository) UpdateRuleRateSettings(_ context.Context, id string, req UpdateRuleRequest) error {
+	rule := r.rules[id]
+	if req.UpstreamMultiplierOverride != nil {
+		rule.UpstreamMultiplierOverride = req.UpstreamMultiplierOverride
+	}
+	if req.ResetUpstreamMultiplierOverride {
+		rule.UpstreamMultiplierOverride = nil
+	}
+	if req.AllowWhenUpstreamRateGteOwn != nil {
+		rule.AllowWhenUpstreamRateGteOwn = *req.AllowWhenUpstreamRateGteOwn
+	}
+	r.rules[id] = rule
+	return nil
+}

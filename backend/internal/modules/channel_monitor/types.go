@@ -30,34 +30,37 @@ const (
 )
 
 type Rule struct {
-	ID                     string     `json:"id"`
-	UserID                 string     `json:"-"`
-	AdminAccountID         string     `json:"-"`
-	ConnectionID           string     `json:"connectionId"`
-	Enabled                bool       `json:"enabled"`
-	CheckIntervalMinutes   int        `json:"checkIntervalMinutes"`
-	FailureThreshold       int        `json:"failureThreshold"`
-	BalanceThreshold       float64    `json:"balanceThreshold"`
-	TestModelID            string     `json:"testModelId,omitempty"`
-	DesiredSchedulable     *bool      `json:"desiredSchedulable"`
-	SchedulableManaged     bool       `json:"schedulableManaged"`
-	OriginalSchedulable    *bool      `json:"originalSchedulable"`
-	LastAppliedSchedulable *bool      `json:"lastAppliedSchedulable"`
-	SchedulableConflict    bool       `json:"schedulableConflict"`
-	AutoEnableBlocked      bool       `json:"autoEnableBlocked"`
-	PriorityManaged        bool       `json:"priorityManaged"`
-	OriginalPriority       *int       `json:"originalPriority"`
-	LastAppliedPriority    *int       `json:"lastAppliedPriority"`
-	PriorityConflict       bool       `json:"priorityConflict"`
-	ManualPaused           bool       `json:"manualPaused"`
-	ConsecutiveFailures    int        `json:"consecutiveFailures"`
-	LastStatus             string     `json:"lastStatus"`
-	LastMessage            string     `json:"lastMessage"`
-	LastLatencyMS          *int       `json:"lastLatencyMs"`
-	LastCheckedAt          *time.Time `json:"lastCheckedAt"`
-	NextCheckAt            *time.Time `json:"nextCheckAt"`
-	CreatedAt              time.Time  `json:"createdAt"`
-	UpdatedAt              time.Time  `json:"updatedAt"`
+	ID                   string  `json:"id"`
+	UserID               string  `json:"-"`
+	AdminAccountID       string  `json:"-"`
+	ConnectionID         string  `json:"connectionId"`
+	Enabled              bool    `json:"enabled"`
+	CheckIntervalMinutes int     `json:"checkIntervalMinutes"`
+	FailureThreshold     int     `json:"failureThreshold"`
+	BalanceThreshold     float64 `json:"balanceThreshold"`
+	// UpstreamMultiplierOverride allows correcting an upstream rate per channel.
+	UpstreamMultiplierOverride  *float64   `json:"upstreamMultiplierOverride"`
+	TestModelID                 string     `json:"testModelId,omitempty"`
+	AllowWhenUpstreamRateGteOwn bool       `json:"allowWhenUpstreamRateGteOwn"`
+	DesiredSchedulable          *bool      `json:"desiredSchedulable"`
+	SchedulableManaged          bool       `json:"schedulableManaged"`
+	OriginalSchedulable         *bool      `json:"originalSchedulable"`
+	LastAppliedSchedulable      *bool      `json:"lastAppliedSchedulable"`
+	SchedulableConflict         bool       `json:"schedulableConflict"`
+	AutoEnableBlocked           bool       `json:"autoEnableBlocked"`
+	PriorityManaged             bool       `json:"priorityManaged"`
+	OriginalPriority            *int       `json:"originalPriority"`
+	LastAppliedPriority         *int       `json:"lastAppliedPriority"`
+	PriorityConflict            bool       `json:"priorityConflict"`
+	ManualPaused                bool       `json:"manualPaused"`
+	ConsecutiveFailures         int        `json:"consecutiveFailures"`
+	LastStatus                  string     `json:"lastStatus"`
+	LastMessage                 string     `json:"lastMessage"`
+	LastLatencyMS               *int       `json:"lastLatencyMs"`
+	LastCheckedAt               *time.Time `json:"lastCheckedAt"`
+	NextCheckAt                 *time.Time `json:"nextCheckAt"`
+	CreatedAt                   time.Time  `json:"createdAt"`
+	UpdatedAt                   time.Time  `json:"updatedAt"`
 }
 
 type Result struct {
@@ -129,6 +132,9 @@ type GroupSummary struct {
 }
 
 type ChannelStatus struct {
+	RepairAvailable             bool       `json:"repairAvailable"`
+	CheckSupported              bool       `json:"checkSupported"`
+	DispatchUnavailableReason   string     `json:"dispatchUnavailableReason"`
 	RuleID                      string     `json:"ruleId"`
 	ConnectionID                string     `json:"connectionId"`
 	Enabled                     bool       `json:"enabled"`
@@ -156,6 +162,8 @@ type ChannelStatus struct {
 	AccountPriority             *int       `json:"accountPriority"`
 	UpstreamMultiplier          *float64   `json:"upstreamMultiplier"`
 	UpstreamEffectiveMultiplier *float64   `json:"upstreamEffectiveMultiplier"`
+	UpstreamMultiplierOverride  *float64   `json:"upstreamMultiplierOverride"`
+	AllowWhenUpstreamRateGteOwn bool       `json:"allowWhenUpstreamRateGteOwn"`
 	OwnGroupMultiplier          *float64   `json:"ownGroupMultiplier"`
 	RecommendedPriority         *int       `json:"recommendedPriority"`
 	RateGateStatus              string     `json:"rateGateStatus"`
@@ -178,11 +186,14 @@ type ChannelStatus struct {
 }
 
 type UpdateRuleRequest struct {
-	Enabled              *bool    `json:"enabled"`
-	CheckIntervalMinutes *int     `json:"checkIntervalMinutes"`
-	FailureThreshold     *int     `json:"failureThreshold"`
-	BalanceThreshold     *float64 `json:"balanceThreshold"`
-	TestModelID          *string  `json:"testModelId"`
+	ResetUpstreamMultiplierOverride bool     `json:"resetUpstreamMultiplierOverride"`
+	Enabled                         *bool    `json:"enabled"`
+	CheckIntervalMinutes            *int     `json:"checkIntervalMinutes"`
+	FailureThreshold                *int     `json:"failureThreshold"`
+	BalanceThreshold                *float64 `json:"balanceThreshold"`
+	UpstreamMultiplierOverride      *float64 `json:"upstreamMultiplierOverride"`
+	TestModelID                     *string  `json:"testModelId"`
+	AllowWhenUpstreamRateGteOwn     *bool    `json:"allowWhenUpstreamRateGteOwn"`
 }
 
 type BulkUpdateRuleRequest struct {
@@ -286,6 +297,8 @@ type RatePlanRow struct {
 	AccountPriority             *int                `json:"accountPriority"`
 	UpstreamMultiplier          *float64            `json:"upstreamMultiplier"`
 	UpstreamEffectiveMultiplier *float64            `json:"upstreamEffectiveMultiplier"`
+	UpstreamMultiplierOverride  *float64            `json:"upstreamMultiplierOverride"`
+	AllowWhenUpstreamRateGteOwn bool                `json:"allowWhenUpstreamRateGteOwn"`
 	OwnGroupMultiplier          *float64            `json:"ownGroupMultiplier"`
 	CurrentSchedulable          *bool               `json:"currentSchedulable"`
 	SuggestedSchedulable        bool                `json:"suggestedSchedulable"`

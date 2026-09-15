@@ -275,6 +275,13 @@ export default {
         editSelectedRules: 'Edit selected rules'
       },
       editor: {
+        customRate: 'Custom',
+        upstreamRate: 'Actual upstream multiplier',
+        upstreamRatePlaceholder: 'Leave blank to use the synced rate',
+        upstreamRateHelp: 'Used directly for comparison and priority without multiplying the recharge rate again. Clear and save to restore the synced value.',
+        allowHigherRate: 'Allow enabling at or above the group multiplier',
+        allowHigherRateHelp: 'Only relaxes the rate limit. Health, balance and manual pauses still prevent automatic enabling.',
+
         title: 'Monitor Rule',
         bulkTitle: 'Bulk edit {count} rules',
         allTitle: 'Edit all {count} rules',
@@ -322,6 +329,8 @@ export default {
         editGroups: 'Edit connected groups',
         editGroupsShort: 'Groups',
         syncTakeover: 'Take over, disable dispatch, and block automatic enabling',
+        repairTakeover: 'Repair & take over',
+        repairTakeoverHelp: 'Recreate the missing account with its existing key and groups, disable dispatch and take over. A successful check may restore dispatch.',
         syncTakeoverShort: 'Sync & take over',
         cancel: 'Cancel',
         save: 'Save'
@@ -337,6 +346,9 @@ export default {
         saveFailed: 'Failed to update connected groups. Please retry later.'
       },
       errors: {
+        invalidMultiplier: 'Multiplier must be a finite number greater than or equal to zero.',
+        accountsUnavailable: 'Unable to load remote accounts. Refresh or sign in to the workspace again.',
+
         network: 'Network error. Please retry.',
         request: 'Status monitor request failed.',
         notFound: 'Monitor rule not found.',

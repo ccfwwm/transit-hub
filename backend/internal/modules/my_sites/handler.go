@@ -25,6 +25,7 @@ func RegisterRoutes(mux *http.ServeMux, service *Service) {
 	mux.HandleFunc("GET /api/my-sites/real-connections", handler.listRealConnections)
 	mux.HandleFunc("PATCH /api/my-sites/real-connections/{id}/groups", handler.updateRealConnectionGroups)
 	mux.HandleFunc("POST /api/my-sites/real-disconnect", handler.realDisconnect)
+	mux.HandleFunc("POST /api/my-sites/real-connections/{id}/repair", handler.repairConnection)
 }
 
 func (h *Handler) mappingOptions(w http.ResponseWriter, r *http.Request) {
@@ -210,4 +211,18 @@ func writeError(w http.ResponseWriter, err error) {
 		return
 	}
 	httpjson.WriteError(w, http.StatusInternalServerError, ErrorUnknown)
+}
+
+func (h *Handler) repairConnection(w http.ResponseWriter, r *http.Request) {
+	userID, ok := authctx.UserID(r.Context())
+	if !ok {
+		httpjson.WriteError(w, http.StatusUnauthorized, "auth.errors.unauthorized")
+		return
+	}
+	id, err := h.service.RepairRealConnectionAccount(r.Context(), userID, r.PathValue("id"))
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	httpjson.Write(w, http.StatusOK, map[string]string{"adminAccountId": id})
 }

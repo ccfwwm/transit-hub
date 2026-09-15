@@ -39,7 +39,7 @@ import {
   updateChannelMonitorRule,
   updateChannelMonitorTestModelConfig,
 } from '../api/channelMonitor'
-import { getMySiteMappingOptions, listRealConnections, realDisconnect, updateRealConnectionGroups } from '../api/mySites'
+import { getMySiteMappingOptions, listRealConnections, realDisconnect, repairRealConnectionAccount, updateRealConnectionGroups } from '../api/mySites'
 import type { ChannelMonitorChannel, ChannelMonitorGroup, ChannelMonitorGroupModelConfig, ChannelMonitorRateRule, ChannelMonitorResult, ChannelMonitorStatus, RateGateStatus, UpdateChannelMonitorRuleRequest } from '../types/channelMonitor'
 import type { MySiteMappingOwnGroupOption, RealDisconnectRequest } from '../types/mySites'
 
@@ -103,7 +103,7 @@ const groupEditorOwnGroupIds = ref<string[]>([])
 const groupEditorStaleCount = ref(0)
 const groupEditorLoading = ref(false)
 const groupEditorError = ref('')
-const editForm = ref({ enabled: true, checkIntervalMinutes: 2, failureThreshold: 2, balanceThreshold: 1, useDefaultTestModel: true, testModelId: '' })
+const editForm = ref({ enabled: true, checkIntervalMinutes: 2, failureThreshold: 2, balanceThreshold: 1, upstreamMultiplierOverride: null as number | null, allowWhenUpstreamRateGteOwn: false, useDefaultTestModel: true, testModelId: '' })
 const rateRuleForm = ref({ enabled: false, autoApplyOnCheck: true, updatePriority: true, stopWhenMissingRate: true })
 const testModelForm = ref({ openaiModelId: 'gpt-5.6-sol', anthropicModelId: 'claude-sonnet-5', grokModelId: 'grok-4.5', groupModels: [] as { groupId: string, groupName: string, modelId: string }[], balanceRefreshIntervalMinutes: 5 })
 const priorityDrafts = ref<Record<string, number | null>>({})
@@ -340,6 +340,8 @@ const openEditor = (channel: ChannelMonitorChannel) => {
     checkIntervalMinutes: channel.checkIntervalMinutes,
     failureThreshold: channel.failureThreshold,
     balanceThreshold: channel.balanceThreshold,
+    upstreamMultiplierOverride: channel.upstreamMultiplierOverride,
+    allowWhenUpstreamRateGteOwn: channel.allowWhenUpstreamRateGteOwn,
     useDefaultTestModel: !channel.testModelId,
     testModelId: channel.testModelId || channel.effectiveTestModelId,
   }
@@ -355,6 +357,8 @@ const openBulkEditor = (scope: BulkEditorScope = 'selected') => {
     checkIntervalMinutes: first?.checkIntervalMinutes ?? 2,
     failureThreshold: first?.failureThreshold ?? 2,
     balanceThreshold: first?.balanceThreshold ?? 1,
+    upstreamMultiplierOverride: null,
+    allowWhenUpstreamRateGteOwn: false,
     useDefaultTestModel: true,
     testModelId: '',
   }
@@ -458,8 +462,17 @@ const saveEditor = async () => {
       errorKey.value = 'admin.channelMonitor.editor.modelRequired'
       return
     }
+    const rate = editForm.value.upstreamMultiplierOverride
+    const resetRate = rate == null || String(rate).trim() === ''
+    if (!resetRate && (!Number.isFinite(Number(rate)) || Number(rate) < 0)) {
+      errorKey.value = 'admin.channelMonitor.errors.invalidMultiplier'
+      return
+    }
+    payload.upstreamMultiplierOverride = resetRate ? undefined : Number(rate)
+    payload.resetUpstreamMultiplierOverride = resetRate
+    payload.allowWhenUpstreamRateGteOwn = editForm.value.allowWhenUpstreamRateGteOwn
     payload.testModelId = editForm.value.useDefaultTestModel ? '' : customModel
-    await runAction(() => updateChannelMonitorRule(editingChannel.value!.ruleId, payload), { actionKey: `editor:${editingChannel.value.ruleId}` })
+    await runAction(async () => { await updateChannelMonitorRule(editingChannel.value!.ruleId, payload); closeEditor() }, { actionKey: `editor:${editingChannel.value.ruleId}` })
   } else if (isBulkEditorOpen.value) {
     const ruleIds = bulkEditorRuleIds.value
     if (ruleIds.length === 0) return
@@ -467,8 +480,8 @@ const saveEditor = async () => {
       actionKey: `bulk:edit:${bulkEditorScope.value}`,
       clearSelection: bulkEditorScope.value === 'selected',
     })
+    if (!errorKey.value) closeEditor()
   }
-  closeEditor()
 }
 
 const setSelectedMonitoring = (enabled: boolean) =>
@@ -524,7 +537,10 @@ const setChannelPriority = (channel: ChannelMonitorChannel) => {
 }
 
 const syncAndTakeOverChannel = (channel: ChannelMonitorChannel) =>
-  runAction(() => syncAndTakeOverChannelMonitorRule(channel.ruleId), { actionKey: channelActionKey(channel, 'takeover') })
+  runAction(async () => {
+    if (channel.repairAvailable) await repairRealConnectionAccount(channel.connectionId)
+    await syncAndTakeOverChannelMonitorRule(channel.ruleId)
+  }, { actionKey: channelActionKey(channel, 'takeover') })
 
 const openDisconnect = (channel: ChannelMonitorChannel) => {
   disconnectingChannel.value = channel
@@ -638,7 +654,7 @@ const timelineTitle = (result: ChannelMonitorResult | null): string => {
 
 const timelineNextLabel = (channel: ChannelMonitorChannel): string => {
   if (!channel.enabled) return t('admin.channelMonitor.timeline.monitorOff')
-  if (!channel.supported) return t('admin.channelMonitor.status.unsupported')
+  if (!channel.checkSupported) return t('admin.channelMonitor.status.unsupported')
   return t('admin.channelMonitor.timeline.nextRefresh', { value: formatRelativeShort(channel.nextCheckAt) })
 }
 
@@ -941,7 +957,8 @@ const dispatchButtonClass = (channel: ChannelMonitorChannel): string => (
                       <div v-if="channel.rateGateMessage" class="mt-1 max-w-[390px] truncate text-xs" :class="channel.rateGateStatus === 'blocked' ? 'text-red-600 dark:text-red-300' : 'text-muted-foreground'" :title="channel.rateGateMessage">
                         {{ channel.rateGateMessage }}
                       </div>
-                      <div v-if="channel.schedulableConflict || channel.priorityConflict" class="mt-1 text-xs text-amber-700 dark:text-amber-300">
+                      <div v-if="channel.dispatchUnavailableReason" class="mt-1 text-xs text-amber-700 dark:text-amber-300">{{ t(channel.dispatchUnavailableReason) }}</div>
+                      <div v-if="(channel.schedulableConflict || channel.priorityConflict) && channel.supported" class="mt-1 text-xs text-amber-700 dark:text-amber-300">
                         {{ t('admin.channelMonitor.flags.manualOverrideHelp') }}
                       </div>
                     </div>
@@ -976,6 +993,8 @@ const dispatchButtonClass = (channel: ChannelMonitorChannel): string => (
                 </td>
                 <td class="px-3 py-3 align-top">
                   <div class="font-mono text-xs font-semibold text-foreground">{{ formatMultiplier(channel.upstreamEffectiveMultiplier) }}</div>
+                  <div v-if="channel.upstreamMultiplierOverride != null" class="mt-1 text-xs text-primary">{{ t('admin.channelMonitor.editor.customRate') }}</div>
+                  <Button variant="secondary" size="sm" class="mt-1 h-7 px-2 text-xs" :disabled="isChannelBusy(channel)" @click="openEditor(channel)">{{ t('admin.channelMonitor.rateRule.setPriority') }}</Button>
                 </td>
                 <td class="px-3 py-3 align-top">
                   <div class="font-mono text-xs font-semibold text-foreground">{{ formatMultiplier(channel.ownGroupMultiplier) }}</div>
@@ -1050,20 +1069,20 @@ const dispatchButtonClass = (channel: ChannelMonitorChannel): string => (
                 <td class="px-3 py-3 align-top">
                   <div class="flex max-w-[210px] flex-wrap justify-end gap-1">
                     <Button
-                      v-if="channel.takeoverAvailable"
+                      v-if="channel.takeoverAvailable || channel.supported || channel.repairAvailable"
                       type="button"
                       variant="secondary"
                       size="sm"
                       class="h-8 gap-1 !border-amber-500/40 !bg-amber-500/15 px-2 text-xs font-semibold !text-amber-700 hover:!bg-amber-500/25 dark:!text-amber-300"
-                      :disabled="isChannelBusy(channel) || !channel.supported"
-                      :title="t('admin.channelMonitor.actions.syncTakeover')"
+                      :disabled="isChannelBusy(channel) || (!channel.supported && !channel.repairAvailable)"
+                      :title="channel.repairAvailable ? t('admin.channelMonitor.actions.repairTakeoverHelp') : channel.dispatchUnavailableReason ? t(channel.dispatchUnavailableReason) : t('admin.channelMonitor.actions.syncTakeover')"
                       @click="syncAndTakeOverChannel(channel)"
                     >
                       <Loader2 v-if="isActionActive(channelActionKey(channel, 'takeover'))" class="h-3.5 w-3.5 animate-spin" />
                       <RefreshCw v-else class="h-3.5 w-3.5" />
-                      {{ t('admin.channelMonitor.actions.syncTakeoverShort') }}
+                      {{ t(channel.repairAvailable ? 'admin.channelMonitor.actions.repairTakeover' : 'admin.channelMonitor.actions.syncTakeoverShort') }}
                     </Button>
-                    <Button type="button" variant="secondary" size="sm" class="h-8 gap-1 !border-blue-500/30 !bg-blue-500/10 px-2 text-xs !text-blue-700 hover:!bg-blue-500/15 dark:!text-blue-300" :disabled="isChannelBusy(channel) || !channel.supported" :title="t('admin.channelMonitor.actions.run')" @click="runAction(() => runChannelMonitorRule(channel.ruleId), { actionKey: channelActionKey(channel, 'run') })">
+                    <Button type="button" variant="secondary" size="sm" class="h-8 gap-1 !border-blue-500/30 !bg-blue-500/10 px-2 text-xs !text-blue-700 hover:!bg-blue-500/15 dark:!text-blue-300" :disabled="isChannelBusy(channel) || !channel.checkSupported" :title="t('admin.channelMonitor.actions.run')" @click="runAction(() => runChannelMonitorRule(channel.ruleId), { actionKey: channelActionKey(channel, 'run') })">
                       <RefreshCw :class="['h-3.5 w-3.5', isActionActive(channelActionKey(channel, 'run')) ? 'animate-spin' : '']" />
                       {{ t('admin.channelMonitor.actions.runShort') }}
                     </Button>
@@ -1103,7 +1122,7 @@ const dispatchButtonClass = (channel: ChannelMonitorChannel): string => (
     </div>
 
     <div v-if="editingChannel || isBulkEditorOpen" class="fixed inset-0 z-50 flex items-center justify-center bg-background/80 p-4 backdrop-blur-sm">
-      <div class="w-full max-w-md rounded-xl border border-border/50 bg-card p-6 shadow-xl">
+      <div class="max-h-[90vh] w-full max-w-lg overflow-y-auto rounded-xl border border-border/50 bg-card p-6 shadow-xl">
         <h2 class="text-lg font-semibold text-foreground">
           {{ editingChannel ? t('admin.channelMonitor.editor.title') : t(bulkEditorScope === 'all' ? 'admin.channelMonitor.editor.allTitle' : 'admin.channelMonitor.editor.bulkTitle', { count: bulkEditorCount }) }}
         </h2>
@@ -1126,6 +1145,18 @@ const dispatchButtonClass = (channel: ChannelMonitorChannel): string => (
           <label class="block space-y-2">
             <span class="text-sm font-medium text-foreground">{{ t('admin.channelMonitor.editor.balanceThreshold') }}</span>
             <input v-model.number="editForm.balanceThreshold" type="number" min="0" step="0.01" class="h-10 w-full rounded-xl border border-border/50 bg-surface px-3 text-sm outline-none focus:border-primary focus:ring-1 focus:ring-primary" />
+          </label>
+          <label v-if="editingChannel" class="block space-y-2">
+            <span class="text-sm font-medium text-foreground">{{ t('admin.channelMonitor.editor.upstreamRate') }}</span>
+            <input v-model.number="editForm.upstreamMultiplierOverride" type="number" min="0" step="any" :placeholder="t('admin.channelMonitor.editor.upstreamRatePlaceholder')" class="h-10 w-full rounded-xl border border-border/50 bg-surface px-3 font-mono text-sm outline-none focus:border-primary focus:ring-1 focus:ring-primary" />
+            <span class="text-xs text-muted-foreground">{{ t('admin.channelMonitor.editor.upstreamRateHelp') }}</span>
+          </label>
+          <label v-if="editingChannel" class="flex items-center justify-between gap-4 rounded-lg border border-border/50 bg-surface px-4 py-3">
+            <span>
+              <span class="block text-sm font-medium text-foreground">{{ t('admin.channelMonitor.editor.allowHigherRate') }}</span>
+              <span class="block text-xs text-muted-foreground">{{ t('admin.channelMonitor.editor.allowHigherRateHelp') }}</span>
+            </span>
+            <input v-model="editForm.allowWhenUpstreamRateGteOwn" type="checkbox" class="h-4 w-4 rounded border-border text-primary focus:ring-primary" />
           </label>
           <div v-if="editingChannel" class="space-y-2">
             <span class="text-sm font-medium text-foreground">{{ t('admin.channelMonitor.editor.testModel') }}</span>
@@ -1316,7 +1347,7 @@ const dispatchButtonClass = (channel: ChannelMonitorChannel): string => (
     </div>
 
     <div v-if="isRateRuleEditorOpen" class="fixed inset-0 z-50 flex items-center justify-center bg-background/80 p-4 backdrop-blur-sm">
-      <div class="w-full max-w-lg rounded-xl border border-border/50 bg-card p-6 shadow-xl">
+      <div class="max-h-[90vh] w-full max-w-lg overflow-y-auto rounded-xl border border-border/50 bg-card p-6 shadow-xl">
         <h2 class="text-lg font-semibold text-foreground">{{ t('admin.channelMonitor.rateRule.configureTitle') }}</h2>
         <p class="mt-1 text-sm text-muted-foreground">{{ t('admin.channelMonitor.rateRule.configureDescription') }}</p>
         <div class="mt-5 space-y-4">

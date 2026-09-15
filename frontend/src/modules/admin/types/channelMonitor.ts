@@ -37,6 +37,9 @@ export interface ChannelMonitorChannel {
   connectionId: string
   enabled: boolean
   supported: boolean
+  repairAvailable: boolean
+  checkSupported: boolean
+  dispatchUnavailableReason: string
   manualPaused: boolean
   schedulable: boolean | null
   schedulableManaged: boolean
@@ -60,6 +63,8 @@ export interface ChannelMonitorChannel {
   accountPriority: number | null
   upstreamMultiplier: number | null
   upstreamEffectiveMultiplier: number | null
+  upstreamMultiplierOverride: number | null
+  allowWhenUpstreamRateGteOwn: boolean
   ownGroupMultiplier: number | null
   recommendedPriority: number | null
   rateGateStatus: RateGateStatus
@@ -94,7 +99,10 @@ export interface UpdateChannelMonitorRuleRequest {
   checkIntervalMinutes?: number
   failureThreshold?: number
   balanceThreshold?: number
+  upstreamMultiplierOverride?: number | null
   testModelId?: string
+  resetUpstreamMultiplierOverride?: boolean
+  allowWhenUpstreamRateGteOwn?: boolean
 }
 
 export interface BulkUpdateChannelMonitorRuleRequest extends UpdateChannelMonitorRuleRequest {

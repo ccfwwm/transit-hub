@@ -105,3 +105,7 @@ export const realDisconnect = async (req: RealDisconnectRequest): Promise<void> 
     body: JSON.stringify(req),
   })
 }
+
+export const repairRealConnectionAccount = async (connectionId: string): Promise<void> => {
+  await requestJson(`/my-sites/real-connections/${encodeURIComponent(connectionId)}/repair`, { method: 'POST' })
+}

@@ -25,6 +25,7 @@ type Store interface {
 	ListRulesForWorkspace(ctx context.Context, userID, adminAccountID string) ([]Rule, error)
 	GetRule(ctx context.Context, id string) (*Rule, error)
 	UpdateRule(ctx context.Context, rule Rule) error
+	UpdateRuleRateSettings(ctx context.Context, id string, req UpdateRuleRequest) error
 	AddResult(ctx context.Context, result Result) error
 	ListRecentResults(ctx context.Context, ruleID string, limit int) ([]Result, error)
 	ListDueRules(ctx context.Context, limit int) ([]Rule, error)
@@ -359,8 +360,26 @@ func (s *Service) UpdateRule(ctx context.Context, userID, ruleID string, req Upd
 			rule.BalanceThreshold = *req.BalanceThreshold
 		}
 	}
+	if req.UpstreamMultiplierOverride != nil {
+		value := *req.UpstreamMultiplierOverride
+		if value < 0 || math.IsNaN(value) || math.IsInf(value, 0) {
+			return Rule{}, requestError("admin.channelMonitor.errors.invalidMultiplier")
+		}
+		rule.UpstreamMultiplierOverride = &value
+	}
+	if req.ResetUpstreamMultiplierOverride {
+		rule.UpstreamMultiplierOverride = nil
+	}
+	if req.AllowWhenUpstreamRateGteOwn != nil {
+		rule.AllowWhenUpstreamRateGteOwn = *req.AllowWhenUpstreamRateGteOwn
+	}
 	if req.TestModelID != nil {
 		rule.TestModelID = strings.TrimSpace(*req.TestModelID)
+	}
+	if req.UpstreamMultiplierOverride != nil || req.ResetUpstreamMultiplierOverride || req.AllowWhenUpstreamRateGteOwn != nil {
+		if err := s.store.UpdateRuleRateSettings(ctx, rule.ID, req); err != nil {
+			return Rule{}, err
+		}
 	}
 	now := time.Now()
 	next := now
@@ -1243,50 +1262,59 @@ func (s *Service) workspaceState(ctx context.Context, userID, adminAccountID str
 func (s *Service) channelStatus(ctx context.Context, conn my_sites.RealConnection, rule Rule, state *my_sites.State, accountsByID map[string]AdminAccountStatus, testModelConfig TestModelConfig) ChannelStatus {
 	effectiveTestModelID, testModelSource := effectiveTestModel(rule, conn, state, testModelConfig)
 	row := ChannelStatus{
-		RuleID:               rule.ID,
-		ConnectionID:         conn.ID,
-		Enabled:              rule.Enabled,
-		ManualPaused:         rule.ManualPaused,
-		SchedulableManaged:   rule.SchedulableManaged,
-		SchedulableConflict:  rule.SchedulableConflict,
-		AutoEnableBlocked:    rule.AutoEnableBlocked,
-		PriorityManaged:      rule.PriorityManaged,
-		PriorityConflict:     rule.PriorityConflict,
-		TakeoverAvailable:    rule.SchedulableConflict || rule.PriorityConflict,
-		Status:               normalizedStatus(rule.LastStatus),
-		UpstreamGroupID:      conn.UpstreamGroupID,
-		UpstreamGroupName:    conn.UpstreamGroupName,
-		GroupType:            conn.GroupType,
-		AdminAccountID:       conn.AdminAccountID,
-		AdminAccountName:     conn.AdminAccountName,
-		OwnGroups:            ownGroupsForConnection(state, conn),
-		CheckIntervalMinutes: rule.CheckIntervalMinutes,
-		FailureThreshold:     rule.FailureThreshold,
-		BalanceThreshold:     rule.BalanceThreshold,
-		ConsecutiveFailures:  rule.ConsecutiveFailures,
-		LastMessage:          rule.LastMessage,
-		LastLatencyMS:        rule.LastLatencyMS,
-		LastCheckedAt:        rule.LastCheckedAt,
-		NextCheckAt:          rule.NextCheckAt,
-		TestModelID:          strings.TrimSpace(rule.TestModelID),
-		EffectiveTestModelID: effectiveTestModelID,
-		TestModelSource:      testModelSource,
-		Supported:            state != nil && state.Session.Platform == upstream.PlatformSub2API && strings.TrimSpace(conn.AdminAccountID) != "",
-		RecentResults:        []Result{},
+		RuleID:                      rule.ID,
+		ConnectionID:                conn.ID,
+		Enabled:                     rule.Enabled,
+		ManualPaused:                rule.ManualPaused,
+		SchedulableManaged:          rule.SchedulableManaged,
+		SchedulableConflict:         rule.SchedulableConflict,
+		AutoEnableBlocked:           rule.AutoEnableBlocked,
+		PriorityManaged:             rule.PriorityManaged,
+		PriorityConflict:            rule.PriorityConflict,
+		TakeoverAvailable:           rule.SchedulableConflict || rule.PriorityConflict,
+		UpstreamMultiplierOverride:  rule.UpstreamMultiplierOverride,
+		AllowWhenUpstreamRateGteOwn: rule.AllowWhenUpstreamRateGteOwn,
+		Status:                      normalizedStatus(rule.LastStatus),
+		UpstreamGroupID:             conn.UpstreamGroupID,
+		UpstreamGroupName:           conn.UpstreamGroupName,
+		GroupType:                   conn.GroupType,
+		AdminAccountID:              conn.AdminAccountID,
+		AdminAccountName:            conn.AdminAccountName,
+		OwnGroups:                   ownGroupsForConnection(state, conn),
+		CheckIntervalMinutes:        rule.CheckIntervalMinutes,
+		FailureThreshold:            rule.FailureThreshold,
+		BalanceThreshold:            rule.BalanceThreshold,
+		ConsecutiveFailures:         rule.ConsecutiveFailures,
+		LastMessage:                 rule.LastMessage,
+		LastLatencyMS:               rule.LastLatencyMS,
+		LastCheckedAt:               rule.LastCheckedAt,
+		NextCheckAt:                 rule.NextCheckAt,
+		TestModelID:                 strings.TrimSpace(rule.TestModelID),
+		EffectiveTestModelID:        effectiveTestModelID,
+		TestModelSource:             testModelSource,
+		Supported:                   state != nil && state.Session.Platform == upstream.PlatformSub2API && strings.TrimSpace(conn.AdminAccountID) != "",
+		RecentResults:               []Result{},
 	}
 	if account, ok := accountsByID[strings.TrimSpace(conn.AdminAccountID)]; ok {
 		row.Schedulable = account.Schedulable
+		// Reconcile persisted conflict flags with the live remote state so the
+		// takeover action remains available after a direct upstream edit.
+		if rule.SchedulableManaged && rule.LastAppliedSchedulable != nil && account.Schedulable != nil && *rule.LastAppliedSchedulable != *account.Schedulable {
+			row.TakeoverAvailable = true
+			row.SchedulableConflict = true
+		}
+		if rule.PriorityManaged && rule.LastAppliedPriority != nil && account.Priority != nil && *rule.LastAppliedPriority != *account.Priority {
+			row.TakeoverAvailable = true
+			row.PriorityConflict = true
+		}
 		if strings.TrimSpace(row.AdminAccountName) == "" {
 			row.AdminAccountName = account.Name
 		}
 	} else {
 		row.Supported = false
 	}
-	if rule.DesiredSchedulable != nil {
+	if !rule.SchedulableManaged && rule.DesiredSchedulable != nil {
 		row.Schedulable = rule.DesiredSchedulable
-	}
-	if !row.Supported {
-		row.Status = StatusUnsupported
 	}
 	if strings.TrimSpace(effectiveTestModelID) == "" {
 		row.Status = StatusUnsupported
@@ -1297,6 +1325,19 @@ func (s *Service) channelStatus(ctx context.Context, conn my_sites.RealConnectio
 		row.SiteName = site.Name
 		row.SitePlatform = string(site.Platform)
 		row.Balance = convertedBalance(site)
+	}
+	row.CheckSupported = strings.TrimSpace(effectiveTestModelID) != "" && site != nil && strings.TrimSpace(conn.UpstreamKey) != ""
+	_, accountExists := accountsByID[strings.TrimSpace(conn.AdminAccountID)]
+	row.RepairAvailable = !accountExists && accountsByID != nil && state != nil && state.Session.Platform == upstream.PlatformSub2API && site != nil && site.UserID == rule.UserID && site.AdminAccountID == rule.AdminAccountID && strings.TrimSpace(conn.UpstreamKey) != "" && len(conn.OwnGroupIDs) > 0
+
+	if !row.Supported {
+		row.DispatchUnavailableReason = "admin.channelMonitor.errors.accountNotFound"
+		if accountsByID == nil {
+			row.DispatchUnavailableReason = "admin.channelMonitor.errors.accountsUnavailable"
+		}
+		if state == nil || state.Session.Platform != upstream.PlatformSub2API || strings.TrimSpace(conn.AdminAccountID) == "" {
+			row.DispatchUnavailableReason = "admin.channelMonitor.errors.unsupported"
+		}
 	}
 	results, err := s.store.ListRecentResults(ctx, rule.ID, 60)
 	if err == nil {
@@ -1324,7 +1365,7 @@ func (s *Service) adminAccountsByID(state *my_sites.State) map[string]AdminAccou
 	accounts, err := s.platform.ListSub2APIAdminAccounts(state.Session)
 	if err != nil {
 		log.Printf("[channel-monitor] list admin accounts failed: %v", err)
-		return accountsByID
+		return nil
 	}
 	for _, account := range accounts {
 		id := strings.TrimSpace(account.ID)
@@ -1406,6 +1447,9 @@ func (s *Service) buildRatePlan(ctx context.Context, connections []my_sites.Real
 			row.RateGateStatus = RateGateSkipped
 			row.SuggestedSchedulable = false
 			row.RateGateMessage = "远端账号不存在或已删除，已跳过自动调度"
+			if accountsByID == nil {
+				row.RateGateMessage = "远端账号列表读取失败，请刷新或重新登录工作区后重试"
+			}
 		}
 		if monitorRule.AutoEnableBlocked && row.SuggestedSchedulable {
 			row.SuggestedSchedulable = false
@@ -1434,7 +1478,7 @@ func (s *Service) buildRatePlanRow(ctx context.Context, conn my_sites.RealConnec
 		Supported:             state != nil && state.Session.Platform == upstream.PlatformSub2API && strings.TrimSpace(conn.AdminAccountID) != "" && account.Schedulable != nil,
 		SuggestedSchedulable:  true,
 	}
-	if rule.DesiredSchedulable != nil {
+	if !rule.SchedulableManaged && rule.DesiredSchedulable != nil {
 		row.CurrentSchedulable = rule.DesiredSchedulable
 	}
 	site, err := s.upstreams.GetSite(ctx, conn.UpstreamSiteID)
@@ -1443,6 +1487,13 @@ func (s *Service) buildRatePlanRow(ctx context.Context, conn my_sites.RealConnec
 		row.UpstreamMultiplier = upstreamGroupMultiplier(site, conn)
 		row.UpstreamEffectiveMultiplier = effectiveMultiplier(row.UpstreamMultiplier, site.RechargeRate)
 	}
+	if rule.UpstreamMultiplierOverride != nil {
+		value := *rule.UpstreamMultiplierOverride
+		row.UpstreamMultiplierOverride = &value
+		row.UpstreamMultiplier = &value
+		row.UpstreamEffectiveMultiplier = &value
+	}
+	row.AllowWhenUpstreamRateGteOwn = rule.AllowWhenUpstreamRateGteOwn
 	if row.UpstreamEffectiveMultiplier == nil && account.RateMultiplier != nil {
 		row.UpstreamEffectiveMultiplier = account.RateMultiplier
 	}
@@ -1489,9 +1540,13 @@ func (s *Service) buildRatePlanRow(ctx context.Context, conn my_sites.RealConnec
 				value := *ownRate
 				minOwn = &value
 			}
-			decision.Allowed = *row.UpstreamEffectiveMultiplier < *ownRate
+			decision.Allowed = rule.AllowWhenUpstreamRateGteOwn || *row.UpstreamEffectiveMultiplier < *ownRate
 			if decision.Allowed {
-				decision.Message = "上游倍率低于自有分组倍率"
+				if rule.AllowWhenUpstreamRateGteOwn {
+					decision.Message = "已允许上游倍率大于或等于自有分组倍率"
+				} else {
+					decision.Message = "上游倍率低于自有分组倍率"
+				}
 			} else {
 				blocked = true
 				decision.Message = "上游倍率大于或等于自有分组倍率"
@@ -1500,6 +1555,7 @@ func (s *Service) buildRatePlanRow(ctx context.Context, conn my_sites.RealConnec
 		row.GroupDecisions = append(row.GroupDecisions, decision)
 	}
 	row.OwnGroupMultiplier = minOwn
+	row.AllowWhenUpstreamRateGteOwn = rule.AllowWhenUpstreamRateGteOwn
 	if blocked {
 		row.RateGateStatus = RateGateBlocked
 		row.SuggestedSchedulable = false
@@ -1515,6 +1571,9 @@ func (s *Service) buildRatePlanRow(ctx context.Context, conn my_sites.RealConnec
 	row.RateGateStatus = RateGateAllowed
 	row.SuggestedSchedulable = true
 	row.RateGateMessage = "上游实际倍率低于自有分组倍率，允许调用"
+	if rule.AllowWhenUpstreamRateGteOwn {
+		row.RateGateMessage = "已允许上游倍率大于或等于自有分组倍率；仍受检测、余额和手动停用限制"
+	}
 	return row
 }
 
@@ -1580,6 +1639,8 @@ func applyRatePlanToChannel(channel *ChannelStatus, row RatePlanRow) {
 	channel.AccountPriority = row.AccountPriority
 	channel.UpstreamMultiplier = row.UpstreamMultiplier
 	channel.UpstreamEffectiveMultiplier = row.UpstreamEffectiveMultiplier
+	channel.UpstreamMultiplierOverride = row.UpstreamMultiplierOverride
+	channel.AllowWhenUpstreamRateGteOwn = row.AllowWhenUpstreamRateGteOwn
 	channel.OwnGroupMultiplier = row.OwnGroupMultiplier
 	channel.RecommendedPriority = row.SuggestedPriority
 	channel.RateGateStatus = row.RateGateStatus

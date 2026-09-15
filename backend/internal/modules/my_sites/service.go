@@ -11,6 +11,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"transithub/backend/internal/modules/upstream"
@@ -45,6 +46,7 @@ type BotNotifier interface {
 // Service 负责分组映射的查询与保存，以及真实对接的编排。
 // 供仪表盘分组弹窗和分组倍率页面复用。
 type Service struct {
+	repairMu        sync.Mutex
 	repository      StateRepository
 	connRepository  RealConnectionRepository
 	platformService *upstream.PlatformService

@@ -275,6 +275,13 @@ export default {
         editSelectedRules: '设置选中规则'
       },
       editor: {
+        customRate: '自定义',
+        upstreamRate: '实际上游倍率',
+        upstreamRatePlaceholder: '留空使用同步倍率',
+        upstreamRateHelp: '填写实际成本倍率，直接用于比较和排序；不会再次乘充值倍率。清空后保存可恢复同步值。',
+        allowHigherRate: '倍率大于等于分组时仍允许启用',
+        allowHigherRateHelp: '仅放宽倍率限制，故障、余额不足和手动停用仍会阻止自动启用。',
+
         title: '监控规则',
         bulkTitle: '批量设置 {count} 条规则',
         allTitle: '统一设置全部 {count} 条规则',
@@ -322,6 +329,8 @@ export default {
         editGroups: '修改对接分组',
         editGroupsShort: '分组',
         syncTakeover: '同步接管并关闭调度，禁止规则自动开启',
+        repairTakeover: '修复并接管',
+        repairTakeoverHelp: '使用现有 Key 和原分组重建缺失账号，关闭调度后接管；检测通过后可恢复。',
         syncTakeoverShort: '同步接管',
         cancel: '取消',
         save: '保存'
@@ -337,6 +346,9 @@ export default {
         saveFailed: '修改对接分组失败，请稍后重试。'
       },
       errors: {
+        invalidMultiplier: '倍率必须是大于或等于 0 的有效数字。',
+        accountsUnavailable: '远端账号列表读取失败，请刷新或重新登录工作区后重试。',
+
         network: '网络异常，请检查连接后重试。',
         request: '状态监控操作失败，请稍后重试。',
         notFound: '监控规则不存在。',

@@ -1503,38 +1503,94 @@ func (s *PlatformService) ListSub2APIAdminAccounts(session Session) ([]Sub2APIAd
 	if session.Platform != PlatformSub2API || strings.TrimSpace(session.AccessToken) == "" {
 		return nil, newRequestError(ErrorAuth, PlatformSub2API)
 	}
-	response, err := s.httpClient.requestJSON(session.BaseURL+"/api/v1/admin/accounts?page=1&page_size=1000", requestOptions{
-		AccessToken:     session.AccessToken,
-		TokenType:       session.TokenType,
-		InsecureSkipTLS: session.InsecureSkipTLS,
-	})
-	if err != nil {
-		return nil, err
-	}
-	items := dataArray(response.Payload)
-	accounts := make([]Sub2APIAdminAccountStatus, 0, len(items))
-	for _, item := range items {
-		record, ok := item.(map[string]any)
-		if !ok {
-			continue
-		}
-		id := groupID2(record)
-		if strings.TrimSpace(id) == "" {
-			continue
-		}
-		name := ""
-		if value := firstString(record, []string{"name", "username", "display_name", "displayName"}); value != nil {
-			name = *value
-		}
-		accounts = append(accounts, Sub2APIAdminAccountStatus{
-			ID:             id,
-			Name:           name,
-			Schedulable:    firstBool(record, []string{"schedulable", "is_schedulable", "isSchedulable"}),
-			RateMultiplier: firstNumber(record, []string{"rate_multiplier", "rateMultiplier", "multiplier", "rate"}),
-			Priority:       firstInt(record, []string{"priority"}),
+	// Request a conservative page size, but honor smaller server-side limits.
+	accounts := []Sub2APIAdminAccountStatus{}
+	seen := map[string]bool{}
+	for page := 1; page <= 1000; page++ {
+		response, err := s.httpClient.requestJSON(session.BaseURL+"/api/v1/admin/accounts?page="+strconv.Itoa(page)+"&page_size=100", requestOptions{
+			AccessToken:     session.AccessToken,
+			TokenType:       session.TokenType,
+			InsecureSkipTLS: session.InsecureSkipTLS,
 		})
+		if err != nil {
+			return nil, err
+		}
+		validList := false
+		if _, ok := response.Payload.([]any); ok {
+			validList = true
+		}
+		if root, ok := response.Payload.(map[string]any); ok {
+			if _, ok := root["data"].([]any); ok {
+				validList = true
+			}
+			record := dataRecord(response.Payload)
+			for _, key := range []string{"items", "list", "records", "accounts"} {
+				if _, ok := record[key].([]any); ok {
+					validList = true
+				}
+			}
+		}
+		if !validList {
+			return nil, newRequestError(ErrorInvalidResponse, PlatformSub2API)
+		}
+		items := dataArray(response.Payload)
+		total, hasTotal := paginationTotal(response.Payload)
+		if len(items) == 0 {
+			if hasTotal && len(accounts) < total {
+				return nil, newRequestError(ErrorInvalidResponse, PlatformSub2API)
+			}
+			return accounts, nil
+		}
+		added := 0
+		for _, item := range items {
+			record, ok := item.(map[string]any)
+			if !ok {
+				return nil, newRequestError(ErrorInvalidResponse, PlatformSub2API)
+			}
+			id := strings.TrimSpace(groupID2(record))
+			if id == "" {
+				return nil, newRequestError(ErrorInvalidResponse, PlatformSub2API)
+			}
+			if seen[id] {
+				continue
+			}
+			seen[id] = true
+			added++
+			name := ""
+			if value := firstString(record, []string{"name", "username", "display_name", "displayName"}); value != nil {
+				name = *value
+			}
+			accounts = append(accounts, Sub2APIAdminAccountStatus{
+				ID: id, Name: name,
+				Schedulable:    firstBool(record, []string{"schedulable", "is_schedulable", "isSchedulable"}),
+				RateMultiplier: firstNumber(record, []string{"rate_multiplier", "rateMultiplier", "multiplier", "rate"}),
+				Priority:       firstInt(record, []string{"priority"}),
+			})
+		}
+		if hasTotal && len(accounts) >= total {
+			return accounts, nil
+		}
+		// A repeated page must never be mistaken for a complete account list.
+		if added == 0 {
+			return nil, newRequestError(ErrorInvalidResponse, PlatformSub2API)
+		}
+		if !hasTotal {
+			size := firstInt(dataRecord(response.Payload), []string{"page_size", "pageSize", "per_page"})
+			if size != nil && *size > 0 && len(items) < *size {
+				return accounts, nil
+			}
+			// Unpaginated legacy endpoints return a direct array.
+			if _, ok := response.Payload.([]any); ok {
+				return accounts, nil
+			}
+			if root, ok := response.Payload.(map[string]any); ok {
+				if _, ok := root["data"].([]any); ok {
+					return accounts, nil
+				}
+			}
+		}
 	}
-	return accounts, nil
+	return nil, newRequestError(ErrorInvalidResponse, PlatformSub2API)
 }
 
 // DeleteSub2APIKey 删除上游 Sub2API 站点的指定 API Key。
@@ -2472,4 +2528,17 @@ func apiProbeErrorMessage(status int, data []byte) string {
 		return fmt.Sprintf("上游 Key 直连检测失败（HTTP %d）", status)
 	}
 	return fmt.Sprintf("上游 Key 直连检测失败（HTTP %d）：%s", status, message)
+}
+
+// ClearSub2APIAdminAccountExpiration removes the temporary creation guard only
+// after the repaired account has been explicitly made unschedulable.
+func (s *PlatformService) ClearSub2APIAdminAccountExpiration(session Session, accountID string) error {
+	if session.Platform != PlatformSub2API || strings.TrimSpace(session.AccessToken) == "" {
+		return newRequestError(ErrorAuth, PlatformSub2API)
+	}
+	_, err := s.httpClient.requestJSON(session.BaseURL+"/api/v1/admin/accounts/"+accountID, requestOptions{
+		AccessToken: session.AccessToken, TokenType: session.TokenType, InsecureSkipTLS: session.InsecureSkipTLS,
+		Method: http.MethodPut, Body: map[string]any{"expires_at": 0, "status": "active"},
+	})
+	return err
 }

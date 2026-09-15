@@ -31,6 +31,7 @@ func (r *Repository) EnsureSchema(ctx context.Context) error {
 			check_interval_minutes integer NOT NULL DEFAULT 2,
 			failure_threshold integer NOT NULL DEFAULT 2,
 			balance_threshold double precision NOT NULL DEFAULT 1,
+			upstream_multiplier_override double precision NULL,
 			test_model_id text NULL,
 			desired_schedulable boolean NULL,
 			schedulable_managed boolean NOT NULL DEFAULT false,
@@ -76,6 +77,8 @@ func (r *Repository) EnsureSchema(ctx context.Context) error {
 	if _, err := r.db.Exec(ctx, `
 		ALTER TABLE channel_monitor_rules
 		ADD COLUMN IF NOT EXISTS auto_enable_blocked boolean NOT NULL DEFAULT false,
+		ADD COLUMN IF NOT EXISTS upstream_multiplier_override double precision NULL,
+		ADD COLUMN IF NOT EXISTS allow_when_upstream_rate_gte_own boolean NOT NULL DEFAULT false,
 		ALTER COLUMN check_interval_minutes SET DEFAULT 2,
 		ALTER COLUMN failure_threshold SET DEFAULT 2,
 		ALTER COLUMN balance_threshold SET DEFAULT 1
@@ -282,10 +285,11 @@ func (r *Repository) EnsureRuleForConnection(ctx context.Context, userID, adminA
 func (r *Repository) ListRulesForWorkspace(ctx context.Context, userID, adminAccountID string) ([]Rule, error) {
 	rows, err := r.db.Query(ctx, `
 		SELECT id, user_id, admin_account_id, connection_id, enabled, check_interval_minutes,
-			failure_threshold, balance_threshold, desired_schedulable, schedulable_managed, original_schedulable,
+			failure_threshold, balance_threshold, upstream_multiplier_override, desired_schedulable, schedulable_managed, original_schedulable,
 			last_applied_schedulable, schedulable_conflict, auto_enable_blocked, priority_managed, original_priority,
 			last_applied_priority, priority_conflict, manual_paused, consecutive_failures,
 			last_status, last_message, last_latency_ms, last_checked_at, next_check_at, created_at, updated_at,
+			allow_when_upstream_rate_gte_own,
 			COALESCE(test_model_id, '') AS test_model_id
 		FROM channel_monitor_rules
 		WHERE user_id = $1 AND admin_account_id = $2
@@ -300,10 +304,11 @@ func (r *Repository) ListRulesForWorkspace(ctx context.Context, userID, adminAcc
 func (r *Repository) GetRule(ctx context.Context, id string) (*Rule, error) {
 	rows, err := r.db.Query(ctx, `
 		SELECT id, user_id, admin_account_id, connection_id, enabled, check_interval_minutes,
-			failure_threshold, balance_threshold, desired_schedulable, schedulable_managed, original_schedulable,
+			failure_threshold, balance_threshold, upstream_multiplier_override, desired_schedulable, schedulable_managed, original_schedulable,
 			last_applied_schedulable, schedulable_conflict, auto_enable_blocked, priority_managed, original_priority,
 			last_applied_priority, priority_conflict, manual_paused, consecutive_failures,
 			last_status, last_message, last_latency_ms, last_checked_at, next_check_at, created_at, updated_at,
+			allow_when_upstream_rate_gte_own,
 			COALESCE(test_model_id, '') AS test_model_id
 		FROM channel_monitor_rules
 		WHERE id = $1
@@ -356,6 +361,22 @@ func (r *Repository) UpdateRule(ctx context.Context, rule Rule) error {
 	return err
 }
 
+// Rate settings are written separately so an in-flight scheduled check cannot
+// overwrite a custom multiplier saved while the probe was running.
+func (r *Repository) UpdateRuleRateSettings(ctx context.Context, id string, req UpdateRuleRequest) error {
+	_, err := r.db.Exec(ctx, `UPDATE channel_monitor_rules SET
+ upstream_multiplier_override = CASE WHEN $2 THEN $3 ELSE upstream_multiplier_override END,
+ allow_when_upstream_rate_gte_own = COALESCE($4, allow_when_upstream_rate_gte_own), updated_at=now()
+ WHERE id=$1`, id, req.UpstreamMultiplierOverride != nil || req.ResetUpstreamMultiplierOverride,
+		func() *float64 {
+			if req.ResetUpstreamMultiplierOverride {
+				return nil
+			}
+			return req.UpstreamMultiplierOverride
+		}(), req.AllowWhenUpstreamRateGteOwn)
+	return err
+}
+
 func (r *Repository) AddResult(ctx context.Context, result Result) error {
 	_, err := r.db.Exec(ctx, `
 		INSERT INTO channel_monitor_results (
@@ -386,10 +407,11 @@ func (r *Repository) ListRecentResults(ctx context.Context, ruleID string, limit
 func (r *Repository) ListDueRules(ctx context.Context, limit int) ([]Rule, error) {
 	rows, err := r.db.Query(ctx, `
 		SELECT id, user_id, admin_account_id, connection_id, enabled, check_interval_minutes,
-			failure_threshold, balance_threshold, desired_schedulable, schedulable_managed, original_schedulable,
+			failure_threshold, balance_threshold, upstream_multiplier_override, desired_schedulable, schedulable_managed, original_schedulable,
 			last_applied_schedulable, schedulable_conflict, auto_enable_blocked, priority_managed, original_priority,
 			last_applied_priority, priority_conflict, manual_paused, consecutive_failures,
 			last_status, last_message, last_latency_ms, last_checked_at, next_check_at, created_at, updated_at,
+			allow_when_upstream_rate_gte_own,
 			COALESCE(test_model_id, '') AS test_model_id
 		FROM channel_monitor_rules
 		WHERE enabled = true AND (next_check_at IS NULL OR next_check_at <= now())
@@ -564,11 +586,12 @@ func scanRules(rows pgx.Rows) ([]Rule, error) {
 		var rule Rule
 		if err := rows.Scan(
 			&rule.ID, &rule.UserID, &rule.AdminAccountID, &rule.ConnectionID, &rule.Enabled,
-			&rule.CheckIntervalMinutes, &rule.FailureThreshold, &rule.BalanceThreshold, &rule.DesiredSchedulable,
+			&rule.CheckIntervalMinutes, &rule.FailureThreshold, &rule.BalanceThreshold, &rule.UpstreamMultiplierOverride, &rule.DesiredSchedulable,
 			&rule.SchedulableManaged, &rule.OriginalSchedulable, &rule.LastAppliedSchedulable, &rule.SchedulableConflict, &rule.AutoEnableBlocked,
 			&rule.PriorityManaged, &rule.OriginalPriority, &rule.LastAppliedPriority, &rule.PriorityConflict,
 			&rule.ManualPaused, &rule.ConsecutiveFailures, &rule.LastStatus, &rule.LastMessage,
-			&rule.LastLatencyMS, &rule.LastCheckedAt, &rule.NextCheckAt, &rule.CreatedAt, &rule.UpdatedAt, &rule.TestModelID,
+			&rule.LastLatencyMS, &rule.LastCheckedAt, &rule.NextCheckAt, &rule.CreatedAt, &rule.UpdatedAt,
+			&rule.AllowWhenUpstreamRateGteOwn, &rule.TestModelID,
 		); err != nil {
 			return nil, err
 		}
