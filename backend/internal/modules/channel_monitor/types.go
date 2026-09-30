@@ -260,10 +260,28 @@ type RateRule struct {
 }
 
 type RateRuleView struct {
-	Rule       RateRule         `json:"rule"`
-	Summary    RateApplySummary `json:"summary"`
-	Rows       []RatePlanRow    `json:"rows"`
-	LastResult *RateApplyResult `json:"lastResult"`
+	Rule           RateRule            `json:"rule"`
+	Summary        RateApplySummary    `json:"summary"`
+	Rows           []RatePlanRow       `json:"rows"`
+	PriorityGroups []PriorityGroupRule `json:"priorityGroups"`
+	LastResult     *RateApplyResult    `json:"lastResult"`
+}
+
+// PriorityGroupRule controls automatic priority updates for one current own group.
+// A priority is recomputed only after an upstream multiplier change (or an explicit apply).
+type PriorityGroupRule struct {
+	UserID                string    `json:"-"`
+	AdminAccountID        string    `json:"-"`
+	GroupID               string    `json:"groupId"`
+	GroupName             string    `json:"groupName"`
+	Enabled               bool      `json:"enabled"`
+	AutoApplyOnRateChange bool      `json:"autoApplyOnRateChange"`
+	UpdatedAt             time.Time `json:"updatedAt"`
+}
+
+type UpdatePriorityGroupRuleRequest struct {
+	Enabled               *bool `json:"enabled"`
+	AutoApplyOnRateChange *bool `json:"autoApplyOnRateChange"`
 }
 
 type UpdateRateRuleRequest struct {
@@ -289,6 +307,7 @@ type RatePlanRow struct {
 	ConnectionID                string              `json:"connectionId"`
 	AdminAccountID              string              `json:"adminAccountId"`
 	AdminAccountName            string              `json:"adminAccountName"`
+	SiteID                      string              `json:"siteId"`
 	SiteName                    string              `json:"siteName"`
 	UpstreamGroupName           string              `json:"upstreamGroupName"`
 	OwnGroups                   []string            `json:"ownGroups"`

@@ -36,6 +36,7 @@ import {
   setChannelMonitorRulePriority,
   syncAndTakeOverChannelMonitorRule,
   updateChannelMonitorRateRule,
+  updateChannelMonitorPriorityGroupRule,
   updateChannelMonitorRule,
   updateChannelMonitorTestModelConfig,
 } from '../api/channelMonitor'
@@ -78,6 +79,7 @@ const summary = ref({
     rule: defaultRateRule(),
     summary: { total: 0, allowed: 0, blocked: 0, missing: 0, skipped: 0, wouldEnable: 0, wouldDisable: 0, priorityChanges: 0 },
     rows: [],
+    priorityGroups: [],
     lastResult: null,
   },
   testModelConfig: {
@@ -146,6 +148,8 @@ const statCards = computed(() => [
 ])
 
 const groupOptions = computed(() => ['all', ...Array.from(new Set(summary.value.groups.map(group => group.groupName)))])
+const selectedGroupID = computed(() => summary.value.groups.find(group => group.groupName === selectedGroup.value)?.groupId ?? '')
+const selectedPriorityGroupRule = computed(() => summary.value.rateRule.priorityGroups.find(rule => rule.groupId === selectedGroupID.value) ?? null)
 
 const filteredChannels = computed(() => {
   const query = searchQuery.value.trim().toLowerCase()
@@ -444,7 +448,7 @@ const saveTestModelConfig = async () => {
 const saveRateRule = async (applyAfterSave = false) => {
   await runAction(async () => {
     await updateChannelMonitorRateRule({ ...rateRuleForm.value })
-    if (applyAfterSave) await applyChannelMonitorRateRule()
+    if (applyAfterSave) await applyChannelMonitorRateRule(selectedGroupID.value || undefined)
   }, { actionKey: applyAfterSave ? 'rate-rule:save-apply' : 'rate-rule:save' })
   closeRateRuleEditor()
 }
@@ -522,7 +526,17 @@ const previewRateRule = () =>
   }, { actionKey: 'rate-rule:preview', refresh: false })
 
 const applyRateRule = () =>
-  runAction(() => applyChannelMonitorRateRule(), { actionKey: 'rate-rule:apply' })
+  runAction(() => applyChannelMonitorRateRule(selectedGroupID.value || undefined), { actionKey: 'rate-rule:apply' })
+
+const toggleSelectedGroupPriority = (enabled: boolean) => {
+  if (!selectedGroupID.value) return
+  runAction(() => updateChannelMonitorPriorityGroupRule(selectedGroupID.value, { enabled }), { actionKey: 'rate-rule:group' })
+}
+
+const toggleSelectedGroupAutoPriority = (enabled: boolean) => {
+  if (!selectedGroupID.value) return
+  runAction(() => updateChannelMonitorPriorityGroupRule(selectedGroupID.value, { autoApplyOnRateChange: enabled }), { actionKey: 'rate-rule:group-auto' })
+}
 
 const toggleChannelMonitoring = (channel: ChannelMonitorChannel) =>
   runAction(() => updateChannelMonitorRule(channel.ruleId, { enabled: !channel.enabled }), { actionKey: channelActionKey(channel, 'monitor') })
@@ -533,7 +547,7 @@ const toggleChannelSchedulable = (channel: ChannelMonitorChannel) =>
 const setChannelPriority = (channel: ChannelMonitorChannel) => {
   const priority = Number(priorityDrafts.value[channel.ruleId])
   if (!Number.isFinite(priority)) return
-  return runAction(() => setChannelMonitorRulePriority(channel.ruleId, Math.round(priority)), { actionKey: channelActionKey(channel, 'priority') })
+  return runAction(() => setChannelMonitorRulePriority(channel.ruleId, Math.round(priority), selectedGroupID.value || undefined), { actionKey: channelActionKey(channel, 'priority') })
 }
 
 const syncAndTakeOverChannel = (channel: ChannelMonitorChannel) =>
@@ -774,6 +788,17 @@ const dispatchButtonClass = (channel: ChannelMonitorChannel): string => (
             </span>
           </div>
           <p class="mt-1 text-xs text-muted-foreground">{{ t('admin.channelMonitor.rateRule.subtitle') }}</p>
+          <div v-if="selectedGroupID" class="mt-3 flex flex-wrap items-center gap-3 rounded-lg border border-border/50 bg-surface-elevated px-3 py-2">
+            <span class="text-xs font-medium text-foreground">{{ selectedGroup }}</span>
+            <label class="flex items-center gap-2 text-xs text-muted-foreground">
+              <input :checked="selectedPriorityGroupRule?.enabled ?? false" type="checkbox" class="h-4 w-4 rounded border-border text-primary" @change="toggleSelectedGroupPriority(($event.target as HTMLInputElement).checked)" />
+              {{ t('admin.channelMonitor.rateRule.groupEnabled') }}
+            </label>
+            <label class="flex items-center gap-2 text-xs text-muted-foreground">
+              <input :checked="selectedPriorityGroupRule?.autoApplyOnRateChange ?? false" type="checkbox" class="h-4 w-4 rounded border-border text-primary" @change="toggleSelectedGroupAutoPriority(($event.target as HTMLInputElement).checked)" />
+              {{ t('admin.channelMonitor.rateRule.groupAuto') }}
+            </label>
+          </div>
         </div>
         <div class="grid grid-cols-2 gap-2 text-xs sm:grid-cols-4 xl:min-w-[420px]">
           <div class="rounded-md bg-surface-elevated px-3 py-2">
@@ -810,9 +835,9 @@ const dispatchButtonClass = (channel: ChannelMonitorChannel): string => (
             <RefreshCw :class="['h-3.5 w-3.5', isActionActive('rate-rule:preview') ? 'animate-spin' : '']" />
             {{ t('admin.channelMonitor.rateRule.preview') }}
           </Button>
-          <Button type="button" variant="secondary" size="sm" class="gap-1.5 !border-emerald-500/30 !bg-emerald-500/10 !text-emerald-700 hover:!bg-emerald-500/15 dark:!text-emerald-300" :disabled="isBulkActionLoading || !summary.rateRule.rule.enabled" @click="applyRateRule">
+          <Button type="button" variant="secondary" size="sm" class="gap-1.5 !border-emerald-500/30 !bg-emerald-500/10 !text-emerald-700 hover:!bg-emerald-500/15 dark:!text-emerald-300" :disabled="isBulkActionLoading || selectedGroup === 'all'" @click="applyRateRule">
             <Play class="h-3.5 w-3.5" />
-            {{ t('admin.channelMonitor.rateRule.apply') }}
+            {{ t('admin.channelMonitor.rateRule.applyPriority') }}
           </Button>
           <Button type="button" variant="secondary" size="sm" class="gap-1.5" :disabled="isBulkActionLoading" @click="openRateRuleEditor">
             <Settings2 class="h-3.5 w-3.5" />

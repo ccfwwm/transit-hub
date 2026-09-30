@@ -181,6 +181,7 @@ func New(cfg config.Config, db *pgxpool.Pool, redisClient *redis.Client) *Server
 		}
 		checkBalanceWarning(ctx, settingsService, upstreamService, strategy, userID, siteID, siteName, oldMetrics, newMetrics)
 		checkMultiplierChanges(ctx, settingsService, strategy, userID, siteID, siteName, oldMetrics, newMetrics)
+		channelMonitorService.ApplyPriorityAfterSync(ctx, userID, adminAccountID, siteID, oldMetrics, newMetrics)
 		// 自动调价：分组级 enableAutoPricing 是唯一开关，Service 内部逐 mapping 判断。
 		mySitesService.ApplyAutoPricingAfterSync(ctx, userID, adminAccountID, siteID, siteName, oldMetrics, newMetrics)
 	}

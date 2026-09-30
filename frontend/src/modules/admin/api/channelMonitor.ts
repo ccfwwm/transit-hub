@@ -85,8 +85,8 @@ export const setChannelMonitorRuleSchedulable = async (ruleId: string, schedulab
   })
 }
 
-export const setChannelMonitorRulePriority = async (ruleId: string, priority: number): Promise<void> => {
-  await requestJson(`/channel-monitor/rules/${encodeURIComponent(ruleId)}/priority`, {
+export const setChannelMonitorRulePriority = async (ruleId: string, priority: number, groupId?: string): Promise<void> => {
+  await requestJson(`/channel-monitor/rules/${encodeURIComponent(ruleId)}/priority${groupId ? `?groupId=${encodeURIComponent(groupId)}` : ''}`, {
     method: 'POST',
     body: JSON.stringify({ priority }),
   })
@@ -128,8 +128,15 @@ export const updateChannelMonitorRateRule = async (request: UpdateChannelMonitor
 export const previewChannelMonitorRateRule = async (): Promise<ChannelMonitorRateRuleView> =>
   requestJson<ChannelMonitorRateRuleView>('/channel-monitor/rate-rule/preview', { method: 'POST' })
 
-export const applyChannelMonitorRateRule = async (): Promise<ChannelMonitorRateApplyResult> =>
-  requestJson<ChannelMonitorRateApplyResult>('/channel-monitor/rate-rule/apply', { method: 'POST' })
+export const applyChannelMonitorRateRule = async (groupId?: string): Promise<ChannelMonitorRateApplyResult> =>
+  requestJson<ChannelMonitorRateApplyResult>(`/channel-monitor/rate-rule/apply${groupId ? `?groupId=${encodeURIComponent(groupId)}` : ''}`, { method: 'POST' })
+
+export const updateChannelMonitorPriorityGroupRule = async (groupId: string, request: { enabled?: boolean, autoApplyOnRateChange?: boolean }): Promise<void> => {
+  await requestJson(`/channel-monitor/priority-groups/${encodeURIComponent(groupId)}`, {
+    method: 'PATCH',
+    body: JSON.stringify(request),
+  })
+}
 
 export const updateChannelMonitorTestModelConfig = async (request: UpdateChannelMonitorTestModelConfigRequest): Promise<ChannelMonitorTestModelConfig> =>
   requestJson<ChannelMonitorTestModelConfig>('/channel-monitor/test-model-config', {

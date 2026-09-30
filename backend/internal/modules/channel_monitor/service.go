@@ -37,6 +37,11 @@ type Store interface {
 	SaveTestModelConfig(ctx context.Context, config TestModelConfig) error
 }
 
+type PriorityGroupStore interface {
+	ListPriorityGroupRules(ctx context.Context, userID, adminAccountID string) ([]PriorityGroupRule, error)
+	SavePriorityGroupRule(ctx context.Context, rule PriorityGroupRule) error
+}
+
 type ConnectionStore interface {
 	ListRealConnections(ctx context.Context, userID string, adminAccountID string) ([]my_sites.RealConnection, error)
 	GetRealConnection(ctx context.Context, id string, userID string, adminAccountID string) (*my_sites.RealConnection, error)
@@ -142,6 +147,10 @@ func (s *Service) Summary(ctx context.Context, userID string) (SummaryResponse, 
 		rateRowsByConnection[row.ConnectionID] = row
 	}
 	lastRateResult, _ := s.store.GetLastRateApplyResult(ctx, userID, adminAccountID)
+	priorityGroups, err := s.priorityGroupRules(ctx, userID, adminAccountID, state)
+	if err != nil {
+		return SummaryResponse{}, err
+	}
 	testModelConfig, err := s.ensureTestModelConfig(ctx, userID, adminAccountID)
 	if err != nil {
 		return SummaryResponse{}, err
@@ -150,7 +159,7 @@ func (s *Service) Summary(ctx context.Context, userID string) (SummaryResponse, 
 	response := SummaryResponse{
 		Channels:        []ChannelStatus{},
 		Groups:          []GroupSummary{},
-		RateRule:        RateRuleView{Rule: rateRule, Summary: rateSummary, Rows: rateRows, LastResult: lastRateResult},
+		RateRule:        RateRuleView{Rule: rateRule, Summary: rateSummary, Rows: rateRows, PriorityGroups: priorityGroups, LastResult: lastRateResult},
 		TestModelConfig: testModelConfig,
 	}
 	groupMap := map[string]*GroupSummary{}
@@ -230,6 +239,88 @@ func (s *Service) Summary(ctx context.Context, userID string) (SummaryResponse, 
 		return statusRank(response.Channels[i].Status) < statusRank(response.Channels[j].Status)
 	})
 	return response, nil
+}
+
+func (s *Service) priorityGroupRules(ctx context.Context, userID, adminAccountID string, state *my_sites.State) ([]PriorityGroupRule, error) {
+	priorityStore, ok := s.store.(PriorityGroupStore)
+	if !ok {
+		return []PriorityGroupRule{}, nil
+	}
+	stored, err := priorityStore.ListPriorityGroupRules(ctx, userID, adminAccountID)
+	if err != nil {
+		return nil, err
+	}
+	byID := make(map[string]PriorityGroupRule, len(stored))
+	for _, rule := range stored {
+		byID[strings.TrimSpace(rule.GroupID)] = rule
+	}
+	result := make([]PriorityGroupRule, 0)
+	if state != nil {
+		for _, group := range state.OwnGroups {
+			id, name := strings.TrimSpace(group.ID), strings.TrimSpace(group.Name)
+			if id == "" || name == "" {
+				continue
+			}
+			rule, ok := byID[id]
+			if !ok {
+				rule = PriorityGroupRule{UserID: userID, AdminAccountID: adminAccountID, GroupID: id, GroupName: name, UpdatedAt: time.Now()}
+			} else {
+				rule.GroupName = name
+			}
+			result = append(result, rule)
+		}
+	}
+	return result, nil
+}
+
+func (s *Service) UpdatePriorityGroupRule(ctx context.Context, userID, groupID string, req UpdatePriorityGroupRuleRequest) (PriorityGroupRule, error) {
+	adminAccountID, err := s.currentAdminAccountID(ctx, userID)
+	if err != nil {
+		return PriorityGroupRule{}, err
+	}
+	state, err := s.workspaceState(ctx, userID, adminAccountID)
+	if err != nil {
+		return PriorityGroupRule{}, err
+	}
+	groupID = strings.TrimSpace(groupID)
+	var groupName string
+	if state != nil {
+		for _, group := range state.OwnGroups {
+			if strings.TrimSpace(group.ID) == groupID {
+				groupName = group.Name
+				break
+			}
+		}
+	}
+	if groupName == "" {
+		return PriorityGroupRule{}, requestError("admin.channelMonitor.errors.notFound")
+	}
+	rules, err := s.priorityGroupRules(ctx, userID, adminAccountID, state)
+	if err != nil {
+		return PriorityGroupRule{}, err
+	}
+	rule := PriorityGroupRule{UserID: userID, AdminAccountID: adminAccountID, GroupID: groupID, GroupName: groupName, UpdatedAt: time.Now()}
+	for _, existing := range rules {
+		if existing.GroupID == groupID {
+			rule = existing
+			break
+		}
+	}
+	if req.Enabled != nil {
+		rule.Enabled = *req.Enabled
+	}
+	if req.AutoApplyOnRateChange != nil {
+		rule.AutoApplyOnRateChange = *req.AutoApplyOnRateChange
+	}
+	rule.UpdatedAt = time.Now()
+	priorityStore, ok := s.store.(PriorityGroupStore)
+	if !ok {
+		return PriorityGroupRule{}, requestError("admin.channelMonitor.errors.request")
+	}
+	if err := priorityStore.SavePriorityGroupRule(ctx, rule); err != nil {
+		return PriorityGroupRule{}, err
+	}
+	return rule, nil
 }
 
 func (s *Service) RunRule(ctx context.Context, ruleID string, reason string) (Result, error) {
@@ -457,6 +548,14 @@ func (s *Service) SetRuleSchedulable(ctx context.Context, userID, ruleID string,
 }
 
 func (s *Service) SetRulePriority(ctx context.Context, userID, ruleID string, priority int) error {
+	return s.setRulePriority(ctx, userID, ruleID, priority, "")
+}
+
+func (s *Service) SetRulePriorityInGroup(ctx context.Context, userID, ruleID string, priority int, groupID string) error {
+	return s.setRulePriority(ctx, userID, ruleID, priority, strings.TrimSpace(groupID))
+}
+
+func (s *Service) setRulePriority(ctx context.Context, userID, ruleID string, priority int, groupID string) error {
 	adminAccountID, err := s.currentAdminAccountID(ctx, userID)
 	if err != nil {
 		return err
@@ -475,6 +574,9 @@ func (s *Service) SetRulePriority(ctx context.Context, userID, ruleID string, pr
 	}
 	if state == nil || state.Session.Platform != upstream.PlatformSub2API || conn == nil || strings.TrimSpace(conn.AdminAccountID) == "" {
 		return requestError("admin.channelMonitor.errors.unsupported")
+	}
+	if groupID != "" && !containsString(conn.OwnGroupIDs, groupID) {
+		return requestError("admin.channelMonitor.errors.notFound")
 	}
 	priority = clampInt(priority, 0, 999)
 	if err := s.platform.UpdateSub2APIAdminAccountPriority(state.Session, conn.AdminAccountID, priority); err != nil {
@@ -655,7 +757,11 @@ func (s *Service) RateRuleView(ctx context.Context, userID string) (RateRuleView
 	}
 	rows, summary := s.buildRatePlan(ctx, connections, rulesByConnection, state, accountsByID, rule)
 	last, _ := s.store.GetLastRateApplyResult(ctx, userID, adminAccountID)
-	return RateRuleView{Rule: rule, Summary: summary, Rows: rows, LastResult: last}, nil
+	priorityGroups, err := s.priorityGroupRules(ctx, userID, adminAccountID, state)
+	if err != nil {
+		return RateRuleView{}, err
+	}
+	return RateRuleView{Rule: rule, Summary: summary, Rows: rows, PriorityGroups: priorityGroups, LastResult: last}, nil
 }
 
 func (s *Service) UpdateRateRule(ctx context.Context, userID string, req UpdateRateRuleRequest) (RateRule, error) {
@@ -689,7 +795,47 @@ func (s *Service) UpdateRateRule(ctx context.Context, userID string, req UpdateR
 	if err := s.store.SaveRateRule(ctx, rule); err != nil {
 		return RateRule{}, err
 	}
+	// Keep the legacy workspace-level editor useful: its enable/auto fields are
+	// propagated to every own group. Individual group switches can then narrow
+	// the behavior without changing the global defaults.
+	if priorityStore, ok := s.store.(PriorityGroupStore); ok {
+		state, stateErr := s.workspaceState(ctx, userID, adminAccountID)
+		if stateErr == nil {
+			for _, group := range state.OwnGroups {
+				id, name := strings.TrimSpace(group.ID), strings.TrimSpace(group.Name)
+				if id == "" {
+					continue
+				}
+				groupRule := PriorityGroupRule{UserID: userID, AdminAccountID: adminAccountID, GroupID: id, GroupName: name, Enabled: rule.Enabled, AutoApplyOnRateChange: rule.AutoApplyOnCheck, UpdatedAt: time.Now()}
+				if existing, found := findPriorityGroupRule(ctx, priorityStore, userID, adminAccountID, id); found {
+					groupRule = existing
+					if req.Enabled != nil {
+						groupRule.Enabled = rule.Enabled
+					}
+					if req.AutoApplyOnCheck != nil {
+						groupRule.AutoApplyOnRateChange = rule.AutoApplyOnCheck
+					}
+					groupRule.GroupName = name
+					groupRule.UpdatedAt = time.Now()
+				}
+				_ = priorityStore.SavePriorityGroupRule(ctx, groupRule)
+			}
+		}
+	}
 	return rule, nil
+}
+
+func findPriorityGroupRule(ctx context.Context, store PriorityGroupStore, userID, adminAccountID, groupID string) (PriorityGroupRule, bool) {
+	rules, err := store.ListPriorityGroupRules(ctx, userID, adminAccountID)
+	if err != nil {
+		return PriorityGroupRule{}, false
+	}
+	for _, rule := range rules {
+		if rule.GroupID == groupID {
+			return rule, true
+		}
+	}
+	return PriorityGroupRule{}, false
 }
 
 func (s *Service) restoreManagedRateOverrides(ctx context.Context, userID, adminAccountID string) error {
@@ -795,6 +941,127 @@ func (s *Service) ApplyRateRule(ctx context.Context, userID string, action strin
 		return RateApplyResult{}, err
 	}
 	return s.applyRateRuleForWorkspace(ctx, userID, adminAccountID, action)
+}
+
+// ApplyPriorityRule applies only account priorities for the selected own group.
+// It is intentionally separate from the dispatch/rate gate so the UI action cannot
+// silently enable or disable channels.
+func (s *Service) ApplyPriorityRule(ctx context.Context, userID, groupID, action string) (RateApplyResult, error) {
+	adminAccountID, err := s.currentAdminAccountID(ctx, userID)
+	if err != nil {
+		return RateApplyResult{}, err
+	}
+	return s.applyPriorityForGroup(ctx, userID, adminAccountID, strings.TrimSpace(groupID), "", action)
+}
+
+// ApplyPriorityAfterSync is called by upstream.AfterSync. It only runs when the
+// synchronized upstream metrics contain a changed multiplier and only for groups
+// explicitly enabled for automatic priority updates.
+func (s *Service) ApplyPriorityAfterSync(ctx context.Context, userID, adminAccountID, siteID string, oldMetrics, newMetrics upstream.Metrics) {
+	if !metricsMultiplierChanged(oldMetrics, newMetrics) {
+		return
+	}
+	state, err := s.workspaceState(ctx, userID, adminAccountID)
+	if err != nil || state == nil {
+		return
+	}
+	rules, err := s.priorityGroupRules(ctx, userID, adminAccountID, state)
+	if err != nil {
+		return
+	}
+	for _, rule := range rules {
+		if !rule.Enabled || !rule.AutoApplyOnRateChange {
+			continue
+		}
+		if _, err := s.applyPriorityForGroup(ctx, userID, adminAccountID, rule.GroupID, siteID, "rate-change"); err != nil {
+			log.Printf("[channel-monitor] priority apply after rate change failed group_id=%s err=%v", rule.GroupID, err)
+		}
+	}
+}
+
+func metricsMultiplierChanged(oldMetrics, newMetrics upstream.Metrics) bool {
+	oldByKey := map[string]float64{}
+	for _, group := range oldMetrics.Groups {
+		if group.Multiplier != nil {
+			oldByKey[group.ID+"|"+group.Name] = *group.Multiplier
+		}
+	}
+	for _, group := range newMetrics.Groups {
+		if group.Multiplier == nil {
+			continue
+		}
+		old, ok := oldByKey[group.ID+"|"+group.Name]
+		if !ok || old != *group.Multiplier {
+			return true
+		}
+	}
+	return false
+}
+
+func (s *Service) applyPriorityForGroup(ctx context.Context, userID, adminAccountID, groupID, siteID, action string) (RateApplyResult, error) {
+	connections, rulesByConnection, state, accountsByID, err := s.rateRuleContext(ctx, userID, adminAccountID, true)
+	if err != nil {
+		return RateApplyResult{}, err
+	}
+	rateRule, err := s.ensureRateRule(ctx, userID, adminAccountID)
+	if err != nil {
+		return RateApplyResult{}, err
+	}
+	rows, _ := s.buildRatePlan(ctx, connections, rulesByConnection, state, accountsByID, rateRule)
+	filtered := make([]RatePlanRow, 0, len(rows))
+	for _, row := range rows {
+		var conn my_sites.RealConnection
+		for _, candidate := range connections {
+			if candidate.ID == row.ConnectionID {
+				conn = candidate
+				break
+			}
+		}
+		if groupID != "" && !containsString(conn.OwnGroupIDs, groupID) {
+			continue
+		}
+		if siteID != "" && conn.UpstreamSiteID != siteID {
+			continue
+		}
+		filtered = append(filtered, row)
+	}
+	assignRecommendedPriorities(filtered)
+	result := RateApplyResult{ID: newResultID(), UserID: userID, AdminAccountID: adminAccountID, Action: action, Success: true, Message: "优先级已应用", Total: len(filtered), Rows: filtered, CreatedAt: time.Now()}
+	if result.Action == "" {
+		result.Action = "manual"
+	}
+	if state == nil || state.Session.Platform != upstream.PlatformSub2API {
+		return RateApplyResult{}, requestError("admin.channelMonitor.errors.unsupported")
+	}
+	for _, row := range filtered {
+		if !row.Supported || row.SuggestedPriority == nil {
+			result.SkippedCount++
+			continue
+		}
+		if row.CurrentPriority != nil && *row.CurrentPriority == *row.SuggestedPriority {
+			continue
+		}
+		if err := s.platform.UpdateSub2APIAdminAccountPriority(state.Session, row.AdminAccountID, *row.SuggestedPriority); err != nil {
+			result.Success = false
+			result.Message = err.Error()
+			continue
+		}
+		result.PriorityUpdated++
+		if rule, ok := rulesByConnection[row.ConnectionID]; ok {
+			if !rule.PriorityManaged {
+				rule.OriginalPriority = cloneInt(row.CurrentPriority)
+			}
+			rule.PriorityManaged = true
+			rule.LastAppliedPriority = cloneInt(row.SuggestedPriority)
+			rule.PriorityConflict = false
+			rule.UpdatedAt = time.Now()
+			_ = s.store.UpdateRule(ctx, rule)
+		}
+	}
+	if err := s.store.AddRateApplyResult(ctx, result); err != nil {
+		return RateApplyResult{}, err
+	}
+	return result, nil
 }
 
 func (s *Service) applyRateRuleForWorkspace(ctx context.Context, userID, adminAccountID, action string) (RateApplyResult, error) {
@@ -1469,6 +1736,7 @@ func (s *Service) buildRatePlanRow(ctx context.Context, conn my_sites.RealConnec
 		ConnectionID:          conn.ID,
 		AdminAccountID:        conn.AdminAccountID,
 		AdminAccountName:      firstNonBlank(conn.AdminAccountName, account.Name),
+		SiteID:                conn.UpstreamSiteID,
 		UpstreamGroupName:     conn.UpstreamGroupName,
 		OwnGroups:             ownGroups,
 		AccountRateMultiplier: account.RateMultiplier,
@@ -1575,6 +1843,15 @@ func (s *Service) buildRatePlanRow(ctx context.Context, conn my_sites.RealConnec
 		row.RateGateMessage = "已允许上游倍率大于或等于自有分组倍率；仍受检测、余额和手动停用限制"
 	}
 	return row
+}
+
+func containsString(values []string, target string) bool {
+	for _, value := range values {
+		if strings.TrimSpace(value) == strings.TrimSpace(target) {
+			return true
+		}
+	}
+	return false
 }
 
 func assignRecommendedPriorities(rows []RatePlanRow) {

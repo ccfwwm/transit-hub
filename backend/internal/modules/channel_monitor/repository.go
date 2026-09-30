@@ -156,6 +156,20 @@ func (r *Repository) EnsureSchema(ctx context.Context) error {
 		return err
 	}
 	if _, err := r.db.Exec(ctx, `
+		CREATE TABLE IF NOT EXISTS channel_monitor_priority_group_rules (
+			user_id text NOT NULL,
+			admin_account_id text NOT NULL,
+			group_id text NOT NULL,
+			group_name text NOT NULL DEFAULT '',
+			enabled boolean NOT NULL DEFAULT false,
+			auto_apply_on_rate_change boolean NOT NULL DEFAULT false,
+			updated_at timestamptz NOT NULL DEFAULT now(),
+			PRIMARY KEY (user_id, admin_account_id, group_id)
+		)
+	`); err != nil {
+		return err
+	}
+	if _, err := r.db.Exec(ctx, `
 		CREATE TABLE IF NOT EXISTS channel_monitor_test_model_configs (
 			user_id text NOT NULL,
 			admin_account_id text NOT NULL,
@@ -468,6 +482,39 @@ func (r *Repository) SaveRateRule(ctx context.Context, rule RateRule) error {
 			last_applied_at = EXCLUDED.last_applied_at,
 			updated_at = now()
 	`, rule.UserID, rule.AdminAccountID, rule.Enabled, rule.AutoApplyOnCheck, rule.UpdatePriority, rule.StopWhenMissingRate, rule.LastAppliedAt)
+	return err
+}
+
+func (r *Repository) ListPriorityGroupRules(ctx context.Context, userID, adminAccountID string) ([]PriorityGroupRule, error) {
+	rows, err := r.db.Query(ctx, `SELECT group_id, group_name, enabled, auto_apply_on_rate_change, updated_at
+		FROM channel_monitor_priority_group_rules WHERE user_id=$1 AND admin_account_id=$2 ORDER BY group_name, group_id`, userID, adminAccountID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	result := []PriorityGroupRule{}
+	for rows.Next() {
+		var rule PriorityGroupRule
+		if err := rows.Scan(&rule.GroupID, &rule.GroupName, &rule.Enabled, &rule.AutoApplyOnRateChange, &rule.UpdatedAt); err != nil {
+			return nil, err
+		}
+		rule.UserID, rule.AdminAccountID = userID, adminAccountID
+		result = append(result, rule)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return result, nil
+}
+
+func (r *Repository) SavePriorityGroupRule(ctx context.Context, rule PriorityGroupRule) error {
+	_, err := r.db.Exec(ctx, `INSERT INTO channel_monitor_priority_group_rules
+		(user_id, admin_account_id, group_id, group_name, enabled, auto_apply_on_rate_change, updated_at)
+		VALUES ($1,$2,$3,$4,$5,$6,$7)
+		ON CONFLICT (user_id, admin_account_id, group_id) DO UPDATE SET
+		group_name=EXCLUDED.group_name, enabled=EXCLUDED.enabled,
+		auto_apply_on_rate_change=EXCLUDED.auto_apply_on_rate_change, updated_at=EXCLUDED.updated_at`,
+		rule.UserID, rule.AdminAccountID, rule.GroupID, rule.GroupName, rule.Enabled, rule.AutoApplyOnRateChange, rule.UpdatedAt)
 	return err
 }
 

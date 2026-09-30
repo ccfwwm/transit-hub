@@ -139,7 +139,16 @@ export interface ChannelMonitorRateRuleView {
   rule: ChannelMonitorRateRule
   summary: ChannelMonitorRateSummary
   rows: ChannelMonitorRateRow[]
+  priorityGroups: ChannelMonitorPriorityGroupRule[]
   lastResult: ChannelMonitorRateApplyResult | null
+}
+
+export interface ChannelMonitorPriorityGroupRule {
+  groupId: string
+  groupName: string
+  enabled: boolean
+  autoApplyOnRateChange: boolean
+  updatedAt: string
 }
 
 export interface ChannelMonitorRateSummary {
@@ -165,6 +174,7 @@ export interface ChannelMonitorRateRow {
   connectionId: string
   adminAccountId: string
   adminAccountName: string
+  siteId: string
   siteName: string
   upstreamGroupName: string
   ownGroups: string[]

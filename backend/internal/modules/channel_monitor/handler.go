@@ -31,6 +31,7 @@ func RegisterRoutes(mux *http.ServeMux, service *Service) {
 	mux.HandleFunc("PATCH /api/channel-monitor/rate-rule", handler.updateRateRule)
 	mux.HandleFunc("POST /api/channel-monitor/rate-rule/preview", handler.previewRateRule)
 	mux.HandleFunc("POST /api/channel-monitor/rate-rule/apply", handler.applyRateRule)
+	mux.HandleFunc("PATCH /api/channel-monitor/priority-groups/{id}", handler.updatePriorityGroupRule)
 	mux.HandleFunc("PATCH /api/channel-monitor/test-model-config", handler.updateTestModelConfig)
 }
 
@@ -138,7 +139,7 @@ func (h *Handler) setPriority(w http.ResponseWriter, r *http.Request) {
 		httpjson.WriteError(w, http.StatusBadRequest, "admin.channelMonitor.errors.request")
 		return
 	}
-	if err := h.service.SetRulePriority(r.Context(), userID, r.PathValue("id"), req.Priority); err != nil {
+	if err := h.service.SetRulePriorityInGroup(r.Context(), userID, r.PathValue("id"), req.Priority, r.URL.Query().Get("groupId")); err != nil {
 		writeMonitorError(w, err)
 		return
 	}
@@ -287,12 +288,32 @@ func (h *Handler) applyRateRule(w http.ResponseWriter, r *http.Request) {
 		httpjson.WriteError(w, http.StatusUnauthorized, "auth.errors.unauthorized")
 		return
 	}
-	result, err := h.service.ApplyRateRule(r.Context(), userID, "manual")
+	groupID := strings.TrimSpace(r.URL.Query().Get("groupId"))
+	result, err := h.service.ApplyPriorityRule(r.Context(), userID, groupID, "manual-priority")
 	if err != nil {
 		writeMonitorError(w, err)
 		return
 	}
 	httpjson.Write(w, http.StatusOK, result)
+}
+
+func (h *Handler) updatePriorityGroupRule(w http.ResponseWriter, r *http.Request) {
+	userID, ok := authctx.UserID(r.Context())
+	if !ok {
+		httpjson.WriteError(w, http.StatusUnauthorized, "auth.errors.unauthorized")
+		return
+	}
+	var req UpdatePriorityGroupRuleRequest
+	if err := httpjson.Decode(r, &req); err != nil {
+		httpjson.WriteError(w, http.StatusBadRequest, "admin.channelMonitor.errors.request")
+		return
+	}
+	rule, err := h.service.UpdatePriorityGroupRule(r.Context(), userID, r.PathValue("id"), req)
+	if err != nil {
+		writeMonitorError(w, err)
+		return
+	}
+	httpjson.Write(w, http.StatusOK, rule)
 }
 
 func (h *Handler) updateTestModelConfig(w http.ResponseWriter, r *http.Request) {
