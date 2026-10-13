@@ -3,6 +3,7 @@ package upstream
 type RequestError struct {
 	MessageKey string
 	Platform   Platform
+	HTTPStatus int
 }
 
 func (e *RequestError) Error() string {
@@ -19,4 +20,3 @@ func errorKey(err error) string {
 	}
 	return ErrorUnknown
 }
-

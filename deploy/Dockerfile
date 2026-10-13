@@ -26,7 +26,7 @@ COPY --from=frontend-builder /src/frontend/dist /app/public
 
 ENV PORT=10621
 ENV PUBLIC_DIR=/app/public
-ENV APP_VERSION=2.1.11
+ENV APP_VERSION=2.1.12
 EXPOSE 10621
 
 ENTRYPOINT ["/app/transithub-api"]

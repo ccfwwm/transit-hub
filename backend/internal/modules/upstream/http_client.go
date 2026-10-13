@@ -124,6 +124,9 @@ func (c *HTTPClient) requestJSON(reqURL string, options requestOptions) (jsonRes
 
 	payload, err := parseJSON(response.Body, reqURL)
 	if err != nil {
+		if requestErr, ok := err.(*RequestError); ok {
+			requestErr.HTTPStatus = response.StatusCode
+		}
 		return jsonResponse{}, err
 	}
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
@@ -134,7 +137,9 @@ func (c *HTTPClient) requestJSON(reqURL string, options requestOptions) (jsonRes
 		if response.StatusCode == http.StatusUnauthorized {
 			return jsonResponse{}, newRequestError(ErrorAuth, "")
 		}
-		return jsonResponse{}, newRequestError(ErrorRequest, "")
+		requestErr := newRequestError(ErrorRequest, "")
+		requestErr.HTTPStatus = response.StatusCode
+		return jsonResponse{}, requestErr
 	}
 	return jsonResponse{Payload: payload, Header: response.Header}, nil
 }

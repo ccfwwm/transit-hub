@@ -46,8 +46,48 @@ func TestPriorityUpdateVerifiesPersistedAccount(t *testing.T) {
 			}))
 			defer server.Close()
 			err := NewPlatformService(NewHTTPClient(server.Client())).UpdateSub2APIAdminAccountPriority(Session{Platform: PlatformSub2API, BaseURL: server.URL, AccessToken: "test"}, "123", 2)
-			if (err == nil) != (mode == "saved") || len(calls) != 2 || calls[0] != "PUT" || calls[1] != "GET" {
+			wantCalls := 2
+			if mode == "failed-read" {
+				wantCalls = 4 // The transient read failure is retried twice.
+			}
+			if (err == nil) != (mode == "saved") || len(calls) != wantCalls || calls[0] != "PUT" || calls[1] != "GET" {
 				t.Fatalf("unverified priority accepted: mode=%s calls=%v err=%v", mode, calls, err)
+			}
+		})
+	}
+}
+
+func TestPriorityUpdateRetriesOnlyTransientUpstreamFailures(t *testing.T) {
+	for _, status := range []int{http.StatusInternalServerError, http.StatusBadGateway, http.StatusTooManyRequests, http.StatusBadRequest, http.StatusUnauthorized} {
+		t.Run(strconv.Itoa(status), func(t *testing.T) {
+			puts, gets := 0, 0
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.Method == http.MethodPut {
+					puts++
+					if puts == 1 {
+						w.WriteHeader(status)
+						// Proxy failures may have a plain-text body.
+						_, _ = w.Write([]byte("temporarily unavailable"))
+						return
+					}
+				} else {
+					gets++
+					if gets == 1 {
+						w.WriteHeader(http.StatusServiceUnavailable)
+						writeJSON(w, map[string]any{"message": "temporarily unavailable"})
+						return
+					}
+				}
+				writeJSON(w, map[string]any{"data": map[string]any{"id": 123, "priority": 2}})
+			}))
+			defer server.Close()
+			err := NewPlatformService(NewHTTPClient(server.Client())).UpdateSub2APIAdminAccountPriority(Session{Platform: PlatformSub2API, BaseURL: server.URL, AccessToken: "test"}, "123", 2)
+			transient := status == http.StatusInternalServerError || status == http.StatusBadGateway || status == http.StatusTooManyRequests
+			if transient && (err != nil || puts != 2 || gets != 2) {
+				t.Fatalf("transient priority failure not recovered: puts=%d gets=%d err=%v", puts, gets, err)
+			}
+			if !transient && (err == nil || puts != 1 || gets != 0) {
+				t.Fatalf("permanent error retried: puts=%d gets=%d err=%v", puts, gets, err)
 			}
 		})
 	}

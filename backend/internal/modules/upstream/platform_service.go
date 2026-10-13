@@ -1655,7 +1655,7 @@ func (s *PlatformService) UpdateSub2APIAdminAccountPriority(session Session, acc
 	if session.Platform != PlatformSub2API || strings.TrimSpace(session.AccessToken) == "" {
 		return newRequestError(ErrorAuth, PlatformSub2API)
 	}
-	_, err := s.httpClient.requestJSON(session.BaseURL+"/api/v1/admin/accounts/"+accountID, requestOptions{
+	_, err := s.requestPriorityJSON(session.BaseURL+"/api/v1/admin/accounts/"+accountID, requestOptions{
 		AccessToken:     session.AccessToken,
 		TokenType:       session.TokenType,
 		InsecureSkipTLS: session.InsecureSkipTLS,
@@ -1669,7 +1669,7 @@ func (s *PlatformService) UpdateSub2APIAdminAccountPriority(session Session, acc
 	}
 	// A successful HTTP response is insufficient: older or incompatible upstreams
 	// can silently ignore updates. Read the persisted account value independently.
-	response, err := s.httpClient.requestJSON(session.BaseURL+"/api/v1/admin/accounts/"+accountID, requestOptions{
+	response, err := s.requestPriorityJSON(session.BaseURL+"/api/v1/admin/accounts/"+accountID, requestOptions{
 		AccessToken: session.AccessToken, TokenType: session.TokenType,
 		InsecureSkipTLS: session.InsecureSkipTLS,
 	})
@@ -1682,6 +1682,24 @@ func (s *PlatformService) UpdateSub2APIAdminAccountPriority(session Session, acc
 		return newRequestError("admin.channelMonitor.errors.priorityNotApplied", PlatformSub2API)
 	}
 	return nil
+}
+
+// These requests only set an absolute priority or read it, so transient upstream
+// failures can be retried safely. A persisted-value mismatch is never retried.
+func (s *PlatformService) requestPriorityJSON(reqURL string, options requestOptions) (jsonResponse, error) {
+	for attempt := 0; ; attempt++ {
+		response, err := s.httpClient.requestJSON(reqURL, options)
+		requestErr, ok := err.(*RequestError)
+		if err == nil || !ok || attempt >= 2 {
+			return response, err
+		}
+		switch requestErr.HTTPStatus {
+		case http.StatusTooManyRequests, http.StatusInternalServerError, http.StatusBadGateway, http.StatusServiceUnavailable, http.StatusGatewayTimeout:
+			time.Sleep(time.Duration(attempt+1) * 250 * time.Millisecond)
+		default:
+			return response, err
+		}
+	}
 }
 
 func (s *PlatformService) TestSub2APIAdminAccount(session Session, accountID string, options Sub2APIAccountTestOptions) (Sub2APIAccountTestResult, error) {
