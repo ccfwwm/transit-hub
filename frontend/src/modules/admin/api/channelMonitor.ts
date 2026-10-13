@@ -58,8 +58,8 @@ const requestJson = async <T>(path: string, options: RequestInit = {}): Promise<
   return payload
 }
 
-export const getChannelMonitorSummary = async (): Promise<ChannelMonitorSummary> =>
-  requestJson<ChannelMonitorSummary>('/channel-monitor/summary')
+export const getChannelMonitorSummary = async (groupId?: string): Promise<ChannelMonitorSummary> =>
+  requestJson<ChannelMonitorSummary>(`/channel-monitor/summary${groupId ? `?groupId=${encodeURIComponent(groupId)}` : ''}`)
 
 export const runChannelMonitorRule = async (ruleId: string): Promise<ChannelMonitorResult> =>
   requestJson<ChannelMonitorResult>(`/channel-monitor/rules/${encodeURIComponent(ruleId)}/run`, { method: 'POST' })

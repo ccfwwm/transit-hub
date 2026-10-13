@@ -208,7 +208,8 @@ export default {
       },
       rateRule: {
         title: 'Rate Dispatch Rule',
-        subtitle: 'Dispatch only when upstream effective rate is lower than the own-group rate; equal or higher rates are paused, and cheaper channels can get higher priority.',
+        subtitle: 'Rank the selected group by upstream effective rate, including paused channels. Individually set priorities are preserved until the group ranking is manually applied again. Rate gating has a separate switch.',
+        sharedPriority: 'This group shares upstream accounts with other groups. Changing their priority also affects those groups.',
         enabled: 'Enabled',
         disabled: 'Disabled',
         priorityOn: 'Auto priority',
@@ -219,6 +220,7 @@ export default {
         preview: 'Preview',
         apply: 'Apply now',
         applyPriority: 'Apply priorities now',
+        priorityResult: 'Last priority change {time}: {updated} updated, {skipped} skipped, {unchanged} already ranked',
         groupEnabled: 'Enable auto priority for this group',
         groupAuto: 'Apply when upstream rate changes',
         configure: 'Configure',
@@ -351,6 +353,9 @@ export default {
       errors: {
         invalidMultiplier: 'Multiplier must be a finite number greater than or equal to zero.',
         accountsUnavailable: 'Unable to load remote accounts. Refresh or sign in to the workspace again.',
+        selectPriorityGroup: 'Select a specific group before changing priorities.',
+        priorityNotApplied: 'The remote priority did not match after saving. Check the upstream API.',
+        prioritySaveFailed: 'Remote priority was updated, but the local rule could not be saved. Refresh and retry.',
 
         network: 'Network error. Please retry.',
         request: 'Status monitor request failed.',

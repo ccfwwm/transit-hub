@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"strings"
 
+	"transithub/backend/internal/modules/upstream"
 	"transithub/backend/internal/shared/authctx"
 	"transithub/backend/internal/shared/httpjson"
 )
@@ -41,7 +42,7 @@ func (h *Handler) summary(w http.ResponseWriter, r *http.Request) {
 		httpjson.WriteError(w, http.StatusUnauthorized, "auth.errors.unauthorized")
 		return
 	}
-	response, err := h.service.Summary(r.Context(), userID)
+	response, err := h.service.SummaryInGroup(r.Context(), userID, r.URL.Query().Get("groupId"))
 	if err != nil {
 		writeMonitorError(w, err)
 		return
@@ -336,6 +337,11 @@ func (h *Handler) updateTestModelConfig(w http.ResponseWriter, r *http.Request) 
 }
 
 func writeMonitorError(w http.ResponseWriter, err error) {
+	var upstreamErr *upstream.RequestError
+	if errors.As(err, &upstreamErr) && upstreamErr.MessageKey == "admin.channelMonitor.errors.priorityNotApplied" {
+		httpjson.WriteError(w, http.StatusBadGateway, upstreamErr.MessageKey)
+		return
+	}
 	var requestErr requestError
 	if errors.As(err, &requestErr) {
 		key := requestErr.Error()

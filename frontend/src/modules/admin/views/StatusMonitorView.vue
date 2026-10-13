@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import {
   Activity,
@@ -30,7 +30,6 @@ import {
   bulkSetChannelMonitorRulesSchedulable,
   bulkUpdateChannelMonitorRules,
   getChannelMonitorSummary,
-  previewChannelMonitorRateRule,
   runChannelMonitorRule,
   setChannelMonitorRuleSchedulable,
   setChannelMonitorRulePriority,
@@ -109,6 +108,7 @@ const editForm = ref({ enabled: true, checkIntervalMinutes: 2, failureThreshold:
 const rateRuleForm = ref({ enabled: false, autoApplyOnCheck: true, updatePriority: true, stopWhenMissingRate: true })
 const testModelForm = ref({ openaiModelId: 'gpt-5.6-sol', anthropicModelId: 'claude-sonnet-5', grokModelId: 'grok-4.5', groupModels: [] as { groupId: string, groupName: string, modelId: string }[], balanceRefreshIntervalMinutes: 5 })
 const priorityDrafts = ref<Record<string, number | null>>({})
+let summaryRequestID = 0
 
 const syncSummaryState = (next: Awaited<ReturnType<typeof getChannelMonitorSummary>>) => {
   summary.value = next
@@ -120,17 +120,22 @@ const syncSummaryState = (next: Awaited<ReturnType<typeof getChannelMonitorSumma
 }
 
 const loadSummary = async (mode: RefreshMode = 'manual') => {
+  const requestID = ++summaryRequestID
+  const group = selectedGroup.value
   const showInitialLoading = mode === 'initial' || (summary.value.channels.length === 0 && mode !== 'silent')
   if (showInitialLoading) isLoading.value = true
   else if (mode === 'manual') isRefreshing.value = true
   errorKey.value = ''
   try {
-    syncSummaryState(await getChannelMonitorSummary())
+    const next = await getChannelMonitorSummary(selectedGroupID.value || undefined)
+    if (requestID === summaryRequestID && group === selectedGroup.value) syncSummaryState(next)
   } catch (error: any) {
-    errorKey.value = error?.message ?? 'admin.channelMonitor.errors.request'
+    if (requestID === summaryRequestID) errorKey.value = error?.message ?? 'admin.channelMonitor.errors.request'
   } finally {
-    if (showInitialLoading) isLoading.value = false
-    isRefreshing.value = false
+    if (requestID === summaryRequestID) {
+      isLoading.value = false
+      isRefreshing.value = false
+    }
   }
 }
 
@@ -150,6 +155,8 @@ const statCards = computed(() => [
 const groupOptions = computed(() => ['all', ...Array.from(new Set(summary.value.groups.map(group => group.groupName)))])
 const selectedGroupID = computed(() => summary.value.groups.find(group => group.groupName === selectedGroup.value)?.groupId ?? '')
 const selectedPriorityGroupRule = computed(() => summary.value.rateRule.priorityGroups.find(rule => rule.groupId === selectedGroupID.value) ?? null)
+const selectedGroupSharesAccounts = computed(() => !!selectedGroupID.value && summary.value.channels.some(channel => channel.ownGroups.includes(selectedGroup.value) && channel.ownGroups.length > 1))
+watch(selectedGroup, () => { void loadSummary('silent') })
 
 const filteredChannels = computed(() => {
   const query = searchQuery.value.trim().toLowerCase()
@@ -447,8 +454,9 @@ const saveTestModelConfig = async () => {
 
 const saveRateRule = async (applyAfterSave = false) => {
   await runAction(async () => {
+    if (applyAfterSave && !selectedGroupID.value) throw new Error('admin.channelMonitor.errors.selectPriorityGroup')
     await updateChannelMonitorRateRule({ ...rateRuleForm.value })
-    if (applyAfterSave) await applyChannelMonitorRateRule(selectedGroupID.value || undefined)
+    if (applyAfterSave) await applySelectedGroupPriority()
   }, { actionKey: applyAfterSave ? 'rate-rule:save-apply' : 'rate-rule:save' })
   closeRateRuleEditor()
 }
@@ -521,12 +529,18 @@ const runOneClickSync = () => {
 
 const previewRateRule = () =>
   runAction(async () => {
-    const view = await previewChannelMonitorRateRule()
-    summary.value.rateRule = view
+    await loadSummary('silent')
   }, { actionKey: 'rate-rule:preview', refresh: false })
 
+const applySelectedGroupPriority = async () => {
+  if (!selectedGroupID.value) throw new Error('admin.channelMonitor.errors.selectPriorityGroup')
+  const result = await applyChannelMonitorRateRule(selectedGroupID.value)
+  await loadSummary('silent')
+  if (!result.success) throw new Error(result.message || 'admin.channelMonitor.errors.request')
+}
+
 const applyRateRule = () =>
-  runAction(() => applyChannelMonitorRateRule(selectedGroupID.value || undefined), { actionKey: 'rate-rule:apply' })
+  runAction(applySelectedGroupPriority, { actionKey: 'rate-rule:apply', refresh: false })
 
 const toggleSelectedGroupPriority = (enabled: boolean) => {
   if (!selectedGroupID.value) return
@@ -835,7 +849,7 @@ const dispatchButtonClass = (channel: ChannelMonitorChannel): string => (
             <RefreshCw :class="['h-3.5 w-3.5', isActionActive('rate-rule:preview') ? 'animate-spin' : '']" />
             {{ t('admin.channelMonitor.rateRule.preview') }}
           </Button>
-          <Button type="button" variant="secondary" size="sm" class="gap-1.5 !border-emerald-500/30 !bg-emerald-500/10 !text-emerald-700 hover:!bg-emerald-500/15 dark:!text-emerald-300" :disabled="isBulkActionLoading || selectedGroup === 'all'" @click="applyRateRule">
+          <Button type="button" variant="secondary" size="sm" class="gap-1.5 !border-emerald-500/30 !bg-emerald-500/10 !text-emerald-700 hover:!bg-emerald-500/15 dark:!text-emerald-300" :disabled="isBulkActionLoading || !selectedGroupID" @click="applyRateRule">
             <Play class="h-3.5 w-3.5" />
             {{ t('admin.channelMonitor.rateRule.applyPriority') }}
           </Button>
@@ -845,8 +859,10 @@ const dispatchButtonClass = (channel: ChannelMonitorChannel): string => (
           </Button>
         </div>
       </div>
+      <p v-if="selectedGroupSharesAccounts" class="mt-3 text-xs text-amber-600 dark:text-amber-300">{{ t('admin.channelMonitor.rateRule.sharedPriority') }}</p>
       <div v-if="summary.rateRule.lastResult" class="mt-3 text-xs text-muted-foreground">
-        {{ t('admin.channelMonitor.rateRule.lastApplied', { time: formatDateTime(summary.rateRule.lastResult.createdAt), enabled: summary.rateRule.lastResult.enabledCount, disabled: summary.rateRule.lastResult.disabledCount, priority: summary.rateRule.lastResult.priorityUpdated }) }}
+        {{ t('admin.channelMonitor.rateRule.priorityResult', { time: formatDateTime(summary.rateRule.lastResult.createdAt), updated: summary.rateRule.lastResult.priorityUpdated, skipped: summary.rateRule.lastResult.skippedCount, unchanged: summary.rateRule.lastResult.total - summary.rateRule.lastResult.priorityUpdated - summary.rateRule.lastResult.skippedCount }) }}
+        <span v-if="!summary.rateRule.lastResult.success" class="ml-2 text-red-600">{{ t(summary.rateRule.lastResult.message) }}</span>
       </div>
     </section>
 

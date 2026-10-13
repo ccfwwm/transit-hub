@@ -208,7 +208,8 @@ export default {
       },
       rateRule: {
         title: '倍率调度规则',
-        subtitle: '上游实际倍率低于我的分组倍率才允许调度；等于或高于时自动停用，并可按低倍率优先写入优先级。',
+        subtitle: '优先级按当前所选分组的上游实际倍率从低到高排序，停用渠道也可变更。单独设置的优先级会保留，直到再次手动应用分组排序。倍率门控另由开关控制。',
+        sharedPriority: '本分组存在跨分组共用的上游账号：修改其优先级也会影响其他分组。',
         enabled: '已启用',
         disabled: '已停用',
         priorityOn: '自动优先级',
@@ -219,6 +220,7 @@ export default {
         preview: '预览影响',
         apply: '立即应用',
         applyPriority: '立即变更优先级',
+        priorityResult: '最近优先级变更 {time}：已更新 {updated} 个，跳过 {skipped} 个，已符合排序 {unchanged} 个',
         groupEnabled: '启用本分组自动优先级',
         groupAuto: '上游倍率变化时自动变更',
         configure: '统一设置',
@@ -351,6 +353,9 @@ export default {
       errors: {
         invalidMultiplier: '倍率必须是大于或等于 0 的有效数字。',
         accountsUnavailable: '远端账号列表读取失败，请刷新或重新登录工作区后重试。',
+        selectPriorityGroup: '请先选择一个具体分组，再变更优先级。',
+        priorityNotApplied: '远端优先级回读不一致，变更未生效，请检查上游接口。',
+        prioritySaveFailed: '远端优先级已更新，但本地规则保存失败，请刷新后重试。',
 
         network: '网络异常，请检查连接后重试。',
         request: '状态监控操作失败，请稍后重试。',

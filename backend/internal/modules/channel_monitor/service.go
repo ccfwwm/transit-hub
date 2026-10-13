@@ -87,6 +87,7 @@ type Service struct {
 	stopScheduler    chan struct{}
 	balanceRefreshes singleflight.Group
 	schedulerRunMu   sync.Mutex
+	priorityApplyMu  sync.Mutex
 }
 
 func NewService(store Store, conns ConnectionStore, states StateStore, upstreams UpstreamLookup, platform MonitorPlatform, accounts AdminAccountResolver) *Service {
@@ -119,6 +120,10 @@ func (s *Service) EnsureSchema(ctx context.Context) error {
 }
 
 func (s *Service) Summary(ctx context.Context, userID string) (SummaryResponse, error) {
+	return s.SummaryInGroup(ctx, userID, "")
+}
+
+func (s *Service) SummaryInGroup(ctx context.Context, userID, groupID string) (SummaryResponse, error) {
 	adminAccountID, err := s.currentAdminAccountID(ctx, userID)
 	if err != nil {
 		return SummaryResponse{}, err
@@ -142,6 +147,17 @@ func (s *Service) Summary(ctx context.Context, userID string) (SummaryResponse, 
 		return SummaryResponse{}, err
 	}
 	rateRows, rateSummary := s.buildRatePlan(ctx, connections, rulesByConnection, state, accountsByID, rateRule)
+	if groupID = strings.TrimSpace(groupID); groupID != "" {
+		selected := priorityPlanForGroup(rateRows, connections, groupID)
+		rateSummary = summarizeRatePlan(selected)
+		byConnection := make(map[string]*int, len(selected))
+		for _, row := range selected {
+			byConnection[row.ConnectionID] = row.SuggestedPriority
+		}
+		for i := range rateRows {
+			rateRows[i].SuggestedPriority = byConnection[rateRows[i].ConnectionID]
+		}
+	}
 	rateRowsByConnection := make(map[string]RatePlanRow, len(rateRows))
 	for _, row := range rateRows {
 		rateRowsByConnection[row.ConnectionID] = row
@@ -556,6 +572,8 @@ func (s *Service) SetRulePriorityInGroup(ctx context.Context, userID, ruleID str
 }
 
 func (s *Service) setRulePriority(ctx context.Context, userID, ruleID string, priority int, groupID string) error {
+	s.priorityApplyMu.Lock()
+	defer s.priorityApplyMu.Unlock()
 	adminAccountID, err := s.currentAdminAccountID(ctx, userID)
 	if err != nil {
 		return err
@@ -586,7 +604,9 @@ func (s *Service) setRulePriority(ctx context.Context, userID, ruleID string, pr
 	rule.PriorityManaged = false
 	rule.OriginalPriority = nil
 	rule.LastAppliedPriority = nil
-	rule.PriorityConflict = false
+	// Preserve an explicit manual choice during subsequent automatic rate changes.
+	// A manual group apply deliberately returns the channel to automatic ranking.
+	rule.PriorityConflict = true
 	rule.LastMessage = fmt.Sprintf("手动设置优先级为 %d", priority)
 	rule.UpdatedAt = now
 	return s.store.UpdateRule(ctx, rule)
@@ -973,8 +993,10 @@ func (s *Service) ApplyPriorityAfterSync(ctx context.Context, userID, adminAccou
 		if !rule.Enabled || !rule.AutoApplyOnRateChange {
 			continue
 		}
-		if _, err := s.applyPriorityForGroup(ctx, userID, adminAccountID, rule.GroupID, siteID, "rate-change"); err != nil {
+		if result, err := s.applyPriorityForGroup(ctx, userID, adminAccountID, rule.GroupID, siteID, "rate-change"); err != nil {
 			log.Printf("[channel-monitor] priority apply after rate change failed group_id=%s err=%v", rule.GroupID, err)
+		} else if !result.Success {
+			log.Printf("[channel-monitor] priority apply after rate change incomplete group_id=%s message=%s", rule.GroupID, result.Message)
 		}
 	}
 }
@@ -999,6 +1021,8 @@ func metricsMultiplierChanged(oldMetrics, newMetrics upstream.Metrics) bool {
 }
 
 func (s *Service) applyPriorityForGroup(ctx context.Context, userID, adminAccountID, groupID, siteID, action string) (RateApplyResult, error) {
+	s.priorityApplyMu.Lock()
+	defer s.priorityApplyMu.Unlock()
 	connections, rulesByConnection, state, accountsByID, err := s.rateRuleContext(ctx, userID, adminAccountID, true)
 	if err != nil {
 		return RateApplyResult{}, err
@@ -1008,24 +1032,36 @@ func (s *Service) applyPriorityForGroup(ctx context.Context, userID, adminAccoun
 		return RateApplyResult{}, err
 	}
 	rows, _ := s.buildRatePlan(ctx, connections, rulesByConnection, state, accountsByID, rateRule)
-	filtered := make([]RatePlanRow, 0, len(rows))
-	for _, row := range rows {
-		var conn my_sites.RealConnection
-		for _, candidate := range connections {
-			if candidate.ID == row.ConnectionID {
-				conn = candidate
+	if groupID == "" {
+		return RateApplyResult{}, requestError("admin.channelMonitor.errors.selectPriorityGroup")
+	}
+	groupExists := false
+	if state != nil {
+		for _, group := range state.OwnGroups {
+			if strings.TrimSpace(group.ID) == groupID {
+				groupExists = true
 				break
 			}
 		}
-		if groupID != "" && !containsString(conn.OwnGroupIDs, groupID) {
-			continue
-		}
-		if siteID != "" && conn.UpstreamSiteID != siteID {
-			continue
-		}
-		filtered = append(filtered, row)
 	}
-	assignRecommendedPriorities(filtered)
+	if !groupExists {
+		return RateApplyResult{}, requestError("admin.channelMonitor.errors.notFound")
+	}
+	filtered := priorityPlanForGroup(rows, connections, groupID)
+	// A changed site triggers re-ranking of the entire affected group, not just
+	// that site's channels. Unrelated groups must not be touched.
+	if siteID != "" {
+		affected := false
+		for _, row := range filtered {
+			if row.SiteID == siteID {
+				affected = true
+				break
+			}
+		}
+		if !affected {
+			return RateApplyResult{Success: true, Rows: []RatePlanRow{}}, nil
+		}
+	}
 	result := RateApplyResult{ID: newResultID(), UserID: userID, AdminAccountID: adminAccountID, Action: action, Success: true, Message: "优先级已应用", Total: len(filtered), Rows: filtered, CreatedAt: time.Now()}
 	if result.Action == "" {
 		result.Action = "manual"
@@ -1038,12 +1074,29 @@ func (s *Service) applyPriorityForGroup(ctx context.Context, userID, adminAccoun
 			result.SkippedCount++
 			continue
 		}
+		rule, hasRule := rulesByConnection[row.ConnectionID]
+		if action == "rate-change" && hasRule && (rule.PriorityConflict ||
+			(rule.PriorityManaged && rule.LastAppliedPriority != nil && row.CurrentPriority != nil && *rule.LastAppliedPriority != *row.CurrentPriority)) {
+			result.SkippedCount++
+			continue
+		}
 		if row.CurrentPriority != nil && *row.CurrentPriority == *row.SuggestedPriority {
+			if action != "rate-change" && hasRule && rule.PriorityConflict {
+				rule.PriorityConflict = false
+				rule.PriorityManaged = true
+				rule.LastAppliedPriority = cloneInt(row.SuggestedPriority)
+				rule.UpdatedAt = time.Now()
+				if err := s.store.UpdateRule(ctx, rule); err != nil {
+					result.Success = false
+					result.Message = "admin.channelMonitor.errors.prioritySaveFailed"
+				}
+			}
 			continue
 		}
 		if err := s.platform.UpdateSub2APIAdminAccountPriority(state.Session, row.AdminAccountID, *row.SuggestedPriority); err != nil {
 			result.Success = false
 			result.Message = err.Error()
+			result.SkippedCount++
 			continue
 		}
 		result.PriorityUpdated++
@@ -1055,13 +1108,63 @@ func (s *Service) applyPriorityForGroup(ctx context.Context, userID, adminAccoun
 			rule.LastAppliedPriority = cloneInt(row.SuggestedPriority)
 			rule.PriorityConflict = false
 			rule.UpdatedAt = time.Now()
-			_ = s.store.UpdateRule(ctx, rule)
+			if err := s.store.UpdateRule(ctx, rule); err != nil {
+				result.Success = false
+				result.Message = "admin.channelMonitor.errors.prioritySaveFailed"
+			}
 		}
+	}
+	if result.Success {
+		result.Message = fmt.Sprintf("优先级变更完成：更新 %d 个，跳过 %d 个，已符合排序 %d 个", result.PriorityUpdated, result.SkippedCount, result.Total-result.PriorityUpdated-result.SkippedCount)
 	}
 	if err := s.store.AddRateApplyResult(ctx, result); err != nil {
 		return RateApplyResult{}, err
 	}
 	return result, nil
+}
+
+// Priority ranking is independent of dispatch eligibility. A paused channel's
+// priority can still be edited without enabling it or bypassing health checks.
+func priorityPlanForGroup(rows []RatePlanRow, connections []my_sites.RealConnection, groupID string) []RatePlanRow {
+	connectionsByID := make(map[string]my_sites.RealConnection, len(connections))
+	for _, conn := range connections {
+		connectionsByID[conn.ID] = conn
+	}
+	selected := make([]RatePlanRow, 0, len(rows))
+	for _, row := range rows {
+		if !containsString(connectionsByID[row.ConnectionID].OwnGroupIDs, groupID) {
+			continue
+		}
+		row.SuggestedPriority = nil
+		selected = append(selected, row)
+	}
+	valid := func(row RatePlanRow) bool {
+		return row.Supported && row.UpstreamEffectiveMultiplier != nil &&
+			!math.IsNaN(*row.UpstreamEffectiveMultiplier) && !math.IsInf(*row.UpstreamEffectiveMultiplier, 0) && *row.UpstreamEffectiveMultiplier >= 0
+	}
+	sort.SliceStable(selected, func(i, j int) bool {
+		left, right := selected[i], selected[j]
+		if valid(left) != valid(right) {
+			return valid(left)
+		}
+		if valid(left) && !ratesEqual(*left.UpstreamEffectiveMultiplier, *right.UpstreamEffectiveMultiplier) {
+			return *left.UpstreamEffectiveMultiplier < *right.UpstreamEffectiveMultiplier
+		}
+		return left.AdminAccountID < right.AdminAccountID
+	})
+	priority := 0
+	var lastRate *float64
+	for i := range selected {
+		if !valid(selected[i]) {
+			continue
+		}
+		if lastRate == nil || !ratesEqual(*lastRate, *selected[i].UpstreamEffectiveMultiplier) {
+			priority++
+			lastRate = selected[i].UpstreamEffectiveMultiplier
+		}
+		selected[i].SuggestedPriority = cloneInt(&priority)
+	}
+	return selected
 }
 
 func (s *Service) applyRateRuleForWorkspace(ctx context.Context, userID, adminAccountID, action string) (RateApplyResult, error) {

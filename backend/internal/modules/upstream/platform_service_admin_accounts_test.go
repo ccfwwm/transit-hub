@@ -1,11 +1,57 @@
 package upstream
 
 import (
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
 	"testing"
 )
+
+func TestPriorityUpdateVerifiesPersistedAccount(t *testing.T) {
+	for _, mode := range []string{"saved", "ignored", "missing", "wrong-account", "failed-read"} {
+		t.Run(mode, func(t *testing.T) {
+			calls := []string{}
+			priority := 9
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				calls = append(calls, r.Method)
+				if r.URL.Path != "/api/v1/admin/accounts/123" || r.Header.Get("Authorization") != "Bearer test" {
+					t.Errorf("unexpected request: %s", r.URL.Path)
+				}
+				if r.Method == http.MethodPut {
+					var body map[string]int
+					if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body["priority"] != 2 {
+						t.Errorf("unexpected write body: %v err=%v", body, err)
+					}
+					if mode != "ignored" {
+						priority = body["priority"]
+					}
+					// Even a response claiming the desired value must be independently verified.
+					writeJSON(w, map[string]any{"data": map[string]any{"id": 123, "priority": 2}})
+					return
+				}
+				if mode == "failed-read" {
+					w.WriteHeader(http.StatusServiceUnavailable)
+					writeJSON(w, map[string]any{"error": "unavailable"})
+					return
+				}
+				data := map[string]any{"id": 123, "priority": priority}
+				if mode == "missing" {
+					delete(data, "priority")
+				}
+				if mode == "wrong-account" {
+					data["id"] = 456
+				}
+				writeJSON(w, map[string]any{"data": data})
+			}))
+			defer server.Close()
+			err := NewPlatformService(NewHTTPClient(server.Client())).UpdateSub2APIAdminAccountPriority(Session{Platform: PlatformSub2API, BaseURL: server.URL, AccessToken: "test"}, "123", 2)
+			if (err == nil) != (mode == "saved") || len(calls) != 2 || calls[0] != "PUT" || calls[1] != "GET" {
+				t.Fatalf("unverified priority accepted: mode=%s calls=%v err=%v", mode, calls, err)
+			}
+		})
+	}
+}
 
 func TestAdminAccountsReadsServerLimitedPages(t *testing.T) {
 	for _, withTotal := range []bool{true, false} {

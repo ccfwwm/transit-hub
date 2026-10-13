@@ -1664,7 +1664,24 @@ func (s *PlatformService) UpdateSub2APIAdminAccountPriority(session Session, acc
 			"priority": priority,
 		},
 	})
-	return err
+	if err != nil {
+		return err
+	}
+	// A successful HTTP response is insufficient: older or incompatible upstreams
+	// can silently ignore updates. Read the persisted account value independently.
+	response, err := s.httpClient.requestJSON(session.BaseURL+"/api/v1/admin/accounts/"+accountID, requestOptions{
+		AccessToken: session.AccessToken, TokenType: session.TokenType,
+		InsecureSkipTLS: session.InsecureSkipTLS,
+	})
+	if err != nil {
+		return err
+	}
+	record := dataRecord(response.Payload)
+	actual := firstInt(record, []string{"priority"})
+	if strings.TrimSpace(groupID2(record)) != strings.TrimSpace(accountID) || actual == nil || *actual != priority {
+		return newRequestError("admin.channelMonitor.errors.priorityNotApplied", PlatformSub2API)
+	}
+	return nil
 }
 
 func (s *PlatformService) TestSub2APIAdminAccount(session Session, accountID string, options Sub2APIAccountTestOptions) (Sub2APIAccountTestResult, error) {

@@ -175,13 +175,14 @@ func New(cfg config.Config, db *pgxpool.Pool, redisClient *redis.Client) *Server
 
 	// 站点同步成功后检查余额预警和倍率变更，按配置发送通知。
 	upstreamService.AfterSync = func(ctx context.Context, userID, adminAccountID, siteID, siteName string, oldMetrics, newMetrics upstream.Metrics) {
+		// Group priority automation must not depend on notification settings or delivery.
+		channelMonitorService.ApplyPriorityAfterSync(ctx, userID, adminAccountID, siteID, oldMetrics, newMetrics)
 		strategy, err := settingsService.GetFirstStrategy(ctx)
 		if err != nil {
 			return
 		}
 		checkBalanceWarning(ctx, settingsService, upstreamService, strategy, userID, siteID, siteName, oldMetrics, newMetrics)
 		checkMultiplierChanges(ctx, settingsService, strategy, userID, siteID, siteName, oldMetrics, newMetrics)
-		channelMonitorService.ApplyPriorityAfterSync(ctx, userID, adminAccountID, siteID, oldMetrics, newMetrics)
 		// 自动调价：分组级 enableAutoPricing 是唯一开关，Service 内部逐 mapping 判断。
 		mySitesService.ApplyAutoPricingAfterSync(ctx, userID, adminAccountID, siteID, siteName, oldMetrics, newMetrics)
 	}
