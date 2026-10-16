@@ -121,8 +121,12 @@ func (s *Service) runRule(ctx context.Context, rule Rule, reason string) (Result
 		err    error
 	}{}
 	next := time.Now().Add(time.Duration(rule.CheckIntervalMinutes) * time.Minute)
+	completionKey, _ := ctx.Value(completedMediaTaskContextKey{}).(string)
 	for _, groupID := range groups {
 		target := targetFor(rule, *conn, groupID, state, config, all[rule.ID])
+		if completionKey != "" && (target.Status != StatusGenerating || target.MediaTaskKey != completionKey) {
+			continue
+		}
 		options := effectiveTestOptionsForGroup(rule, *conn, state, config, groupID).options()
 		started := time.Now()
 		result := Result{ID: newResultID(), RuleID: rule.ID, ConnectionID: conn.ID, GroupID: groupID, Action: reason, Model: options.ModelID, StartedAt: started, CreatedAt: started}
@@ -132,7 +136,7 @@ func (s *Service) runRule(ctx context.Context, rule Rule, reason string) (Result
 		case rule.ManualPaused:
 			target.Status = StatusManualPaused
 			target.Message = "手动停止中，自动恢复已暂停"
-		case !rule.Enabled && reason != "manual":
+		case !rule.Enabled && reason != "manual" && completionKey == "":
 			target.Status = StatusUnknown
 			target.Message = "监控规则已停用"
 		case options.ModelID == "":

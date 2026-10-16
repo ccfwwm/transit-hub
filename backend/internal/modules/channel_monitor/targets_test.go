@@ -376,6 +376,60 @@ func TestMediaTerminalFailureOnlyConsumedOnce(t *testing.T) {
 	}
 }
 
+func TestMediaWorkerCompletesDisabledManualTargets(t *testing.T) {
+	for _, scenario := range []string{"success", "failed", "config_changed"} {
+		t.Run(scenario, func(t *testing.T) {
+			ctx, s, store, p := targetFixture()
+			store.testModelConfig.GroupModels = []TestModelGroupConfig{{GroupID: "a", ModelID: "gpt-image-2", Mode: "image"}, {GroupID: "b", ModelID: "gpt-image-2", Mode: "image"}}
+			rule := store.mustRule("conn-1")
+			rule.Enabled = false
+			store.rules[rule.ID] = rule
+			conn := s.conns.connections[0]
+			o := effectiveTestOptionsForGroup(rule, conn, s.state(), *store.testModelConfig, "a").options()
+			fp := configFingerprint(conn, o)
+			key := rule.ID + "|" + fp
+			before := time.Now().Add(-time.Second)
+			for _, g := range []string{"a", "b"} {
+				_ = store.SaveTargetState(ctx, TargetState{RuleID: rule.ID, GroupID: g, Fingerprint: fp, Status: StatusGenerating, MediaTaskKey: key, CheckedAt: &before})
+			}
+			task := MediaTask{Key: key, RuleID: rule.ID, Status: "submitting", CreatedAt: before, Options: o}
+			store.tasks[key] = task
+			if scenario == "config_changed" {
+				store.testModelConfig.GroupModels[0].ModelID = "new-model"
+				store.testModelConfig.GroupModels[1].ModelID = "new-model"
+			}
+			p.probe = func(AccountTestOptions) (AccountTestResult, error) {
+				return AccountTestResult{Success: scenario != "failed", Model: o.ModelID, Message: "validated"}, nil
+			}
+			site, _ := s.upstreams.GetSite(ctx, conn.UpstreamSiteID)
+			s.executeMedia(store, task, conn, *site, o, false)
+			if scenario == "config_changed" {
+				if len(store.results) != 0 {
+					t.Fatal("late media result was attributed to new config")
+				}
+			} else {
+				want := StatusHealthy
+				if scenario == "failed" {
+					want = StatusFailed
+				}
+				for _, g := range []string{"a", "b"} {
+					if got := store.states[rule.ID][g]; got.Status != want || (scenario == "failed" && got.ConsecutiveFailures != 1) {
+						t.Fatal("worker did not finish independent group target", got)
+					}
+				}
+				if len(store.results) != 2 || store.mustRule(rule.ID).Enabled {
+					t.Fatal("manual completion changed monitoring or omitted history")
+				}
+			}
+			historyCount := len(store.results)
+			s.completeMediaTask(task)
+			if len(p.testOptions) != 1 || len(store.results) != historyCount {
+				t.Fatal("completion repeated submission or history")
+			}
+		})
+	}
+}
+
 func TestTextErrorCoalescedAcrossGroups(t *testing.T) {
 	ctx, s, store, p := targetFixture()
 	store.testModelConfig.GroupModels[1].ModelID = "good"

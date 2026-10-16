@@ -16,6 +16,8 @@ type DurableMediaStore interface {
 	ActiveMediaTask(context.Context, string) (*MediaTask, error)
 }
 
+type completedMediaTaskContextKey struct{}
+
 func (s *Service) mediaCheck(ctx context.Context, rule Rule, conn my_sites.RealConnection, site upstream.Site, target TargetState, o AccountTestOptions) (AccountTestResult, error) {
 	store, ok := s.store.(DurableMediaStore)
 	if !ok {
@@ -163,6 +165,26 @@ func (s *Service) executeMedia(store DurableMediaStore, task MediaTask, conn my_
 	// A reset cannot race an active worker and resurrect its old task state.
 	if err = store.SaveMediaTask(ctx, task); err != nil {
 		log.Printf("[channel-monitor] persist media outcome failed rule_id=%s", task.RuleID)
+		return
+	}
+	if task.Status == "success" || task.Status == "failed" {
+		s.completeMediaTask(task)
+	}
+}
+
+// Finish manually started checks even when periodic monitoring is disabled.
+// The normal account lock and fingerprint check prevent a late result from
+// replacing a newer configuration or consuming the same outcome twice.
+func (s *Service) completeMediaTask(task MediaTask) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	rule, err := s.store.GetRule(ctx, task.RuleID)
+	if err != nil || rule == nil {
+		return
+	}
+	ctx = context.WithValue(ctx, completedMediaTaskContextKey{}, task.Key)
+	if _, err = s.runRule(ctx, *rule, "media_complete"); err != nil {
+		log.Printf("[channel-monitor] consume media outcome failed rule_id=%s", task.RuleID)
 	}
 }
 
