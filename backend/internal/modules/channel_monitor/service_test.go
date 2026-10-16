@@ -35,14 +35,14 @@ func TestSummaryCreatesDefaultRulesAndGroupCounts(t *testing.T) {
 		t.Fatalf("expected default balance threshold %.1f, got %.1f", DefaultBalanceThreshold, rule.BalanceThreshold)
 	}
 
-	if summary.Stats.Total != 1 || summary.Stats.Available != 1 {
-		t.Fatalf("expected 1 total and 1 available, got %+v", summary.Stats)
+	if summary.Stats.Total != 1 || summary.Stats.Available != 0 {
+		t.Fatalf("expected 1 total and zero available before first check, got %+v", summary.Stats)
 	}
 	if len(summary.Groups) != 1 {
 		t.Fatalf("expected one group summary, got %d", len(summary.Groups))
 	}
 	group := summary.Groups[0]
-	if group.GroupName != "PLUS" || group.Total != 1 || group.Available != 1 {
+	if group.GroupName != "PLUS" || group.Total != 1 || group.Available != 0 {
 		t.Fatalf("unexpected group summary: %+v", group)
 	}
 }
@@ -115,7 +115,7 @@ func TestSummaryRefreshesAllAdminGroupsAndDropsDeletedGroupFallback(t *testing.T
 	if group, ok := groups["国产模型"]; !ok || group.Total != 0 || group.Platform != "openai" {
 		t.Fatalf("expected zero-connection admin group in summary, got %+v", group)
 	}
-	if group := groups["active-group"]; group.Total != 1 || group.Available != 1 {
+	if group := groups["active-group"]; group.Total != 1 || group.Available != 0 {
 		t.Fatalf("expected active group counts, got %+v", group)
 	}
 	if _, exists := groups["deleted-group"]; exists {
@@ -889,8 +889,8 @@ func TestSetRuleSchedulableSummaryReflectsRequestedState(t *testing.T) {
 	if channel.Schedulable == nil || !*channel.Schedulable {
 		t.Fatalf("expected summary to reflect requested schedulable=true, got %+v", channel.Schedulable)
 	}
-	if summary.Stats.DispatchPaused != 0 || summary.Stats.Available != 1 {
-		t.Fatalf("expected enabled dispatch to be available, got %+v", summary.Stats)
+	if summary.Stats.DispatchPaused != 0 || summary.Stats.Available != 0 {
+		t.Fatalf("expected enabled dispatch but no confirmed health, got %+v", summary.Stats)
 	}
 	if repo.mustRule(rule.ID).AutoEnableBlocked {
 		t.Fatalf("manual dispatch enable must release automatic enable protection")

@@ -310,6 +310,12 @@ type APIKeyProbeOptions struct {
 	Platform        string
 	ModelID         string
 	Prompt          string
+	Mode            string // text, image, video, or connection
+	Size            string
+	Seconds         int
+	TaskID          string
+	Adapter         string
+	PresetModel     string
 	InsecureSkipTLS bool
 }
 
@@ -318,4 +324,7 @@ type APIKeyProbeResult struct {
 	Message   string
 	LatencyMS int
 	Model     string
+	Pending   bool
+	TaskID    string
+	Uncertain bool
 }

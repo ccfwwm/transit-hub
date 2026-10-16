@@ -18,7 +18,7 @@ RUN CGO_ENABLED=0 go build -o /out/transithub-api ./cmd/api
 
 # ---- 阶段 3：运行时 ----
 FROM alpine:3.20
-RUN apk add --no-cache ca-certificates tzdata
+RUN apk add --no-cache ca-certificates tzdata ffmpeg
 RUN mkdir -p /app/data
 
 COPY --from=backend-builder /out/transithub-api /app/transithub-api
@@ -26,7 +26,7 @@ COPY --from=frontend-builder /src/frontend/dist /app/public
 
 ENV PORT=10621
 ENV PUBLIC_DIR=/app/public
-ENV APP_VERSION=2.1.12
+ENV APP_VERSION=2.1.13
 EXPOSE 10621
 
 ENTRYPOINT ["/app/transithub-api"]

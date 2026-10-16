@@ -138,6 +138,8 @@ export default {
         allStatus: '全部状态'
       },
       status: {
+        generating: '生成中 / 待确认',
+        config_error: '配置错误',
         unknown: '待检测',
         healthy: '正常',
         failed: '故障',
@@ -160,6 +162,10 @@ export default {
         autoEnableBlockedHelp: '检测恢复和倍率规则仍可自动停用，但不会自动开启调度；手动点击启调度后解除。'
       },
       groups: {
+        all: '全部分组',
+        statusAll: '全部分组状态',
+        statusAvailable: '有可用渠道',
+        statusUnavailable: '无可用渠道',
         title: '分组概览',
         subtitle: '按我的分组统计已对接渠道可用性。',
         columns: {
@@ -169,6 +175,7 @@ export default {
           last: '最后检测'
         }
       },
+      pagination: { previous: '上一页', next: '下一页' },
       channels: {
         title: '渠道明细',
         subtitle: '当前筛选 {count} 个渠道',
@@ -252,6 +259,14 @@ export default {
         }
       },
       testModel: {
+        exactPreset: '按模型精确匹配 / 别名映射预设',
+        presetProtocol: '使用预设协议',
+        size: '规格（留空使用最小有效规格）',
+        seconds: '秒（0 = 预设最短时长）',
+        realFrequency: '将实际生成：按各渠道检测间隔运行，默认每 2 分钟一次；可改为仅连接检查。',
+        history: '分组检测历史',
+        reset: '重置待确认任务',
+        resetConfirm: '请先确认上游原任务状态。重置后下次检测会提交新生成任务，是否继续？',
         title: '检测模型与余额刷新',
         configure: '统一设置检测模型',
         configureShort: '检测模型/余额',
@@ -260,23 +275,28 @@ export default {
         anthropic: 'Anthropic 检测模型',
         grok: 'Grok 检测模型',
         groupDefaults: '分组默认检测模型',
-        groupDefaultsHelp: '配置后优先于平台统一模型，单条自定义模型优先级最高。清空即可取消分组覆盖。',
+        groupDefaultsHelp: '渠道自定义模型覆盖其所有分组；否则使用对应分组默认，再继承平台默认。清空取消覆盖，各分组仍独立记录结果。',
         noGroups: '当前没有可配置的自有分组。',
         balanceRefreshInterval: '余额刷新间隔',
         minutes: '分钟',
-        current: '当前：OpenAI {openai} / Anthropic {anthropic} / Grok {grok} / 余额 {minutes} 分钟刷新'
+        current: '当前：OpenAI {openai} / Anthropic {anthropic} / Grok {grok} / 余额 {minutes} 分钟刷新',
+        modeText: '文本检测',
+        modeImage: '真实生成图片',
+        modeVideo: '真实生成视频',
+        modeConnection: '仅连接检查',
+        promptPlaceholder: '媒体测试提示词（可选）'
       },
       bulk: {
         selected: '已选 {count} 个',
         run: '检测选中',
-        oneClickCheck: '一键检测',
-        oneClickSync: '一键同步接管',
+        oneClickCheck: '检测全部筛选结果 / 选中项',
+        oneClickSync: '接管当前页 / 选中项',
         enableMonitor: '启用检测',
         disableMonitor: '停用检测',
         enableDispatch: '开启分组调度',
         disableDispatch: '停用分组调度',
         editRules: '批量设置规则',
-        editAllRules: '统一设置规则',
+        editAllRules: '设置全部筛选结果',
         editSelectedRules: '设置选中规则'
       },
       editor: {
@@ -322,7 +342,7 @@ export default {
         runShort: '检测',
         pause: '停止',
         resume: '启动',
-        selectAll: '全选当前筛选',
+        selectAll: '全选当前页',
         enableMonitor: '启用检测',
         enableMonitorShort: '启检测',
         disableMonitor: '停用检测',
@@ -351,6 +371,8 @@ export default {
         saveFailed: '修改对接分组失败，请稍后重试。'
       },
       errors: {
+        mediaTaskActive: '媒体任务仍在执行，请等待结束；受理不明确的任务 5 分钟后可重置。',
+        mediaConfig: '媒体配置无效：请精确匹配预设或选择协议，并检查时长与规格。',
         invalidMultiplier: '倍率必须是大于或等于 0 的有效数字。',
         accountsUnavailable: '远端账号列表读取失败，请刷新或重新登录工作区后重试。',
         selectPriorityGroup: '请先选择一个具体分组，再变更优先级。',

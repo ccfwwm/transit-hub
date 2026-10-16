@@ -3,6 +3,7 @@ package channel_monitor
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"strings"
 	"time"
 
@@ -116,8 +117,35 @@ func (r *Repository) EnsureSchema(ctx context.Context) error {
 		return err
 	}
 	if _, err := r.db.Exec(ctx, `
+		ALTER TABLE channel_monitor_results
+		ADD COLUMN IF NOT EXISTS group_id text NOT NULL DEFAULT '',
+		ADD COLUMN IF NOT EXISTS task_id text NOT NULL DEFAULT ''
+	`); err != nil {
+		return err
+	}
+	if _, err := r.db.Exec(ctx, `
 		CREATE INDEX IF NOT EXISTS idx_channel_monitor_results_rule_created
 		ON channel_monitor_results (rule_id, created_at DESC)
+	`); err != nil {
+		return err
+	}
+	if _, err := r.db.Exec(ctx, `
+		CREATE TABLE IF NOT EXISTS channel_monitor_media_tasks (
+			key text PRIMARY KEY,
+			user_id text NOT NULL,
+			admin_account_id text NOT NULL,
+			rule_id text NOT NULL,
+			group_id text NOT NULL DEFAULT '',
+			model_id text NOT NULL DEFAULT '',
+			mode text NOT NULL DEFAULT '',
+			config_fingerprint text NOT NULL DEFAULT '',
+			options_json jsonb NOT NULL DEFAULT '{}'::jsonb,
+			task_id text NOT NULL DEFAULT '',
+			status text NOT NULL DEFAULT 'submitting',
+			message text NOT NULL DEFAULT '',
+			created_at timestamptz NOT NULL DEFAULT now(),
+			updated_at timestamptz NOT NULL DEFAULT now()
+		)
 	`); err != nil {
 		return err
 	}
@@ -231,7 +259,10 @@ func (r *Repository) EnsureSchema(ctx context.Context) error {
 		CREATE INDEX IF NOT EXISTS idx_channel_monitor_rate_results_workspace_created
 		ON channel_monitor_rate_results (user_id, admin_account_id, created_at DESC)
 	`)
-	return err
+	if err != nil {
+		return err
+	}
+	return r.ensureTargetSchema(ctx)
 }
 
 func (r *Repository) EnsureRulesForExistingConnections(ctx context.Context) error {
@@ -394,10 +425,10 @@ func (r *Repository) UpdateRuleRateSettings(ctx context.Context, id string, req 
 func (r *Repository) AddResult(ctx context.Context, result Result) error {
 	_, err := r.db.Exec(ctx, `
 		INSERT INTO channel_monitor_results (
-			id, rule_id, connection_id, status, success, message, latency_ms, model, action, started_at, finished_at, created_at
+			id, rule_id, connection_id, group_id, task_id, status, success, message, latency_ms, model, action, started_at, finished_at, created_at
 		)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
-	`, result.ID, result.RuleID, result.ConnectionID, result.Status, result.Success, result.Message, result.LatencyMS, result.Model, result.Action, result.StartedAt, result.FinishedAt, result.CreatedAt)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+	`, result.ID, result.RuleID, result.ConnectionID, result.GroupID, result.TaskID, result.Status, result.Success, result.Message, result.LatencyMS, result.Model, result.Action, result.StartedAt, result.FinishedAt, result.CreatedAt)
 	return err
 }
 
@@ -406,7 +437,7 @@ func (r *Repository) ListRecentResults(ctx context.Context, ruleID string, limit
 		limit = 20
 	}
 	rows, err := r.db.Query(ctx, `
-		SELECT id, rule_id, connection_id, status, success, message, latency_ms, model, action, started_at, finished_at, created_at
+		SELECT id, rule_id, connection_id, group_id, task_id, status, success, message, latency_ms, model, action, started_at, finished_at, created_at
 		FROM channel_monitor_results
 		WHERE rule_id = $1
 		ORDER BY created_at DESC
@@ -416,6 +447,65 @@ func (r *Repository) ListRecentResults(ctx context.Context, ruleID string, limit
 		return nil, err
 	}
 	return scanResults(rows)
+}
+
+func (r *Repository) ListRecentResultsForRules(ctx context.Context, ruleIDs []string, limit int) (map[string][]Result, error) {
+	result := make(map[string][]Result, len(ruleIDs))
+	if len(ruleIDs) == 0 {
+		return result, nil
+	}
+	if limit <= 0 {
+		limit = 60
+	}
+	rows, err := r.db.Query(ctx, `SELECT h.rule_id,h.id,h.connection_id,h.group_id,h.task_id,h.status,h.success,h.message,h.latency_ms,h.model,h.action,h.started_at,h.finished_at,h.created_at
+ FROM unnest($1::text[]) AS target(rule_id) CROSS JOIN LATERAL(SELECT * FROM channel_monitor_results WHERE rule_id=target.rule_id ORDER BY created_at DESC LIMIT $2)h`, ruleIDs, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var ruleID string
+		var item Result
+		if err := rows.Scan(&ruleID, &item.ID, &item.ConnectionID, &item.GroupID, &item.TaskID, &item.Status, &item.Success, &item.Message, &item.LatencyMS, &item.Model, &item.Action, &item.StartedAt, &item.FinishedAt, &item.CreatedAt); err != nil {
+			return nil, err
+		}
+		item.RuleID = ruleID
+		result[ruleID] = append(result[ruleID], item)
+	}
+	return result, rows.Err()
+}
+
+func (r *Repository) GetMediaTask(ctx context.Context, key string) (*MediaTask, error) {
+	var task MediaTask
+	var raw []byte
+	err := r.db.QueryRow(ctx, `SELECT key, user_id, admin_account_id, rule_id, group_id, model_id, mode, config_fingerprint, task_id, status, message, created_at, updated_at, options_json FROM channel_monitor_media_tasks WHERE key=$1`, key).Scan(
+		&task.Key, &task.UserID, &task.AdminAccountID, &task.RuleID, &task.GroupID, &task.ModelID, &task.Mode, &task.ConfigFingerprint, &task.TaskID, &task.Status, &task.Message, &task.CreatedAt, &task.UpdatedAt, &raw)
+	if err == pgx.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	if err = json.Unmarshal(raw, &task.Options); err != nil {
+		return nil, err
+	}
+	return &task, nil
+}
+
+func (r *Repository) SaveMediaTask(ctx context.Context, task MediaTask) error {
+	result, err := r.db.Exec(ctx, `UPDATE channel_monitor_media_tasks SET task_id=$2,status=$3,message=$4,updated_at=now() WHERE key=$1`, task.Key, task.TaskID, task.Status, task.Message)
+	if err != nil {
+		return err
+	}
+	if result.RowsAffected() != 1 {
+		return fmt.Errorf("media task no longer exists")
+	}
+	return nil
+}
+
+func (r *Repository) ResetMediaTask(ctx context.Context, key string) error {
+	_, err := r.db.Exec(ctx, `DELETE FROM channel_monitor_media_tasks WHERE key=$1`, key)
+	return err
 }
 
 func (r *Repository) ListDueRules(ctx context.Context, limit int) ([]Rule, error) {
@@ -653,7 +743,7 @@ func scanResults(rows pgx.Rows) ([]Result, error) {
 	for rows.Next() {
 		var result Result
 		if err := rows.Scan(
-			&result.ID, &result.RuleID, &result.ConnectionID, &result.Status, &result.Success,
+			&result.ID, &result.RuleID, &result.ConnectionID, &result.GroupID, &result.TaskID, &result.Status, &result.Success,
 			&result.Message, &result.LatencyMS, &result.Model, &result.Action, &result.StartedAt,
 			&result.FinishedAt, &result.CreatedAt,
 		); err != nil {

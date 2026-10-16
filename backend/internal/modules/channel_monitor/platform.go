@@ -22,6 +22,12 @@ func (a PlatformAdapter) ProbeUpstreamConnection(ctx context.Context, site upstr
 		Platform:        connection.GroupType,
 		ModelID:         options.ModelID,
 		Prompt:          options.Prompt,
+		Mode:            options.Mode,
+		Size:            options.Size,
+		Seconds:         options.Seconds,
+		TaskID:          options.TaskID,
+		Adapter:         options.Adapter,
+		PresetModel:     options.PresetModel,
 		InsecureSkipTLS: site.SkipTLSVerify || (site.Session != nil && site.Session.InsecureSkipTLS),
 	})
 	if err != nil {
@@ -32,6 +38,9 @@ func (a PlatformAdapter) ProbeUpstreamConnection(ctx context.Context, site upstr
 		Message:   result.Message,
 		LatencyMS: result.LatencyMS,
 		Model:     result.Model,
+		Pending:   result.Pending,
+		TaskID:    result.TaskID,
+		Uncertain: result.Uncertain,
 	}, nil
 }
 

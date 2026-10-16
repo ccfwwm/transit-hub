@@ -138,6 +138,8 @@ export default {
         allStatus: 'All status'
       },
       status: {
+        generating: 'Generating / unresolved',
+        config_error: 'Configuration error',
         unknown: 'Pending',
         healthy: 'Healthy',
         failed: 'Failed',
@@ -160,6 +162,10 @@ export default {
         autoEnableBlockedHelp: 'Checks and rate rules may still disable dispatch, but cannot enable it until dispatch is enabled manually.'
       },
       groups: {
+        all: 'All groups',
+        statusAll: 'All group states',
+        statusAvailable: 'Has available channel',
+        statusUnavailable: 'No available channel',
         title: 'Group Overview',
         subtitle: 'Availability grouped by your own groups.',
         columns: {
@@ -169,6 +175,7 @@ export default {
           last: 'Last check'
         }
       },
+      pagination: { previous: 'Previous', next: 'Next' },
       channels: {
         title: 'Channel Details',
         subtitle: '{count} channels in current filter',
@@ -252,6 +259,14 @@ export default {
         }
       },
       testModel: {
+        exactPreset: 'Exact model / alias preset',
+        presetProtocol: 'Use preset protocol',
+        size: 'Size (empty = minimum valid size)',
+        seconds: 'Seconds (0 = preset minimum)',
+        realFrequency: 'Real generation follows each channel interval (default: every 2 minutes). Connection-only checks are also available.',
+        history: 'Group check history',
+        reset: 'Reset unresolved task',
+        resetConfirm: 'Verify the original upstream task first. The next check after reset will submit a new generation. Continue?',
         title: 'Check Models and Balance Refresh',
         configure: 'Configure check models',
         configureShort: 'Models/balance',
@@ -264,7 +279,12 @@ export default {
         noGroups: 'No own groups are available for configuration.',
         balanceRefreshInterval: 'Balance refresh interval',
         minutes: 'minutes',
-        current: 'Current: OpenAI {openai} / Anthropic {anthropic} / Grok {grok} / balance every {minutes} min'
+        current: 'Current: OpenAI {openai} / Anthropic {anthropic} / Grok {grok} / balance every {minutes} min',
+        modeText: 'Text probe',
+        modeImage: 'Generate image',
+        modeVideo: 'Generate video',
+        modeConnection: 'Connection only',
+        promptPlaceholder: 'Media test prompt (optional)'
       },
       bulk: {
         selected: '{count} selected',
@@ -351,6 +371,8 @@ export default {
         saveFailed: 'Failed to update connected groups. Please retry later.'
       },
       errors: {
+        mediaTaskActive: 'Media task is active. Unresolved submissions can be reset after five minutes.',
+        mediaConfig: 'Invalid media configuration: select an exact preset or protocol and check duration/size.',
         invalidMultiplier: 'Multiplier must be a finite number greater than or equal to zero.',
         accountsUnavailable: 'Unable to load remote accounts. Refresh or sign in to the workspace again.',
         selectPriorityGroup: 'Select a specific group before changing priorities.',

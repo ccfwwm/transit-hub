@@ -1135,6 +1135,21 @@ func (s *Service) GetSite(ctx context.Context, siteID string) (*Site, error) {
 	return s.cache.Get(ctx, siteID)
 }
 
+// MonitorSites reads the workspace's site snapshot in one cache batch.
+func (s *Service) MonitorSites(ctx context.Context, userID, adminID string) (map[string]*Site, error) {
+	sites, err := s.cache.ListByUser(ctx, userID)
+	if err != nil {
+		return nil, err
+	}
+	result := map[string]*Site{}
+	for _, site := range sites {
+		if site.AdminAccountID == adminID {
+			result[site.ID] = site
+		}
+	}
+	return result, nil
+}
+
 func toResponse(site *Site) Response {
 	return Response{
 		ID:                site.ID,

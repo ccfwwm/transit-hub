@@ -6,6 +6,8 @@ export type ChannelMonitorStatus =
   | 'balance_paused'
   | 'manual_paused'
   | 'unsupported'
+  | 'generating'
+  | 'config_error'
 
 export interface ChannelMonitorStats {
   total: number
@@ -58,6 +60,11 @@ export interface ChannelMonitorChannel {
   adminAccountId: string
   adminAccountName: string
   ownGroups: string[]
+  ownGroupIds: string[]
+  detectionGroupId: string
+  effectiveTestMode: string
+  mediaTaskKey?: string
+  groupStates: Array<{groupId: string, status: ChannelMonitorStatus, model: string, mode: string, consecutiveFailures: number, message: string}>
   balance: number | null
   accountRateMultiplier: number | null
   accountPriority: number | null
@@ -227,6 +234,12 @@ export interface ChannelMonitorGroupModelConfig {
   groupId: string
   groupName: string
   modelId: string
+  mode?: 'text' | 'image' | 'video' | 'connection'
+  prompt?: string
+  size?: string
+  seconds?: number
+  adapter?: string
+  presetModel?: string
 }
 
 export interface UpdateChannelMonitorTestModelConfigRequest {

@@ -4,6 +4,7 @@ import (
 	"errors"
 	"net/http"
 	"strings"
+	"time"
 
 	"transithub/backend/internal/modules/upstream"
 	"transithub/backend/internal/shared/authctx"
@@ -17,6 +18,9 @@ type Handler struct {
 func RegisterRoutes(mux *http.ServeMux, service *Service) {
 	handler := &Handler{service: service}
 	mux.HandleFunc("GET /api/channel-monitor/summary", handler.summary)
+	mux.HandleFunc("GET /api/channel-monitor/channels", handler.channels)
+	mux.HandleFunc("GET /api/channel-monitor/rules/{id}/history", handler.history)
+	mux.HandleFunc("GET /api/channel-monitor/media-presets", handler.mediaPresets)
 	mux.HandleFunc("POST /api/channel-monitor/rules/{id}/run", handler.runRule)
 	mux.HandleFunc("POST /api/channel-monitor/rules/{id}/pause", handler.pauseRule)
 	mux.HandleFunc("POST /api/channel-monitor/rules/{id}/resume", handler.resumeRule)
@@ -34,6 +38,7 @@ func RegisterRoutes(mux *http.ServeMux, service *Service) {
 	mux.HandleFunc("POST /api/channel-monitor/rate-rule/apply", handler.applyRateRule)
 	mux.HandleFunc("PATCH /api/channel-monitor/priority-groups/{id}", handler.updatePriorityGroupRule)
 	mux.HandleFunc("PATCH /api/channel-monitor/test-model-config", handler.updateTestModelConfig)
+	mux.HandleFunc("POST /api/channel-monitor/media-tasks/reset", handler.resetMediaTask)
 }
 
 func (h *Handler) summary(w http.ResponseWriter, r *http.Request) {
@@ -42,10 +47,24 @@ func (h *Handler) summary(w http.ResponseWriter, r *http.Request) {
 		httpjson.WriteError(w, http.StatusUnauthorized, "auth.errors.unauthorized")
 		return
 	}
-	response, err := h.service.SummaryInGroup(r.Context(), userID, r.URL.Query().Get("groupId"))
+	if r.URL.Query().Get("refresh") == "true" {
+		if id, err := h.service.currentAdminAccountID(r.Context(), userID); err == nil {
+			h.service.invalidateAccountCache(userID, id)
+			h.service.invalidateGroupCache(userID, id)
+		}
+	}
+	light := r.URL.Query().Get("light") == "true"
+	response, err := h.service.summaryInGroup(r.Context(), userID, r.URL.Query().Get("groupId"), light)
 	if err != nil {
 		writeMonitorError(w, err)
 		return
+	}
+	if light {
+		response.Channels = []ChannelStatus{}
+		response.RateRule.Rows = []RatePlanRow{}
+		if response.RateRule.LastResult != nil {
+			response.RateRule.LastResult.Rows = []RatePlanRow{}
+		}
 	}
 	httpjson.Write(w, http.StatusOK, response)
 }
@@ -56,7 +75,7 @@ func (h *Handler) runRule(w http.ResponseWriter, r *http.Request) {
 		httpjson.WriteError(w, http.StatusUnauthorized, "auth.errors.unauthorized")
 		return
 	}
-	result, err := h.service.RunRuleForUser(r.Context(), userID, r.PathValue("id"), "manual")
+	result, err := h.service.RunRuleForUserInGroup(r.Context(), userID, r.PathValue("id"), "manual", r.URL.Query().Get("groupId"))
 	if err != nil {
 		writeMonitorError(w, err)
 		return
@@ -334,6 +353,43 @@ func (h *Handler) updateTestModelConfig(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	httpjson.Write(w, http.StatusOK, config)
+}
+
+func (h *Handler) resetMediaTask(w http.ResponseWriter, r *http.Request) {
+	userID, ok := authctx.UserID(r.Context())
+	if !ok {
+		httpjson.WriteError(w, http.StatusUnauthorized, "auth.errors.unauthorized")
+		return
+	}
+	var req ResetMediaTaskRequest
+	if err := httpjson.Decode(r, &req); err != nil || strings.TrimSpace(req.Key) == "" {
+		httpjson.WriteError(w, http.StatusBadRequest, "admin.channelMonitor.errors.request")
+		return
+	}
+	store, ok := h.service.store.(MediaTaskStore)
+	if !ok {
+		httpjson.WriteError(w, http.StatusNotImplemented, "admin.channelMonitor.errors.unknown")
+		return
+	}
+	task, err := store.GetMediaTask(r.Context(), strings.TrimSpace(req.Key))
+	if err != nil || task == nil || task.UserID != userID {
+		httpjson.WriteError(w, http.StatusNotFound, "admin.channelMonitor.errors.notFound")
+		return
+	}
+	adminID, err := h.service.currentAdminAccountID(r.Context(), userID)
+	if err != nil || task.AdminAccountID != adminID {
+		httpjson.WriteError(w, http.StatusNotFound, "admin.channelMonitor.errors.notFound")
+		return
+	}
+	if _, busy := h.service.mediaActive.Load(task.Key); busy || task.Status == "pending" || (task.Status == "submitting" && time.Since(task.CreatedAt) < 5*time.Minute) {
+		httpjson.WriteError(w, http.StatusConflict, "admin.channelMonitor.errors.mediaTaskActive")
+		return
+	}
+	if err := store.ResetMediaTask(r.Context(), task.Key); err != nil {
+		writeMonitorError(w, err)
+		return
+	}
+	httpjson.Write(w, http.StatusOK, map[string]bool{"success": true})
 }
 
 func writeMonitorError(w http.ResponseWriter, err error) {

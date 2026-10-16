@@ -1,0 +1,3787 @@
+[
+  {
+    "profile_id": "yunfei:gpt-image-2",
+    "version": "draft-v1",
+    "provider": "yunfei",
+    "model": "gpt-image-2",
+    "upstream_model": "gpt-image-2",
+    "adapter": "yunfei_gpt_images",
+    "media_type": "image",
+    "enabled": false,
+    "status": "draft",
+    "validation_status": "待渠道验证",
+    "source": "https://doc.yunfei.best/",
+    "scenarios": [
+      "gpt-text",
+      "gpt-edit"
+    ],
+    "operations": [
+      "image",
+      "image_edit"
+    ],
+    "formats": [
+      "json",
+      "multipart"
+    ],
+    "duration": {
+      "mode": "not_applicable",
+      "values": [],
+      "min": null,
+      "max": null,
+      "default": null,
+      "required": false,
+      "scenarios": []
+    },
+    "resolutions": [
+      "1K",
+      "2K",
+      "4K"
+    ],
+    "aspect_ratios": null,
+    "qualities": [
+      "medium",
+      "high"
+    ],
+    "resolution_policy": "native",
+    "materials": {
+      "image": {
+        "formats": [
+          "file_png",
+          "file_jpeg",
+          "file_webp"
+        ],
+        "max_count": null,
+        "max_file_bytes": null,
+        "max_duration_seconds": null
+      },
+      "video": {
+        "formats": [],
+        "max_count": 0,
+        "max_file_bytes": null,
+        "max_duration_seconds": null
+      },
+      "audio": {
+        "formats": [],
+        "max_count": 0,
+        "max_file_bytes": null,
+        "max_duration_seconds": null
+      }
+    },
+    "field_mapping": {
+      "image": "multipart:image[]",
+      "size": "size",
+      "quality": "quality"
+    },
+    "constraints": [
+      {
+        "n": 1,
+        "depends_on_authorized_group": true
+      }
+    ],
+    "unverified": [
+      "max_request_bytes",
+      "max_concurrent_tasks",
+      "observation_seconds",
+      "real_generation",
+      "image.max_count",
+      "image.max_file_bytes",
+      "size_pixel_enum_by_group"
+    ],
+    "delivery": {
+      "poll_seconds": 10,
+      "head": null,
+      "range": null,
+      "refresh": null
+    },
+    "limits": {
+      "max_request_bytes": null,
+      "max_concurrent_tasks": null,
+      "observation_seconds": null
+    }
+  },
+  {
+    "profile_id": "yunfei:gemini-3-pro-image-preview",
+    "version": "draft-v1",
+    "provider": "yunfei",
+    "model": "gemini-3-pro-image-preview",
+    "upstream_model": "gemini-3-pro-image-preview",
+    "adapter": "yunfei_gemini_native",
+    "media_type": "image",
+    "enabled": false,
+    "status": "draft",
+    "validation_status": "待渠道验证",
+    "source": "https://doc.yunfei.best/",
+    "scenarios": [
+      "banana-text",
+      "banana-edit"
+    ],
+    "operations": [
+      "gemini_image"
+    ],
+    "formats": [
+      "json"
+    ],
+    "duration": {
+      "mode": "not_applicable",
+      "values": [],
+      "min": null,
+      "max": null,
+      "default": null,
+      "required": false,
+      "scenarios": []
+    },
+    "resolutions": [
+      "1K",
+      "2K",
+      "4K"
+    ],
+    "aspect_ratios": [
+      "1:1",
+      "16:9",
+      "9:16",
+      "4:3",
+      "3:4",
+      "3:2",
+      "2:3",
+      "5:4",
+      "4:5",
+      "21:9"
+    ],
+    "qualities": null,
+    "resolution_policy": "native",
+    "materials": {
+      "image": {
+        "formats": [
+          "inline_data",
+          "file_data"
+        ],
+        "max_count": null,
+        "max_file_bytes": null,
+        "max_duration_seconds": null
+      },
+      "video": {
+        "formats": [],
+        "max_count": 0,
+        "max_file_bytes": null,
+        "max_duration_seconds": null
+      },
+      "audio": {
+        "formats": [],
+        "max_count": 0,
+        "max_file_bytes": null,
+        "max_duration_seconds": null
+      }
+    },
+    "field_mapping": {
+      "image": "contents[].parts[]",
+      "size": "generationConfig.imageConfig.imageSize"
+    },
+    "constraints": [
+      {
+        "n": 1,
+        "depends_on_authorized_group": true
+      },
+      {
+        "automatic_aspect_ratio": "omit",
+        "TEXT_url_output": "provider_extension"
+      }
+    ],
+    "unverified": [
+      "max_request_bytes",
+      "max_concurrent_tasks",
+      "observation_seconds",
+      "real_generation",
+      "image.max_count",
+      "image.max_file_bytes",
+      "channel_validation_of_source_declared_aspect_ratios"
+    ],
+    "delivery": {
+      "poll_seconds": 10,
+      "head": null,
+      "range": null,
+      "refresh": null
+    },
+    "limits": {
+      "max_request_bytes": null,
+      "max_concurrent_tasks": null,
+      "observation_seconds": null
+    }
+  },
+  {
+    "profile_id": "yunfei:gemini-3.1-flash-image-preview",
+    "version": "draft-v1",
+    "provider": "yunfei",
+    "model": "gemini-3.1-flash-image-preview",
+    "upstream_model": "gemini-3.1-flash-image-preview",
+    "adapter": "yunfei_gemini_native",
+    "media_type": "image",
+    "enabled": false,
+    "status": "draft",
+    "validation_status": "待渠道验证",
+    "source": "https://doc.yunfei.best/",
+    "scenarios": [
+      "banana-text",
+      "banana-edit"
+    ],
+    "operations": [
+      "gemini_image"
+    ],
+    "formats": [
+      "json"
+    ],
+    "duration": {
+      "mode": "not_applicable",
+      "values": [],
+      "min": null,
+      "max": null,
+      "default": null,
+      "required": false,
+      "scenarios": []
+    },
+    "resolutions": [
+      "1K",
+      "2K",
+      "4K"
+    ],
+    "aspect_ratios": [
+      "1:1",
+      "16:9",
+      "9:16",
+      "4:3",
+      "3:4",
+      "3:2",
+      "2:3",
+      "5:4",
+      "4:5",
+      "21:9",
+      "8:1",
+      "4:1",
+      "1:4",
+      "1:8"
+    ],
+    "qualities": null,
+    "resolution_policy": "native",
+    "materials": {
+      "image": {
+        "formats": [
+          "inline_data",
+          "file_data"
+        ],
+        "max_count": null,
+        "max_file_bytes": null,
+        "max_duration_seconds": null
+      },
+      "video": {
+        "formats": [],
+        "max_count": 0,
+        "max_file_bytes": null,
+        "max_duration_seconds": null
+      },
+      "audio": {
+        "formats": [],
+        "max_count": 0,
+        "max_file_bytes": null,
+        "max_duration_seconds": null
+      }
+    },
+    "field_mapping": {
+      "image": "contents[].parts[]",
+      "size": "generationConfig.imageConfig.imageSize"
+    },
+    "constraints": [
+      {
+        "n": 1,
+        "depends_on_authorized_group": true
+      },
+      {
+        "automatic_aspect_ratio": "omit",
+        "TEXT_url_output": "provider_extension"
+      }
+    ],
+    "unverified": [
+      "max_request_bytes",
+      "max_concurrent_tasks",
+      "observation_seconds",
+      "real_generation",
+      "image.max_count",
+      "image.max_file_bytes",
+      "channel_validation_of_source_declared_aspect_ratios"
+    ],
+    "delivery": {
+      "poll_seconds": 10,
+      "head": null,
+      "range": null,
+      "refresh": null
+    },
+    "limits": {
+      "max_request_bytes": null,
+      "max_concurrent_tasks": null,
+      "observation_seconds": null
+    }
+  },
+  {
+    "profile_id": "yunfei:grok-imagine-video",
+    "version": "draft-v1",
+    "provider": "yunfei",
+    "model": "grok-imagine-video",
+    "upstream_model": "grok-imagine-video",
+    "adapter": "yunfei_grok",
+    "media_type": "video",
+    "enabled": false,
+    "status": "draft",
+    "validation_status": "待渠道验证",
+    "source": "https://doc.yunfei.best/",
+    "scenarios": [
+      "grok-video-submit",
+      "grok-video-image",
+      "grok-video-result"
+    ],
+    "operations": [
+      "video"
+    ],
+    "formats": [
+      "json",
+      "multipart"
+    ],
+    "duration": {
+      "mode": "range",
+      "values": [],
+      "min": 1,
+      "max": 15,
+      "default": 8,
+      "required": false,
+      "scenarios": []
+    },
+    "resolutions": [
+      "480p",
+      "720p"
+    ],
+    "aspect_ratios": [
+      "1:1",
+      "16:9",
+      "9:16",
+      "4:3",
+      "3:4",
+      "3:2",
+      "2:3"
+    ],
+    "qualities": null,
+    "resolution_policy": "enum",
+    "materials": {
+      "image": {
+        "formats": [
+          "url_object",
+          "data_url_in_url_object",
+          "base64_in_url_object",
+          "multipart_input_reference"
+        ],
+        "max_count": 1,
+        "max_file_bytes": null,
+        "max_duration_seconds": null
+      },
+      "video": {
+        "formats": [],
+        "max_count": 0,
+        "max_file_bytes": null,
+        "max_duration_seconds": null
+      },
+      "audio": {
+        "formats": [],
+        "max_count": 0,
+        "max_file_bytes": null,
+        "max_duration_seconds": null
+      }
+    },
+    "field_mapping": {
+      "seconds": "duration",
+      "image": "image.url",
+      "resolution": "resolution"
+    },
+    "constraints": [
+      {
+        "image_aspect_ratio": "follow_reference",
+        "video_edit_extension_source_status": 503
+      }
+    ],
+    "unverified": [
+      "max_request_bytes",
+      "max_concurrent_tasks",
+      "observation_seconds",
+      "real_generation",
+      "image.max_file_bytes"
+    ],
+    "delivery": {
+      "poll_seconds": 10,
+      "head": null,
+      "range": null,
+      "refresh": null
+    },
+    "limits": {
+      "max_request_bytes": null,
+      "max_concurrent_tasks": null,
+      "observation_seconds": null
+    }
+  },
+  {
+    "profile_id": "yunfei:grok-imagine-video-1.5",
+    "version": "draft-v1",
+    "provider": "yunfei",
+    "model": "grok-imagine-video-1.5",
+    "upstream_model": "grok-imagine-video-1.5",
+    "adapter": "yunfei_grok",
+    "media_type": "video",
+    "enabled": false,
+    "status": "draft",
+    "validation_status": "待渠道验证",
+    "source": "https://doc.yunfei.best/",
+    "scenarios": [
+      "grok-video-submit",
+      "grok-video-image",
+      "grok-video-result"
+    ],
+    "operations": [
+      "video"
+    ],
+    "formats": [
+      "json",
+      "multipart"
+    ],
+    "duration": {
+      "mode": "range",
+      "values": [],
+      "min": 1,
+      "max": 15,
+      "default": 8,
+      "required": false,
+      "scenarios": []
+    },
+    "resolutions": [
+      "480p",
+      "720p",
+      "1080p"
+    ],
+    "aspect_ratios": [
+      "1:1",
+      "16:9",
+      "9:16",
+      "4:3",
+      "3:4",
+      "3:2",
+      "2:3"
+    ],
+    "qualities": null,
+    "resolution_policy": "enum",
+    "materials": {
+      "image": {
+        "formats": [
+          "url_object",
+          "data_url_in_url_object",
+          "base64_in_url_object",
+          "multipart_input_reference"
+        ],
+        "max_count": 1,
+        "max_file_bytes": null,
+        "max_duration_seconds": null
+      },
+      "video": {
+        "formats": [],
+        "max_count": 0,
+        "max_file_bytes": null,
+        "max_duration_seconds": null
+      },
+      "audio": {
+        "formats": [],
+        "max_count": 0,
+        "max_file_bytes": null,
+        "max_duration_seconds": null
+      }
+    },
+    "field_mapping": {
+      "seconds": "duration",
+      "image": "image.url",
+      "resolution": "resolution"
+    },
+    "constraints": [
+      {
+        "image_aspect_ratio": "follow_reference",
+        "video_edit_extension_source_status": 503
+      }
+    ],
+    "unverified": [
+      "max_request_bytes",
+      "max_concurrent_tasks",
+      "observation_seconds",
+      "real_generation",
+      "image.max_file_bytes"
+    ],
+    "delivery": {
+      "poll_seconds": 10,
+      "head": null,
+      "range": null,
+      "refresh": null
+    },
+    "limits": {
+      "max_request_bytes": null,
+      "max_concurrent_tasks": null,
+      "observation_seconds": null
+    }
+  },
+  {
+    "profile_id": "yunfei:omni-flash",
+    "version": "draft-v1",
+    "provider": "yunfei",
+    "model": "omni-flash",
+    "upstream_model": "omni-flash",
+    "adapter": "yunfei_omni",
+    "media_type": "video",
+    "enabled": false,
+    "status": "draft",
+    "validation_status": "待渠道验证",
+    "source": "https://doc.yunfei.best/",
+    "scenarios": [
+      "omni-video-submit",
+      "omni-video-image",
+      "omni-video-result"
+    ],
+    "operations": [
+      "video"
+    ],
+    "formats": [
+      "json"
+    ],
+    "duration": {
+      "mode": "enum",
+      "values": [
+        4,
+        6,
+        8,
+        10
+      ],
+      "min": null,
+      "max": null,
+      "default": 10,
+      "required": false,
+      "scenarios": []
+    },
+    "resolutions": [
+      "720p"
+    ],
+    "aspect_ratios": [
+      "16:9"
+    ],
+    "qualities": null,
+    "resolution_policy": "enum",
+    "materials": {
+      "image": {
+        "formats": [
+          "url_string",
+          "data_url",
+          "base64"
+        ],
+        "max_count": null,
+        "max_file_bytes": null,
+        "max_duration_seconds": null
+      },
+      "video": {
+        "formats": [],
+        "max_count": 0,
+        "max_file_bytes": null,
+        "max_duration_seconds": null
+      },
+      "audio": {
+        "formats": [],
+        "max_count": 0,
+        "max_file_bytes": null,
+        "max_duration_seconds": null
+      }
+    },
+    "field_mapping": {
+      "seconds": "duration",
+      "image": "image",
+      "images": "images"
+    },
+    "constraints": [
+      {
+        "seconds_upstream_type": "string",
+        "unsupported": [
+          "negative_prompt",
+          "generate_audio"
+        ],
+        "output": "1280x720"
+      }
+    ],
+    "unverified": [
+      "max_request_bytes",
+      "max_concurrent_tasks",
+      "observation_seconds",
+      "real_generation",
+      "image.max_count",
+      "image.max_file_bytes"
+    ],
+    "delivery": {
+      "poll_seconds": 10,
+      "head": null,
+      "range": null,
+      "refresh": null
+    },
+    "limits": {
+      "max_request_bytes": null,
+      "max_concurrent_tasks": null,
+      "observation_seconds": null
+    }
+  },
+  {
+    "profile_id": "yunfei:veo-3.1-fast",
+    "version": "draft-v1",
+    "provider": "yunfei",
+    "model": "veo-3.1-fast",
+    "upstream_model": "veo-3.1-fast",
+    "adapter": "yunfei_omni",
+    "media_type": "video",
+    "enabled": false,
+    "status": "draft",
+    "validation_status": "待渠道验证",
+    "source": "https://doc.yunfei.best/",
+    "scenarios": [
+      "omni-video-submit",
+      "omni-video-image",
+      "omni-video-result"
+    ],
+    "operations": [
+      "video"
+    ],
+    "formats": [
+      "json"
+    ],
+    "duration": {
+      "mode": "fixed",
+      "values": [
+        8
+      ],
+      "min": null,
+      "max": null,
+      "default": 8,
+      "required": false,
+      "scenarios": []
+    },
+    "resolutions": [
+      "720p"
+    ],
+    "aspect_ratios": [
+      "16:9"
+    ],
+    "qualities": null,
+    "resolution_policy": "enum",
+    "materials": {
+      "image": {
+        "formats": [
+          "url_string",
+          "data_url",
+          "base64"
+        ],
+        "max_count": null,
+        "max_file_bytes": null,
+        "max_duration_seconds": null
+      },
+      "video": {
+        "formats": [],
+        "max_count": 0,
+        "max_file_bytes": null,
+        "max_duration_seconds": null
+      },
+      "audio": {
+        "formats": [],
+        "max_count": 0,
+        "max_file_bytes": null,
+        "max_duration_seconds": null
+      }
+    },
+    "field_mapping": {
+      "seconds": "duration",
+      "image": "image",
+      "images": "images"
+    },
+    "constraints": [
+      {
+        "seconds_upstream_type": "string",
+        "unsupported": [
+          "negative_prompt",
+          "generate_audio"
+        ],
+        "output": "1280x720"
+      }
+    ],
+    "unverified": [
+      "max_request_bytes",
+      "max_concurrent_tasks",
+      "observation_seconds",
+      "real_generation",
+      "image.max_count",
+      "image.max_file_bytes"
+    ],
+    "delivery": {
+      "poll_seconds": 10,
+      "head": null,
+      "range": null,
+      "refresh": null
+    },
+    "limits": {
+      "max_request_bytes": null,
+      "max_concurrent_tasks": null,
+      "observation_seconds": null
+    }
+  },
+  {
+    "profile_id": "yunfei:veo-3.1-lite",
+    "version": "draft-v1",
+    "provider": "yunfei",
+    "model": "veo-3.1-lite",
+    "upstream_model": "veo-3.1-lite",
+    "adapter": "yunfei_omni",
+    "media_type": "video",
+    "enabled": false,
+    "status": "draft",
+    "validation_status": "待渠道验证",
+    "source": "https://doc.yunfei.best/",
+    "scenarios": [
+      "omni-video-submit",
+      "omni-video-image",
+      "omni-video-result"
+    ],
+    "operations": [
+      "video"
+    ],
+    "formats": [
+      "json"
+    ],
+    "duration": {
+      "mode": "fixed",
+      "values": [
+        8
+      ],
+      "min": null,
+      "max": null,
+      "default": 8,
+      "required": false,
+      "scenarios": []
+    },
+    "resolutions": [
+      "720p"
+    ],
+    "aspect_ratios": [
+      "16:9"
+    ],
+    "qualities": null,
+    "resolution_policy": "enum",
+    "materials": {
+      "image": {
+        "formats": [
+          "url_string",
+          "data_url",
+          "base64"
+        ],
+        "max_count": null,
+        "max_file_bytes": null,
+        "max_duration_seconds": null
+      },
+      "video": {
+        "formats": [],
+        "max_count": 0,
+        "max_file_bytes": null,
+        "max_duration_seconds": null
+      },
+      "audio": {
+        "formats": [],
+        "max_count": 0,
+        "max_file_bytes": null,
+        "max_duration_seconds": null
+      }
+    },
+    "field_mapping": {
+      "seconds": "duration",
+      "image": "image",
+      "images": "images"
+    },
+    "constraints": [
+      {
+        "seconds_upstream_type": "string",
+        "unsupported": [
+          "negative_prompt",
+          "generate_audio"
+        ],
+        "output": "1280x720"
+      }
+    ],
+    "unverified": [
+      "max_request_bytes",
+      "max_concurrent_tasks",
+      "observation_seconds",
+      "real_generation",
+      "image.max_count",
+      "image.max_file_bytes"
+    ],
+    "delivery": {
+      "poll_seconds": 10,
+      "head": null,
+      "range": null,
+      "refresh": null
+    },
+    "limits": {
+      "max_request_bytes": null,
+      "max_concurrent_tasks": null,
+      "observation_seconds": null
+    }
+  },
+  {
+    "profile_id": "yunfei:veo-3.1-quality",
+    "version": "draft-v1",
+    "provider": "yunfei",
+    "model": "veo-3.1-quality",
+    "upstream_model": "veo-3.1-quality",
+    "adapter": "yunfei_omni",
+    "media_type": "video",
+    "enabled": false,
+    "status": "draft",
+    "validation_status": "待渠道验证",
+    "source": "https://doc.yunfei.best/",
+    "scenarios": [
+      "omni-video-submit",
+      "omni-video-image",
+      "omni-video-result"
+    ],
+    "operations": [
+      "video"
+    ],
+    "formats": [
+      "json"
+    ],
+    "duration": {
+      "mode": "fixed",
+      "values": [
+        8
+      ],
+      "min": null,
+      "max": null,
+      "default": 8,
+      "required": false,
+      "scenarios": []
+    },
+    "resolutions": [
+      "720p"
+    ],
+    "aspect_ratios": [
+      "16:9"
+    ],
+    "qualities": null,
+    "resolution_policy": "enum",
+    "materials": {
+      "image": {
+        "formats": [
+          "url_string",
+          "data_url",
+          "base64"
+        ],
+        "max_count": null,
+        "max_file_bytes": null,
+        "max_duration_seconds": null
+      },
+      "video": {
+        "formats": [],
+        "max_count": 0,
+        "max_file_bytes": null,
+        "max_duration_seconds": null
+      },
+      "audio": {
+        "formats": [],
+        "max_count": 0,
+        "max_file_bytes": null,
+        "max_duration_seconds": null
+      }
+    },
+    "field_mapping": {
+      "seconds": "duration",
+      "image": "image",
+      "images": "images"
+    },
+    "constraints": [
+      {
+        "seconds_upstream_type": "string",
+        "unsupported": [
+          "negative_prompt",
+          "generate_audio"
+        ],
+        "output": "1280x720"
+      }
+    ],
+    "unverified": [
+      "max_request_bytes",
+      "max_concurrent_tasks",
+      "observation_seconds",
+      "real_generation",
+      "image.max_count",
+      "image.max_file_bytes"
+    ],
+    "delivery": {
+      "poll_seconds": 10,
+      "head": null,
+      "range": null,
+      "refresh": null
+    },
+    "limits": {
+      "max_request_bytes": null,
+      "max_concurrent_tasks": null,
+      "observation_seconds": null
+    }
+  },
+  {
+    "profile_id": "yunfei:veo-3.1-fast-generate-preview",
+    "version": "draft-v1",
+    "provider": "yunfei",
+    "model": "veo-3.1-fast-generate-preview",
+    "upstream_model": "veo-3.1-fast-generate-preview",
+    "adapter": "yunfei_veo_preview",
+    "media_type": "video",
+    "enabled": false,
+    "status": "draft",
+    "validation_status": "待渠道验证",
+    "source": "https://doc.yunfei.best/",
+    "scenarios": [
+      "veo-text",
+      "veo-image",
+      "veo-frames"
+    ],
+    "operations": [
+      "video"
+    ],
+    "formats": [
+      "json"
+    ],
+    "duration": {
+      "mode": "enum",
+      "values": [
+        4,
+        6,
+        8
+      ],
+      "min": null,
+      "max": null,
+      "default": null,
+      "required": true,
+      "scenarios": []
+    },
+    "resolutions": [
+      "720p"
+    ],
+    "aspect_ratios": [
+      "16:9",
+      "9:16"
+    ],
+    "qualities": null,
+    "resolution_policy": "enum",
+    "materials": {
+      "image": {
+        "formats": [
+          "url_string",
+          "data_url",
+          "base64"
+        ],
+        "max_count": 2,
+        "max_file_bytes": null,
+        "max_duration_seconds": null
+      },
+      "video": {
+        "formats": [],
+        "max_count": 0,
+        "max_file_bytes": null,
+        "max_duration_seconds": null
+      },
+      "audio": {
+        "formats": [],
+        "max_count": 0,
+        "max_file_bytes": null,
+        "max_duration_seconds": null
+      }
+    },
+    "field_mapping": {
+      "seconds": "duration",
+      "image": "image_url",
+      "images": "image_urls"
+    },
+    "constraints": [
+      {
+        "image_urls_roles": [
+          "first_frame",
+          "last_frame"
+        ],
+        "image_urls_exact_count": 2
+      }
+    ],
+    "unverified": [
+      "max_request_bytes",
+      "max_concurrent_tasks",
+      "observation_seconds",
+      "real_generation",
+      "image.max_file_bytes"
+    ],
+    "delivery": {
+      "poll_seconds": 10,
+      "head": null,
+      "range": null,
+      "refresh": null
+    },
+    "limits": {
+      "max_request_bytes": null,
+      "max_concurrent_tasks": null,
+      "observation_seconds": null
+    }
+  },
+  {
+    "profile_id": "yunfei:veo-3.1-generate-preview",
+    "version": "draft-v1",
+    "provider": "yunfei",
+    "model": "veo-3.1-generate-preview",
+    "upstream_model": "veo-3.1-generate-preview",
+    "adapter": "yunfei_veo_preview",
+    "media_type": "video",
+    "enabled": false,
+    "status": "draft",
+    "validation_status": "待渠道验证",
+    "source": "https://doc.yunfei.best/",
+    "scenarios": [
+      "veo-text",
+      "veo-image",
+      "veo-frames"
+    ],
+    "operations": [
+      "video"
+    ],
+    "formats": [
+      "json"
+    ],
+    "duration": {
+      "mode": "enum",
+      "values": [
+        4,
+        6,
+        8
+      ],
+      "min": null,
+      "max": null,
+      "default": null,
+      "required": true,
+      "scenarios": []
+    },
+    "resolutions": [
+      "720p"
+    ],
+    "aspect_ratios": [
+      "16:9",
+      "9:16"
+    ],
+    "qualities": null,
+    "resolution_policy": "enum",
+    "materials": {
+      "image": {
+        "formats": [
+          "url_string",
+          "data_url",
+          "base64"
+        ],
+        "max_count": 2,
+        "max_file_bytes": null,
+        "max_duration_seconds": null
+      },
+      "video": {
+        "formats": [],
+        "max_count": 0,
+        "max_file_bytes": null,
+        "max_duration_seconds": null
+      },
+      "audio": {
+        "formats": [],
+        "max_count": 0,
+        "max_file_bytes": null,
+        "max_duration_seconds": null
+      }
+    },
+    "field_mapping": {
+      "seconds": "duration",
+      "image": "image_url",
+      "images": "image_urls"
+    },
+    "constraints": [
+      {
+        "image_urls_roles": [
+          "first_frame",
+          "last_frame"
+        ],
+        "image_urls_exact_count": 2
+      }
+    ],
+    "unverified": [
+      "max_request_bytes",
+      "max_concurrent_tasks",
+      "observation_seconds",
+      "real_generation",
+      "image.max_file_bytes"
+    ],
+    "delivery": {
+      "poll_seconds": 10,
+      "head": null,
+      "range": null,
+      "refresh": null
+    },
+    "limits": {
+      "max_request_bytes": null,
+      "max_concurrent_tasks": null,
+      "observation_seconds": null
+    }
+  },
+  {
+    "profile_id": "yunfei:veo-3.1-generate-preview-ref",
+    "version": "draft-v1",
+    "provider": "yunfei",
+    "model": "veo-3.1-generate-preview-ref",
+    "upstream_model": "veo-3.1-generate-preview-ref",
+    "adapter": "yunfei_veo_preview",
+    "media_type": "video",
+    "enabled": false,
+    "status": "draft",
+    "validation_status": "待渠道验证",
+    "source": "https://doc.yunfei.best/",
+    "scenarios": [
+      "veo-text",
+      "veo-ref"
+    ],
+    "operations": [
+      "video"
+    ],
+    "formats": [
+      "json"
+    ],
+    "duration": {
+      "mode": "enum",
+      "values": [
+        4,
+        6,
+        8
+      ],
+      "min": null,
+      "max": null,
+      "default": null,
+      "required": true,
+      "scenarios": [
+        {
+          "with_images": true,
+          "fixed": 8,
+          "aspect_ratio": "16:9"
+        }
+      ]
+    },
+    "resolutions": [
+      "720p"
+    ],
+    "aspect_ratios": [
+      "16:9",
+      "9:16"
+    ],
+    "qualities": null,
+    "resolution_policy": "enum",
+    "materials": {
+      "image": {
+        "formats": [
+          "url_string",
+          "data_url",
+          "base64"
+        ],
+        "max_count": null,
+        "max_file_bytes": null,
+        "max_duration_seconds": null
+      },
+      "video": {
+        "formats": [],
+        "max_count": 0,
+        "max_file_bytes": null,
+        "max_duration_seconds": null
+      },
+      "audio": {
+        "formats": [],
+        "max_count": 0,
+        "max_file_bytes": null,
+        "max_duration_seconds": null
+      }
+    },
+    "field_mapping": {
+      "seconds": "duration",
+      "image": "image_url",
+      "images": "image_urls"
+    },
+    "constraints": [],
+    "unverified": [
+      "max_request_bytes",
+      "max_concurrent_tasks",
+      "observation_seconds",
+      "real_generation",
+      "image.max_count",
+      "image.max_file_bytes"
+    ],
+    "delivery": {
+      "poll_seconds": 10,
+      "head": null,
+      "range": null,
+      "refresh": null
+    },
+    "limits": {
+      "max_request_bytes": null,
+      "max_concurrent_tasks": null,
+      "observation_seconds": null
+    }
+  },
+  {
+    "profile_id": "yunfei:lyria-3.5",
+    "version": "draft-v1",
+    "provider": "yunfei",
+    "model": "lyria-3.5",
+    "upstream_model": "lyria-3.5",
+    "adapter": "yunfei_lyria",
+    "media_type": "audio",
+    "enabled": false,
+    "status": "draft",
+    "validation_status": "待渠道验证",
+    "source": "https://doc.yunfei.best/",
+    "scenarios": [
+      "audio-chat",
+      "audio-submit",
+      "audio-compat",
+      "audio-models",
+      "audio-endpoints"
+    ],
+    "operations": [
+      "audio",
+      "music",
+      "chat_music"
+    ],
+    "formats": [
+      "json"
+    ],
+    "duration": {
+      "mode": "hint",
+      "values": [],
+      "min": 5,
+      "max": 300,
+      "default": null,
+      "required": false,
+      "scenarios": []
+    },
+    "resolutions": null,
+    "aspect_ratios": null,
+    "qualities": null,
+    "resolution_policy": "native",
+    "materials": {
+      "image": {
+        "formats": [],
+        "max_count": 0,
+        "max_file_bytes": null,
+        "max_duration_seconds": null
+      },
+      "video": {
+        "formats": [],
+        "max_count": 0,
+        "max_file_bytes": null,
+        "max_duration_seconds": null
+      },
+      "audio": {
+        "formats": [],
+        "max_count": 0,
+        "max_file_bytes": null,
+        "max_duration_seconds": null
+      }
+    },
+    "field_mapping": {},
+    "constraints": [
+      {
+        "source_dedicated_endpoint_status": 404
+      },
+      {
+        "prompt_max": 10000,
+        "title_max": 160,
+        "lyrics_max": 20000,
+        "n": 1,
+        "bpm_min": 30,
+        "bpm_max": 300,
+        "seed_min": 0,
+        "seed_max": 2147483647,
+        "instrumental_ignores_lyrics": true,
+        "audio_formats": [
+          "mp3",
+          "wav",
+          "m4a"
+        ],
+        "b64_max_bytes_source": "30 MB"
+      },
+      {
+        "duration_hint_is_not_output_cap": true
+      }
+    ],
+    "unverified": [
+      "max_request_bytes",
+      "max_concurrent_tasks",
+      "observation_seconds",
+      "real_generation",
+      "dedicated_endpoints",
+      "sse",
+      "chat_extension_parameters",
+      "maximum_actual_duration"
+    ],
+    "delivery": {
+      "poll_seconds": 10,
+      "head": null,
+      "range": null,
+      "refresh": null
+    },
+    "limits": {
+      "max_request_bytes": null,
+      "max_concurrent_tasks": null,
+      "observation_seconds": null
+    }
+  },
+  {
+    "profile_id": "yunfei:lyria-3-pro",
+    "version": "draft-v1",
+    "provider": "yunfei",
+    "model": "lyria-3-pro",
+    "upstream_model": "lyria-3-pro",
+    "adapter": "yunfei_lyria",
+    "media_type": "audio",
+    "enabled": false,
+    "status": "draft",
+    "validation_status": "待渠道验证",
+    "source": "https://doc.yunfei.best/",
+    "scenarios": [
+      "audio-chat",
+      "audio-submit",
+      "audio-compat",
+      "audio-models",
+      "audio-endpoints"
+    ],
+    "operations": [
+      "audio",
+      "music",
+      "chat_music"
+    ],
+    "formats": [
+      "json"
+    ],
+    "duration": {
+      "mode": "hint",
+      "values": [],
+      "min": 5,
+      "max": 300,
+      "default": null,
+      "required": false,
+      "scenarios": []
+    },
+    "resolutions": null,
+    "aspect_ratios": null,
+    "qualities": null,
+    "resolution_policy": "native",
+    "materials": {
+      "image": {
+        "formats": [],
+        "max_count": 0,
+        "max_file_bytes": null,
+        "max_duration_seconds": null
+      },
+      "video": {
+        "formats": [],
+        "max_count": 0,
+        "max_file_bytes": null,
+        "max_duration_seconds": null
+      },
+      "audio": {
+        "formats": [],
+        "max_count": 0,
+        "max_file_bytes": null,
+        "max_duration_seconds": null
+      }
+    },
+    "field_mapping": {},
+    "constraints": [
+      {
+        "source_dedicated_endpoint_status": 404
+      },
+      {
+        "prompt_max": 10000,
+        "title_max": 160,
+        "lyrics_max": 20000,
+        "n": 1,
+        "bpm_min": 30,
+        "bpm_max": 300,
+        "seed_min": 0,
+        "seed_max": 2147483647,
+        "instrumental_ignores_lyrics": true,
+        "audio_formats": [
+          "mp3",
+          "wav",
+          "m4a"
+        ],
+        "b64_max_bytes_source": "30 MB"
+      },
+      {
+        "duration_hint_is_not_output_cap": true
+      }
+    ],
+    "unverified": [
+      "max_request_bytes",
+      "max_concurrent_tasks",
+      "observation_seconds",
+      "real_generation",
+      "dedicated_endpoints",
+      "sse",
+      "chat_extension_parameters",
+      "maximum_actual_duration"
+    ],
+    "delivery": {
+      "poll_seconds": 10,
+      "head": null,
+      "range": null,
+      "refresh": null
+    },
+    "limits": {
+      "max_request_bytes": null,
+      "max_concurrent_tasks": null,
+      "observation_seconds": null
+    }
+  },
+  {
+    "profile_id": "v6k:00sd2.0",
+    "version": "draft-v1",
+    "provider": "v6k",
+    "model": "00sd2.0",
+    "upstream_model": "00sd2.0",
+    "adapter": "v6k_video_gateway",
+    "media_type": "video",
+    "enabled": false,
+    "status": "draft",
+    "validation_status": "待渠道验证",
+    "source": "https://www.v6k.top/docs#video",
+    "scenarios": [
+      "video-submit",
+      "video-query",
+      "video-download"
+    ],
+    "operations": [
+      "video"
+    ],
+    "formats": [
+      "json"
+    ],
+    "duration": {
+      "mode": "enum",
+      "values": [
+        5,
+        10,
+        15
+      ],
+      "min": null,
+      "max": null,
+      "default": 5,
+      "required": false,
+      "scenarios": []
+    },
+    "resolutions": null,
+    "aspect_ratios": null,
+    "qualities": null,
+    "resolution_policy": "omit",
+    "materials": {
+      "image": {
+        "formats": [
+          "public_url_object"
+        ],
+        "max_count": 10,
+        "max_file_bytes": null,
+        "max_duration_seconds": null
+      },
+      "video": {
+        "formats": [],
+        "max_count": 0,
+        "max_file_bytes": null,
+        "max_duration_seconds": null
+      },
+      "audio": {
+        "formats": [],
+        "max_count": 0,
+        "max_file_bytes": null,
+        "max_duration_seconds": null
+      }
+    },
+    "field_mapping": {
+      "duration": "seconds",
+      "aspect_ratio": "ratio"
+    },
+    "constraints": [],
+    "unverified": [
+      "max_request_bytes",
+      "max_concurrent_tasks",
+      "observation_seconds",
+      "real_generation",
+      "image.max_file_bytes"
+    ],
+    "delivery": {
+      "poll_seconds": 20,
+      "head": null,
+      "range": null,
+      "refresh": null
+    },
+    "limits": {
+      "max_request_bytes": null,
+      "max_concurrent_tasks": null,
+      "observation_seconds": null
+    }
+  },
+  {
+    "profile_id": "v6k:00sd2.5",
+    "version": "draft-v1",
+    "provider": "v6k",
+    "model": "00sd2.5",
+    "upstream_model": "00sd2.5",
+    "adapter": "v6k_video_gateway",
+    "media_type": "video",
+    "enabled": false,
+    "status": "draft",
+    "validation_status": "待渠道验证",
+    "source": "https://www.v6k.top/docs#video",
+    "scenarios": [
+      "video-submit",
+      "video-query",
+      "video-download"
+    ],
+    "operations": [
+      "video"
+    ],
+    "formats": [
+      "json"
+    ],
+    "duration": {
+      "mode": "fixed",
+      "values": [
+        30
+      ],
+      "min": null,
+      "max": null,
+      "default": 30,
+      "required": false,
+      "scenarios": []
+    },
+    "resolutions": null,
+    "aspect_ratios": null,
+    "qualities": null,
+    "resolution_policy": "omit",
+    "materials": {
+      "image": {
+        "formats": [
+          "public_url_object"
+        ],
+        "max_count": 10,
+        "max_file_bytes": null,
+        "max_duration_seconds": null
+      },
+      "video": {
+        "formats": [],
+        "max_count": 0,
+        "max_file_bytes": null,
+        "max_duration_seconds": null
+      },
+      "audio": {
+        "formats": [],
+        "max_count": 0,
+        "max_file_bytes": null,
+        "max_duration_seconds": null
+      }
+    },
+    "field_mapping": {
+      "duration": "seconds",
+      "aspect_ratio": "ratio"
+    },
+    "constraints": [],
+    "unverified": [
+      "max_request_bytes",
+      "max_concurrent_tasks",
+      "observation_seconds",
+      "real_generation",
+      "image.max_file_bytes"
+    ],
+    "delivery": {
+      "poll_seconds": 20,
+      "head": null,
+      "range": null,
+      "refresh": null
+    },
+    "limits": {
+      "max_request_bytes": null,
+      "max_concurrent_tasks": null,
+      "observation_seconds": null
+    }
+  },
+  {
+    "profile_id": "v6k:XXsedanco2.0",
+    "version": "draft-v1",
+    "provider": "v6k",
+    "model": "XXsedanco2.0",
+    "upstream_model": "XXsedanco2.0",
+    "adapter": "v6k_video_gateway",
+    "media_type": "video",
+    "enabled": false,
+    "status": "draft",
+    "validation_status": "待渠道验证",
+    "source": "https://www.v6k.top/docs#video",
+    "scenarios": [
+      "video-submit",
+      "video-query",
+      "video-download"
+    ],
+    "operations": [
+      "video"
+    ],
+    "formats": [
+      "json"
+    ],
+    "duration": {
+      "mode": "unknown",
+      "values": [],
+      "min": null,
+      "max": null,
+      "default": null,
+      "required": true,
+      "scenarios": []
+    },
+    "resolutions": null,
+    "aspect_ratios": null,
+    "qualities": null,
+    "resolution_policy": "unknown",
+    "materials": {
+      "image": {
+        "formats": [
+          "public_url_string",
+          "public_url_object"
+        ],
+        "max_count": null,
+        "max_file_bytes": null,
+        "max_duration_seconds": null
+      },
+      "video": {
+        "formats": [
+          "public_url_string",
+          "public_url_object"
+        ],
+        "max_count": null,
+        "max_file_bytes": null,
+        "max_duration_seconds": null
+      },
+      "audio": {
+        "formats": [
+          "public_url_string",
+          "public_url_object"
+        ],
+        "max_count": null,
+        "max_file_bytes": null,
+        "max_duration_seconds": null
+      }
+    },
+    "field_mapping": {
+      "duration": "seconds",
+      "aspect_ratio": "ratio"
+    },
+    "constraints": [],
+    "unverified": [
+      "max_request_bytes",
+      "max_concurrent_tasks",
+      "observation_seconds",
+      "real_generation",
+      "image.max_count",
+      "image.max_file_bytes",
+      "video.max_count",
+      "video.max_file_bytes",
+      "audio.max_count",
+      "audio.max_file_bytes",
+      "duration_enum",
+      "resolution_enum",
+      "allowed_material_types"
+    ],
+    "delivery": {
+      "poll_seconds": 20,
+      "head": null,
+      "range": null,
+      "refresh": null
+    },
+    "limits": {
+      "max_request_bytes": null,
+      "max_concurrent_tasks": null,
+      "observation_seconds": null
+    }
+  },
+  {
+    "profile_id": "v6k:XXsedanco2.0mini",
+    "version": "draft-v1",
+    "provider": "v6k",
+    "model": "XXsedanco2.0mini",
+    "upstream_model": "XXsedanco2.0mini",
+    "adapter": "v6k_video_gateway",
+    "media_type": "video",
+    "enabled": false,
+    "status": "draft",
+    "validation_status": "待渠道验证",
+    "source": "https://www.v6k.top/docs#video",
+    "scenarios": [
+      "video-submit",
+      "video-query",
+      "video-download"
+    ],
+    "operations": [
+      "video"
+    ],
+    "formats": [
+      "json"
+    ],
+    "duration": {
+      "mode": "unknown",
+      "values": [],
+      "min": null,
+      "max": null,
+      "default": null,
+      "required": true,
+      "scenarios": []
+    },
+    "resolutions": null,
+    "aspect_ratios": null,
+    "qualities": null,
+    "resolution_policy": "unknown",
+    "materials": {
+      "image": {
+        "formats": [
+          "public_url_string",
+          "public_url_object"
+        ],
+        "max_count": null,
+        "max_file_bytes": null,
+        "max_duration_seconds": null
+      },
+      "video": {
+        "formats": [
+          "public_url_string",
+          "public_url_object"
+        ],
+        "max_count": null,
+        "max_file_bytes": null,
+        "max_duration_seconds": null
+      },
+      "audio": {
+        "formats": [
+          "public_url_string",
+          "public_url_object"
+        ],
+        "max_count": null,
+        "max_file_bytes": null,
+        "max_duration_seconds": null
+      }
+    },
+    "field_mapping": {
+      "duration": "seconds",
+      "aspect_ratio": "ratio"
+    },
+    "constraints": [],
+    "unverified": [
+      "max_request_bytes",
+      "max_concurrent_tasks",
+      "observation_seconds",
+      "real_generation",
+      "image.max_count",
+      "image.max_file_bytes",
+      "video.max_count",
+      "video.max_file_bytes",
+      "audio.max_count",
+      "audio.max_file_bytes",
+      "duration_enum",
+      "resolution_enum",
+      "allowed_material_types"
+    ],
+    "delivery": {
+      "poll_seconds": 20,
+      "head": null,
+      "range": null,
+      "refresh": null
+    },
+    "limits": {
+      "max_request_bytes": null,
+      "max_concurrent_tasks": null,
+      "observation_seconds": null
+    }
+  },
+  {
+    "profile_id": "v6k:XXsedanco2.0S",
+    "version": "draft-v1",
+    "provider": "v6k",
+    "model": "XXsedanco2.0S",
+    "upstream_model": "XXsedanco2.0S",
+    "adapter": "v6k_video_gateway",
+    "media_type": "video",
+    "enabled": false,
+    "status": "draft",
+    "validation_status": "待渠道验证",
+    "source": "https://www.v6k.top/docs#video",
+    "scenarios": [
+      "video-submit",
+      "video-query",
+      "video-download"
+    ],
+    "operations": [
+      "video"
+    ],
+    "formats": [
+      "json"
+    ],
+    "duration": {
+      "mode": "unknown",
+      "values": [],
+      "min": null,
+      "max": null,
+      "default": null,
+      "required": true,
+      "scenarios": []
+    },
+    "resolutions": null,
+    "aspect_ratios": null,
+    "qualities": null,
+    "resolution_policy": "unknown",
+    "materials": {
+      "image": {
+        "formats": [
+          "public_url_string",
+          "public_url_object"
+        ],
+        "max_count": null,
+        "max_file_bytes": null,
+        "max_duration_seconds": null
+      },
+      "video": {
+        "formats": [
+          "public_url_string",
+          "public_url_object"
+        ],
+        "max_count": null,
+        "max_file_bytes": null,
+        "max_duration_seconds": null
+      },
+      "audio": {
+        "formats": [
+          "public_url_string",
+          "public_url_object"
+        ],
+        "max_count": null,
+        "max_file_bytes": null,
+        "max_duration_seconds": null
+      }
+    },
+    "field_mapping": {
+      "duration": "seconds",
+      "aspect_ratio": "ratio"
+    },
+    "constraints": [],
+    "unverified": [
+      "max_request_bytes",
+      "max_concurrent_tasks",
+      "observation_seconds",
+      "real_generation",
+      "image.max_count",
+      "image.max_file_bytes",
+      "video.max_count",
+      "video.max_file_bytes",
+      "audio.max_count",
+      "audio.max_file_bytes",
+      "duration_enum",
+      "resolution_enum",
+      "allowed_material_types"
+    ],
+    "delivery": {
+      "poll_seconds": 20,
+      "head": null,
+      "range": null,
+      "refresh": null
+    },
+    "limits": {
+      "max_request_bytes": null,
+      "max_concurrent_tasks": null,
+      "observation_seconds": null
+    }
+  },
+  {
+    "profile_id": "v6k:XXsedanco2.5S",
+    "version": "draft-v1",
+    "provider": "v6k",
+    "model": "XXsedanco2.5S",
+    "upstream_model": "XXsedanco2.5S",
+    "adapter": "v6k_video_gateway",
+    "media_type": "video",
+    "enabled": false,
+    "status": "draft",
+    "validation_status": "待渠道验证",
+    "source": "https://www.v6k.top/docs#video",
+    "scenarios": [
+      "video-submit",
+      "video-query",
+      "video-download"
+    ],
+    "operations": [
+      "video"
+    ],
+    "formats": [
+      "json"
+    ],
+    "duration": {
+      "mode": "unknown",
+      "values": [],
+      "min": null,
+      "max": null,
+      "default": null,
+      "required": true,
+      "scenarios": []
+    },
+    "resolutions": null,
+    "aspect_ratios": null,
+    "qualities": null,
+    "resolution_policy": "unknown",
+    "materials": {
+      "image": {
+        "formats": [
+          "public_url_string",
+          "public_url_object"
+        ],
+        "max_count": null,
+        "max_file_bytes": null,
+        "max_duration_seconds": null
+      },
+      "video": {
+        "formats": [
+          "public_url_string",
+          "public_url_object"
+        ],
+        "max_count": null,
+        "max_file_bytes": null,
+        "max_duration_seconds": null
+      },
+      "audio": {
+        "formats": [
+          "public_url_string",
+          "public_url_object"
+        ],
+        "max_count": null,
+        "max_file_bytes": null,
+        "max_duration_seconds": null
+      }
+    },
+    "field_mapping": {
+      "duration": "seconds",
+      "aspect_ratio": "ratio"
+    },
+    "constraints": [],
+    "unverified": [
+      "max_request_bytes",
+      "max_concurrent_tasks",
+      "observation_seconds",
+      "real_generation",
+      "image.max_count",
+      "image.max_file_bytes",
+      "video.max_count",
+      "video.max_file_bytes",
+      "audio.max_count",
+      "audio.max_file_bytes",
+      "duration_enum",
+      "resolution_enum",
+      "allowed_material_types"
+    ],
+    "delivery": {
+      "poll_seconds": 20,
+      "head": null,
+      "range": null,
+      "refresh": null
+    },
+    "limits": {
+      "max_request_bytes": null,
+      "max_concurrent_tasks": null,
+      "observation_seconds": null
+    }
+  },
+  {
+    "profile_id": "v6k:wan3.0",
+    "version": "draft-v1",
+    "provider": "v6k",
+    "model": "wan3.0",
+    "upstream_model": "wan3.0",
+    "adapter": "v6k_video_gateway",
+    "media_type": "video",
+    "enabled": false,
+    "status": "draft",
+    "validation_status": "待渠道验证",
+    "source": "https://www.v6k.top/docs#video",
+    "scenarios": [
+      "video-submit",
+      "video-query",
+      "video-download"
+    ],
+    "operations": [
+      "video"
+    ],
+    "formats": [
+      "json"
+    ],
+    "duration": {
+      "mode": "unknown",
+      "values": [],
+      "min": null,
+      "max": null,
+      "default": null,
+      "required": true,
+      "scenarios": []
+    },
+    "resolutions": null,
+    "aspect_ratios": null,
+    "qualities": null,
+    "resolution_policy": "unknown",
+    "materials": {
+      "image": {
+        "formats": [
+          "public_url_string",
+          "public_url_object"
+        ],
+        "max_count": null,
+        "max_file_bytes": null,
+        "max_duration_seconds": null
+      },
+      "video": {
+        "formats": [
+          "public_url_string",
+          "public_url_object"
+        ],
+        "max_count": null,
+        "max_file_bytes": null,
+        "max_duration_seconds": null
+      },
+      "audio": {
+        "formats": [
+          "public_url_string",
+          "public_url_object"
+        ],
+        "max_count": null,
+        "max_file_bytes": null,
+        "max_duration_seconds": null
+      }
+    },
+    "field_mapping": {
+      "duration": "seconds",
+      "aspect_ratio": "ratio"
+    },
+    "constraints": [],
+    "unverified": [
+      "max_request_bytes",
+      "max_concurrent_tasks",
+      "observation_seconds",
+      "real_generation",
+      "image.max_count",
+      "image.max_file_bytes",
+      "video.max_count",
+      "video.max_file_bytes",
+      "audio.max_count",
+      "audio.max_file_bytes",
+      "duration_enum",
+      "resolution_enum",
+      "allowed_material_types"
+    ],
+    "delivery": {
+      "poll_seconds": 20,
+      "head": null,
+      "range": null,
+      "refresh": null
+    },
+    "limits": {
+      "max_request_bytes": null,
+      "max_concurrent_tasks": null,
+      "observation_seconds": null
+    }
+  },
+  {
+    "profile_id": "v6k:seedance-mini",
+    "version": "draft-v1",
+    "provider": "v6k",
+    "model": "seedance-mini",
+    "upstream_model": "seedance-mini",
+    "adapter": "v6k_video_gateway",
+    "media_type": "video",
+    "enabled": false,
+    "status": "draft",
+    "validation_status": "待渠道验证",
+    "source": "https://www.v6k.top/docs#video",
+    "scenarios": [
+      "video-submit",
+      "video-query",
+      "video-download"
+    ],
+    "operations": [
+      "video"
+    ],
+    "formats": [
+      "json"
+    ],
+    "duration": {
+      "mode": "unknown",
+      "values": [],
+      "min": null,
+      "max": null,
+      "default": null,
+      "required": true,
+      "scenarios": []
+    },
+    "resolutions": null,
+    "aspect_ratios": null,
+    "qualities": null,
+    "resolution_policy": "unknown",
+    "materials": {
+      "image": {
+        "formats": [
+          "public_url_string",
+          "public_url_object"
+        ],
+        "max_count": null,
+        "max_file_bytes": null,
+        "max_duration_seconds": null
+      },
+      "video": {
+        "formats": [
+          "public_url_string",
+          "public_url_object"
+        ],
+        "max_count": null,
+        "max_file_bytes": null,
+        "max_duration_seconds": null
+      },
+      "audio": {
+        "formats": [
+          "public_url_string",
+          "public_url_object"
+        ],
+        "max_count": null,
+        "max_file_bytes": null,
+        "max_duration_seconds": null
+      }
+    },
+    "field_mapping": {
+      "duration": "seconds",
+      "aspect_ratio": "ratio"
+    },
+    "constraints": [],
+    "unverified": [
+      "max_request_bytes",
+      "max_concurrent_tasks",
+      "observation_seconds",
+      "real_generation",
+      "image.max_count",
+      "image.max_file_bytes",
+      "video.max_count",
+      "video.max_file_bytes",
+      "audio.max_count",
+      "audio.max_file_bytes",
+      "duration_enum",
+      "resolution_enum",
+      "allowed_material_types"
+    ],
+    "delivery": {
+      "poll_seconds": 20,
+      "head": null,
+      "range": null,
+      "refresh": null
+    },
+    "limits": {
+      "max_request_bytes": null,
+      "max_concurrent_tasks": null,
+      "observation_seconds": null
+    }
+  },
+  {
+    "profile_id": "v6k:seadanco-oplu-480",
+    "version": "draft-v1",
+    "provider": "v6k",
+    "model": "seadanco-oplu-480",
+    "upstream_model": "seadanco-oplu-480",
+    "adapter": "v6k_video_gateway",
+    "media_type": "video",
+    "enabled": false,
+    "status": "draft",
+    "validation_status": "待渠道验证",
+    "source": "https://www.v6k.top/docs#video",
+    "scenarios": [
+      "video-submit",
+      "video-query",
+      "video-download"
+    ],
+    "operations": [
+      "video"
+    ],
+    "formats": [
+      "json"
+    ],
+    "duration": {
+      "mode": "unknown",
+      "values": [],
+      "min": null,
+      "max": null,
+      "default": null,
+      "required": true,
+      "scenarios": []
+    },
+    "resolutions": null,
+    "aspect_ratios": null,
+    "qualities": null,
+    "resolution_policy": "unknown",
+    "materials": {
+      "image": {
+        "formats": [
+          "public_url_string",
+          "public_url_object"
+        ],
+        "max_count": null,
+        "max_file_bytes": null,
+        "max_duration_seconds": null
+      },
+      "video": {
+        "formats": [
+          "public_url_string",
+          "public_url_object"
+        ],
+        "max_count": null,
+        "max_file_bytes": null,
+        "max_duration_seconds": null
+      },
+      "audio": {
+        "formats": [
+          "public_url_string",
+          "public_url_object"
+        ],
+        "max_count": null,
+        "max_file_bytes": null,
+        "max_duration_seconds": null
+      }
+    },
+    "field_mapping": {
+      "duration": "seconds",
+      "aspect_ratio": "ratio"
+    },
+    "constraints": [],
+    "unverified": [
+      "max_request_bytes",
+      "max_concurrent_tasks",
+      "observation_seconds",
+      "real_generation",
+      "image.max_count",
+      "image.max_file_bytes",
+      "video.max_count",
+      "video.max_file_bytes",
+      "audio.max_count",
+      "audio.max_file_bytes",
+      "duration_enum",
+      "resolution_enum",
+      "allowed_material_types"
+    ],
+    "delivery": {
+      "poll_seconds": 20,
+      "head": null,
+      "range": null,
+      "refresh": null
+    },
+    "limits": {
+      "max_request_bytes": null,
+      "max_concurrent_tasks": null,
+      "observation_seconds": null
+    }
+  },
+  {
+    "profile_id": "v6k:seadanco-oplu-720",
+    "version": "draft-v1",
+    "provider": "v6k",
+    "model": "seadanco-oplu-720",
+    "upstream_model": "seadanco-oplu-720",
+    "adapter": "v6k_video_gateway",
+    "media_type": "video",
+    "enabled": false,
+    "status": "draft",
+    "validation_status": "待渠道验证",
+    "source": "https://www.v6k.top/docs#video",
+    "scenarios": [
+      "video-submit",
+      "video-query",
+      "video-download"
+    ],
+    "operations": [
+      "video"
+    ],
+    "formats": [
+      "json"
+    ],
+    "duration": {
+      "mode": "unknown",
+      "values": [],
+      "min": null,
+      "max": null,
+      "default": null,
+      "required": true,
+      "scenarios": []
+    },
+    "resolutions": null,
+    "aspect_ratios": null,
+    "qualities": null,
+    "resolution_policy": "unknown",
+    "materials": {
+      "image": {
+        "formats": [
+          "public_url_string",
+          "public_url_object"
+        ],
+        "max_count": null,
+        "max_file_bytes": null,
+        "max_duration_seconds": null
+      },
+      "video": {
+        "formats": [
+          "public_url_string",
+          "public_url_object"
+        ],
+        "max_count": null,
+        "max_file_bytes": null,
+        "max_duration_seconds": null
+      },
+      "audio": {
+        "formats": [
+          "public_url_string",
+          "public_url_object"
+        ],
+        "max_count": null,
+        "max_file_bytes": null,
+        "max_duration_seconds": null
+      }
+    },
+    "field_mapping": {
+      "duration": "seconds",
+      "aspect_ratio": "ratio"
+    },
+    "constraints": [],
+    "unverified": [
+      "max_request_bytes",
+      "max_concurrent_tasks",
+      "observation_seconds",
+      "real_generation",
+      "image.max_count",
+      "image.max_file_bytes",
+      "video.max_count",
+      "video.max_file_bytes",
+      "audio.max_count",
+      "audio.max_file_bytes",
+      "duration_enum",
+      "resolution_enum",
+      "allowed_material_types"
+    ],
+    "delivery": {
+      "poll_seconds": 20,
+      "head": null,
+      "range": null,
+      "refresh": null
+    },
+    "limits": {
+      "max_request_bytes": null,
+      "max_concurrent_tasks": null,
+      "observation_seconds": null
+    }
+  },
+  {
+    "profile_id": "v6k:sedanco-2.5-AM",
+    "version": "draft-v1",
+    "provider": "v6k",
+    "model": "sedanco-2.5-AM",
+    "upstream_model": "sedanco-2.5-AM",
+    "adapter": "v6k_video_gateway",
+    "media_type": "video",
+    "enabled": false,
+    "status": "draft",
+    "validation_status": "待渠道验证",
+    "source": "https://www.v6k.top/docs#video",
+    "scenarios": [
+      "video-submit",
+      "video-query",
+      "video-download"
+    ],
+    "operations": [
+      "video"
+    ],
+    "formats": [
+      "json"
+    ],
+    "duration": {
+      "mode": "unknown",
+      "values": [],
+      "min": null,
+      "max": null,
+      "default": null,
+      "required": true,
+      "scenarios": []
+    },
+    "resolutions": null,
+    "aspect_ratios": null,
+    "qualities": null,
+    "resolution_policy": "unknown",
+    "materials": {
+      "image": {
+        "formats": [
+          "public_url_string",
+          "public_url_object"
+        ],
+        "max_count": null,
+        "max_file_bytes": null,
+        "max_duration_seconds": null
+      },
+      "video": {
+        "formats": [
+          "public_url_string",
+          "public_url_object"
+        ],
+        "max_count": null,
+        "max_file_bytes": null,
+        "max_duration_seconds": null
+      },
+      "audio": {
+        "formats": [
+          "public_url_string",
+          "public_url_object"
+        ],
+        "max_count": null,
+        "max_file_bytes": null,
+        "max_duration_seconds": null
+      }
+    },
+    "field_mapping": {
+      "duration": "seconds",
+      "aspect_ratio": "ratio"
+    },
+    "constraints": [],
+    "unverified": [
+      "max_request_bytes",
+      "max_concurrent_tasks",
+      "observation_seconds",
+      "real_generation",
+      "image.max_count",
+      "image.max_file_bytes",
+      "video.max_count",
+      "video.max_file_bytes",
+      "audio.max_count",
+      "audio.max_file_bytes",
+      "duration_enum",
+      "resolution_enum",
+      "allowed_material_types"
+    ],
+    "delivery": {
+      "poll_seconds": 20,
+      "head": null,
+      "range": null,
+      "refresh": null
+    },
+    "limits": {
+      "max_request_bytes": null,
+      "max_concurrent_tasks": null,
+      "observation_seconds": null
+    }
+  },
+  {
+    "profile_id": "v6k:dola2.5",
+    "version": "draft-v1",
+    "provider": "v6k",
+    "model": "dola2.5",
+    "upstream_model": "dola2.5",
+    "adapter": "v6k_video_gateway",
+    "media_type": "video",
+    "enabled": false,
+    "status": "draft",
+    "validation_status": "待渠道验证",
+    "source": "https://www.v6k.top/docs#video",
+    "scenarios": [
+      "video-submit",
+      "video-query",
+      "video-download"
+    ],
+    "operations": [
+      "video"
+    ],
+    "formats": [
+      "json"
+    ],
+    "duration": {
+      "mode": "unknown",
+      "values": [],
+      "min": null,
+      "max": null,
+      "default": null,
+      "required": true,
+      "scenarios": []
+    },
+    "resolutions": null,
+    "aspect_ratios": null,
+    "qualities": null,
+    "resolution_policy": "unknown",
+    "materials": {
+      "image": {
+        "formats": [
+          "public_url_string",
+          "public_url_object"
+        ],
+        "max_count": null,
+        "max_file_bytes": null,
+        "max_duration_seconds": null
+      },
+      "video": {
+        "formats": [
+          "public_url_string",
+          "public_url_object"
+        ],
+        "max_count": null,
+        "max_file_bytes": null,
+        "max_duration_seconds": null
+      },
+      "audio": {
+        "formats": [
+          "public_url_string",
+          "public_url_object"
+        ],
+        "max_count": null,
+        "max_file_bytes": null,
+        "max_duration_seconds": null
+      }
+    },
+    "field_mapping": {
+      "duration": "seconds",
+      "aspect_ratio": "ratio"
+    },
+    "constraints": [],
+    "unverified": [
+      "max_request_bytes",
+      "max_concurrent_tasks",
+      "observation_seconds",
+      "real_generation",
+      "image.max_count",
+      "image.max_file_bytes",
+      "video.max_count",
+      "video.max_file_bytes",
+      "audio.max_count",
+      "audio.max_file_bytes",
+      "duration_enum",
+      "resolution_enum",
+      "allowed_material_types"
+    ],
+    "delivery": {
+      "poll_seconds": 20,
+      "head": null,
+      "range": null,
+      "refresh": null
+    },
+    "limits": {
+      "max_request_bytes": null,
+      "max_concurrent_tasks": null,
+      "observation_seconds": null
+    }
+  },
+  {
+    "profile_id": "v6k:video-QY",
+    "version": "draft-v1",
+    "provider": "v6k",
+    "model": "video-QY",
+    "upstream_model": "video-QY",
+    "adapter": "v6k_video_gateway",
+    "media_type": "video",
+    "enabled": false,
+    "status": "draft",
+    "validation_status": "待渠道验证",
+    "source": "https://www.v6k.top/docs#video",
+    "scenarios": [
+      "video-submit",
+      "video-query",
+      "video-download"
+    ],
+    "operations": [
+      "video"
+    ],
+    "formats": [
+      "json"
+    ],
+    "duration": {
+      "mode": "unknown",
+      "values": [],
+      "min": null,
+      "max": null,
+      "default": null,
+      "required": false,
+      "scenarios": []
+    },
+    "resolutions": null,
+    "aspect_ratios": null,
+    "qualities": null,
+    "resolution_policy": "unknown",
+    "materials": {
+      "image": {
+        "formats": [],
+        "max_count": 0,
+        "max_file_bytes": null,
+        "max_duration_seconds": null
+      },
+      "video": {
+        "formats": [
+          "public_url_string",
+          "public_url_object"
+        ],
+        "max_count": null,
+        "max_file_bytes": null,
+        "max_duration_seconds": null
+      },
+      "audio": {
+        "formats": [],
+        "max_count": 0,
+        "max_file_bytes": null,
+        "max_duration_seconds": null
+      }
+    },
+    "field_mapping": {
+      "duration": "seconds",
+      "aspect_ratio": "ratio"
+    },
+    "constraints": [
+      {
+        "required_reference": "video"
+      }
+    ],
+    "unverified": [
+      "max_request_bytes",
+      "max_concurrent_tasks",
+      "observation_seconds",
+      "real_generation",
+      "video.max_count",
+      "video.max_file_bytes",
+      "duration_enum",
+      "resolution_enum"
+    ],
+    "delivery": {
+      "poll_seconds": 20,
+      "head": null,
+      "range": null,
+      "refresh": null
+    },
+    "limits": {
+      "max_request_bytes": null,
+      "max_concurrent_tasks": null,
+      "observation_seconds": null
+    }
+  },
+  {
+    "profile_id": "v6k:doubao-seedance-2-0-65Z",
+    "version": "draft-v1",
+    "provider": "v6k",
+    "model": "doubao-seedance-2-0-65Z",
+    "upstream_model": "doubao-seedance-2-0-65Z",
+    "adapter": "v6k_video_gateway",
+    "media_type": "video",
+    "enabled": false,
+    "status": "draft",
+    "validation_status": "待渠道验证",
+    "source": "https://www.v6k.top/docs#video",
+    "scenarios": [
+      "video-submit",
+      "video-query",
+      "video-download"
+    ],
+    "operations": [
+      "video"
+    ],
+    "formats": [
+      "json"
+    ],
+    "duration": {
+      "mode": "unknown",
+      "values": [],
+      "min": null,
+      "max": null,
+      "default": null,
+      "required": false,
+      "scenarios": []
+    },
+    "resolutions": null,
+    "aspect_ratios": null,
+    "qualities": null,
+    "resolution_policy": "unknown",
+    "materials": {
+      "image": {
+        "formats": [
+          "public_url_string",
+          "public_url_object",
+          "metadata.content"
+        ],
+        "max_count": null,
+        "max_file_bytes": null,
+        "max_duration_seconds": null
+      },
+      "video": {
+        "formats": [
+          "public_url_string",
+          "public_url_object",
+          "metadata.content"
+        ],
+        "max_count": null,
+        "max_file_bytes": null,
+        "max_duration_seconds": null
+      },
+      "audio": {
+        "formats": [
+          "public_url_string",
+          "public_url_object",
+          "metadata.content"
+        ],
+        "max_count": null,
+        "max_file_bytes": null,
+        "max_duration_seconds": null
+      }
+    },
+    "field_mapping": {
+      "duration": "seconds",
+      "aspect_ratio": "ratio"
+    },
+    "constraints": [
+      {
+        "metadata_content": "native_validated_no_meter_override"
+      }
+    ],
+    "unverified": [
+      "max_request_bytes",
+      "max_concurrent_tasks",
+      "observation_seconds",
+      "real_generation",
+      "image.max_count",
+      "image.max_file_bytes",
+      "video.max_count",
+      "video.max_file_bytes",
+      "audio.max_count",
+      "audio.max_file_bytes",
+      "duration_enum",
+      "resolution_enum",
+      "allowed_material_types"
+    ],
+    "delivery": {
+      "poll_seconds": 20,
+      "head": null,
+      "range": null,
+      "refresh": null
+    },
+    "limits": {
+      "max_request_bytes": null,
+      "max_concurrent_tasks": null,
+      "observation_seconds": null
+    }
+  },
+  {
+    "profile_id": "v6k:doubao-seedance-2-0-fast-65Z",
+    "version": "draft-v1",
+    "provider": "v6k",
+    "model": "doubao-seedance-2-0-fast-65Z",
+    "upstream_model": "doubao-seedance-2-0-fast-65Z",
+    "adapter": "v6k_video_gateway",
+    "media_type": "video",
+    "enabled": false,
+    "status": "draft",
+    "validation_status": "待渠道验证",
+    "source": "https://www.v6k.top/docs#video",
+    "scenarios": [
+      "video-submit",
+      "video-query",
+      "video-download"
+    ],
+    "operations": [
+      "video"
+    ],
+    "formats": [
+      "json"
+    ],
+    "duration": {
+      "mode": "unknown",
+      "values": [],
+      "min": null,
+      "max": null,
+      "default": null,
+      "required": false,
+      "scenarios": []
+    },
+    "resolutions": null,
+    "aspect_ratios": null,
+    "qualities": null,
+    "resolution_policy": "unknown",
+    "materials": {
+      "image": {
+        "formats": [
+          "public_url_string",
+          "public_url_object",
+          "metadata.content"
+        ],
+        "max_count": null,
+        "max_file_bytes": null,
+        "max_duration_seconds": null
+      },
+      "video": {
+        "formats": [
+          "public_url_string",
+          "public_url_object",
+          "metadata.content"
+        ],
+        "max_count": null,
+        "max_file_bytes": null,
+        "max_duration_seconds": null
+      },
+      "audio": {
+        "formats": [
+          "public_url_string",
+          "public_url_object",
+          "metadata.content"
+        ],
+        "max_count": null,
+        "max_file_bytes": null,
+        "max_duration_seconds": null
+      }
+    },
+    "field_mapping": {
+      "duration": "seconds",
+      "aspect_ratio": "ratio"
+    },
+    "constraints": [
+      {
+        "metadata_content": "native_validated_no_meter_override"
+      }
+    ],
+    "unverified": [
+      "max_request_bytes",
+      "max_concurrent_tasks",
+      "observation_seconds",
+      "real_generation",
+      "image.max_count",
+      "image.max_file_bytes",
+      "video.max_count",
+      "video.max_file_bytes",
+      "audio.max_count",
+      "audio.max_file_bytes",
+      "duration_enum",
+      "resolution_enum",
+      "allowed_material_types"
+    ],
+    "delivery": {
+      "poll_seconds": 20,
+      "head": null,
+      "range": null,
+      "refresh": null
+    },
+    "limits": {
+      "max_request_bytes": null,
+      "max_concurrent_tasks": null,
+      "observation_seconds": null
+    }
+  },
+  {
+    "profile_id": "v6k:doubao-seedance-2-0-mini-65Z",
+    "version": "draft-v1",
+    "provider": "v6k",
+    "model": "doubao-seedance-2-0-mini-65Z",
+    "upstream_model": "doubao-seedance-2-0-mini-65Z",
+    "adapter": "v6k_video_gateway",
+    "media_type": "video",
+    "enabled": false,
+    "status": "draft",
+    "validation_status": "待渠道验证",
+    "source": "https://www.v6k.top/docs#video",
+    "scenarios": [
+      "video-submit",
+      "video-query",
+      "video-download"
+    ],
+    "operations": [
+      "video"
+    ],
+    "formats": [
+      "json"
+    ],
+    "duration": {
+      "mode": "unknown",
+      "values": [],
+      "min": null,
+      "max": null,
+      "default": null,
+      "required": false,
+      "scenarios": []
+    },
+    "resolutions": null,
+    "aspect_ratios": null,
+    "qualities": null,
+    "resolution_policy": "unknown",
+    "materials": {
+      "image": {
+        "formats": [
+          "public_url_string",
+          "public_url_object",
+          "metadata.content"
+        ],
+        "max_count": null,
+        "max_file_bytes": null,
+        "max_duration_seconds": null
+      },
+      "video": {
+        "formats": [
+          "public_url_string",
+          "public_url_object",
+          "metadata.content"
+        ],
+        "max_count": null,
+        "max_file_bytes": null,
+        "max_duration_seconds": null
+      },
+      "audio": {
+        "formats": [
+          "public_url_string",
+          "public_url_object",
+          "metadata.content"
+        ],
+        "max_count": null,
+        "max_file_bytes": null,
+        "max_duration_seconds": null
+      }
+    },
+    "field_mapping": {
+      "duration": "seconds",
+      "aspect_ratio": "ratio"
+    },
+    "constraints": [
+      {
+        "metadata_content": "native_validated_no_meter_override"
+      }
+    ],
+    "unverified": [
+      "max_request_bytes",
+      "max_concurrent_tasks",
+      "observation_seconds",
+      "real_generation",
+      "image.max_count",
+      "image.max_file_bytes",
+      "video.max_count",
+      "video.max_file_bytes",
+      "audio.max_count",
+      "audio.max_file_bytes",
+      "duration_enum",
+      "resolution_enum",
+      "allowed_material_types"
+    ],
+    "delivery": {
+      "poll_seconds": 20,
+      "head": null,
+      "range": null,
+      "refresh": null
+    },
+    "limits": {
+      "max_request_bytes": null,
+      "max_concurrent_tasks": null,
+      "observation_seconds": null
+    }
+  },
+  {
+    "profile_id": "v6k:doubao-seedance-2-5/65Z",
+    "version": "draft-v1",
+    "provider": "v6k",
+    "model": "doubao-seedance-2-5/65Z",
+    "upstream_model": "doubao-seedance-2-5/65Z",
+    "adapter": "v6k_video_gateway",
+    "media_type": "video",
+    "enabled": false,
+    "status": "draft",
+    "validation_status": "待渠道验证",
+    "source": "https://www.v6k.top/docs#video",
+    "scenarios": [
+      "video-submit",
+      "video-query",
+      "video-download"
+    ],
+    "operations": [
+      "video"
+    ],
+    "formats": [
+      "json"
+    ],
+    "duration": {
+      "mode": "unknown",
+      "values": [],
+      "min": null,
+      "max": null,
+      "default": null,
+      "required": false,
+      "scenarios": []
+    },
+    "resolutions": null,
+    "aspect_ratios": null,
+    "qualities": null,
+    "resolution_policy": "unknown",
+    "materials": {
+      "image": {
+        "formats": [
+          "public_url_string",
+          "public_url_object",
+          "metadata.content"
+        ],
+        "max_count": null,
+        "max_file_bytes": null,
+        "max_duration_seconds": null
+      },
+      "video": {
+        "formats": [
+          "public_url_string",
+          "public_url_object",
+          "metadata.content"
+        ],
+        "max_count": null,
+        "max_file_bytes": null,
+        "max_duration_seconds": null
+      },
+      "audio": {
+        "formats": [
+          "public_url_string",
+          "public_url_object",
+          "metadata.content"
+        ],
+        "max_count": null,
+        "max_file_bytes": null,
+        "max_duration_seconds": null
+      }
+    },
+    "field_mapping": {
+      "duration": "seconds",
+      "aspect_ratio": "ratio"
+    },
+    "constraints": [
+      {
+        "metadata_content": "native_validated_no_meter_override"
+      }
+    ],
+    "unverified": [
+      "max_request_bytes",
+      "max_concurrent_tasks",
+      "observation_seconds",
+      "real_generation",
+      "image.max_count",
+      "image.max_file_bytes",
+      "video.max_count",
+      "video.max_file_bytes",
+      "audio.max_count",
+      "audio.max_file_bytes",
+      "duration_enum",
+      "resolution_enum",
+      "allowed_material_types"
+    ],
+    "delivery": {
+      "poll_seconds": 20,
+      "head": null,
+      "range": null,
+      "refresh": null
+    },
+    "limits": {
+      "max_request_bytes": null,
+      "max_concurrent_tasks": null,
+      "observation_seconds": null
+    }
+  },
+  {
+    "profile_id": "v6k:JSadanco2.0",
+    "version": "draft-v1",
+    "provider": "v6k",
+    "model": "JSadanco2.0",
+    "upstream_model": "JSadanco2.0",
+    "adapter": "v6k_video_gateway",
+    "media_type": "video",
+    "enabled": false,
+    "status": "draft",
+    "validation_status": "待渠道验证",
+    "source": "https://www.v6k.top/docs#video",
+    "scenarios": [
+      "video-submit",
+      "video-query",
+      "video-download"
+    ],
+    "operations": [
+      "video"
+    ],
+    "formats": [
+      "json"
+    ],
+    "duration": {
+      "mode": "unknown",
+      "values": [],
+      "min": null,
+      "max": null,
+      "default": null,
+      "required": false,
+      "scenarios": []
+    },
+    "resolutions": null,
+    "aspect_ratios": null,
+    "qualities": null,
+    "resolution_policy": "unknown",
+    "materials": {
+      "image": {
+        "formats": [
+          "public_url_string",
+          "public_url_object",
+          "data_url"
+        ],
+        "max_count": 9,
+        "max_file_bytes": null,
+        "max_duration_seconds": null
+      },
+      "video": {
+        "formats": [],
+        "max_count": 0,
+        "max_file_bytes": null,
+        "max_duration_seconds": null
+      },
+      "audio": {
+        "formats": [],
+        "max_count": 0,
+        "max_file_bytes": null,
+        "max_duration_seconds": null
+      }
+    },
+    "field_mapping": {
+      "duration": "seconds",
+      "aspect_ratio": "ratio"
+    },
+    "constraints": [],
+    "unverified": [
+      "max_request_bytes",
+      "max_concurrent_tasks",
+      "observation_seconds",
+      "real_generation",
+      "image.max_file_bytes",
+      "duration_enum",
+      "resolution_enum"
+    ],
+    "delivery": {
+      "poll_seconds": 20,
+      "head": null,
+      "range": null,
+      "refresh": null
+    },
+    "limits": {
+      "max_request_bytes": null,
+      "max_concurrent_tasks": null,
+      "observation_seconds": null
+    }
+  },
+  {
+    "profile_id": "v6k:LLseadanco2.5",
+    "version": "draft-v1",
+    "provider": "v6k",
+    "model": "LLseadanco2.5",
+    "upstream_model": "LLseadanco2.5",
+    "adapter": "v6k_video_gateway",
+    "media_type": "video",
+    "enabled": false,
+    "status": "draft",
+    "validation_status": "待渠道验证",
+    "source": "https://www.v6k.top/docs#video",
+    "scenarios": [
+      "video-submit",
+      "video-query",
+      "video-download"
+    ],
+    "operations": [
+      "video"
+    ],
+    "formats": [
+      "json",
+      "multipart"
+    ],
+    "duration": {
+      "mode": "fixed",
+      "values": [
+        30
+      ],
+      "min": null,
+      "max": null,
+      "default": 30,
+      "required": false,
+      "scenarios": []
+    },
+    "resolutions": [
+      "720p"
+    ],
+    "aspect_ratios": null,
+    "qualities": null,
+    "resolution_policy": "enum",
+    "materials": {
+      "image": {
+        "formats": [
+          "public_url_string",
+          "public_url_object",
+          "base64",
+          "data_url",
+          "file"
+        ],
+        "max_count": 30,
+        "max_file_bytes": 31457280,
+        "max_duration_seconds": null
+      },
+      "video": {
+        "formats": [],
+        "max_count": 0,
+        "max_file_bytes": null,
+        "max_duration_seconds": null
+      },
+      "audio": {
+        "formats": [],
+        "max_count": 0,
+        "max_file_bytes": null,
+        "max_duration_seconds": null
+      }
+    },
+    "field_mapping": {
+      "duration": "seconds",
+      "aspect_ratio": "ratio"
+    },
+    "constraints": [
+      {
+        "image_fetch_timeout_seconds": 60,
+        "multipart_fields": [
+          "image",
+          "images",
+          "input_reference"
+        ]
+      }
+    ],
+    "unverified": [
+      "max_request_bytes",
+      "max_concurrent_tasks",
+      "observation_seconds",
+      "real_generation"
+    ],
+    "delivery": {
+      "poll_seconds": 20,
+      "head": null,
+      "range": null,
+      "refresh": null
+    },
+    "limits": {
+      "max_request_bytes": null,
+      "max_concurrent_tasks": null,
+      "observation_seconds": null
+    }
+  },
+  {
+    "profile_id": "v6k:F720seadanco2.5",
+    "version": "draft-v1",
+    "provider": "v6k",
+    "model": "F720seadanco2.5",
+    "upstream_model": "F720seadanco2.5",
+    "adapter": "v6k_video_gateway",
+    "media_type": "video",
+    "enabled": false,
+    "status": "draft",
+    "validation_status": "待渠道验证",
+    "source": "https://www.v6k.top/docs#video",
+    "scenarios": [
+      "video-submit",
+      "video-query",
+      "video-download"
+    ],
+    "operations": [
+      "video"
+    ],
+    "formats": [
+      "json"
+    ],
+    "duration": {
+      "mode": "unknown",
+      "values": [],
+      "min": null,
+      "max": null,
+      "default": null,
+      "required": false,
+      "scenarios": []
+    },
+    "resolutions": null,
+    "aspect_ratios": null,
+    "qualities": null,
+    "resolution_policy": "unknown",
+    "materials": {
+      "image": {
+        "formats": [
+          "public_url_string",
+          "public_url_object"
+        ],
+        "max_count": null,
+        "max_file_bytes": null,
+        "max_duration_seconds": null
+      },
+      "video": {
+        "formats": [
+          "public_url_string",
+          "public_url_object"
+        ],
+        "max_count": null,
+        "max_file_bytes": null,
+        "max_duration_seconds": null
+      },
+      "audio": {
+        "formats": [
+          "public_url_string",
+          "public_url_object"
+        ],
+        "max_count": null,
+        "max_file_bytes": null,
+        "max_duration_seconds": null
+      }
+    },
+    "field_mapping": {
+      "duration": "seconds",
+      "aspect_ratio": "ratio",
+      "reference_image_urls": "images",
+      "reference_video_urls": "videos",
+      "reference_audio_urls": "audios"
+    },
+    "constraints": [],
+    "unverified": [
+      "max_request_bytes",
+      "max_concurrent_tasks",
+      "observation_seconds",
+      "real_generation",
+      "image.max_count",
+      "image.max_file_bytes",
+      "video.max_count",
+      "video.max_file_bytes",
+      "audio.max_count",
+      "audio.max_file_bytes",
+      "duration_enum",
+      "resolution_enum",
+      "allowed_material_types"
+    ],
+    "delivery": {
+      "poll_seconds": 20,
+      "head": null,
+      "range": null,
+      "refresh": null
+    },
+    "limits": {
+      "max_request_bytes": null,
+      "max_concurrent_tasks": null,
+      "observation_seconds": null
+    }
+  },
+  {
+    "profile_id": "v6k:F480seadanco2.5",
+    "version": "draft-v1",
+    "provider": "v6k",
+    "model": "F480seadanco2.5",
+    "upstream_model": "F480seadanco2.5",
+    "adapter": "v6k_video_gateway",
+    "media_type": "video",
+    "enabled": false,
+    "status": "draft",
+    "validation_status": "待渠道验证",
+    "source": "https://www.v6k.top/docs#video",
+    "scenarios": [
+      "video-submit",
+      "video-query",
+      "video-download"
+    ],
+    "operations": [
+      "video"
+    ],
+    "formats": [
+      "json"
+    ],
+    "duration": {
+      "mode": "unknown",
+      "values": [],
+      "min": null,
+      "max": null,
+      "default": null,
+      "required": false,
+      "scenarios": []
+    },
+    "resolutions": null,
+    "aspect_ratios": null,
+    "qualities": null,
+    "resolution_policy": "unknown",
+    "materials": {
+      "image": {
+        "formats": [
+          "public_url_string",
+          "public_url_object"
+        ],
+        "max_count": null,
+        "max_file_bytes": null,
+        "max_duration_seconds": null
+      },
+      "video": {
+        "formats": [
+          "public_url_string",
+          "public_url_object"
+        ],
+        "max_count": null,
+        "max_file_bytes": null,
+        "max_duration_seconds": null
+      },
+      "audio": {
+        "formats": [
+          "public_url_string",
+          "public_url_object"
+        ],
+        "max_count": null,
+        "max_file_bytes": null,
+        "max_duration_seconds": null
+      }
+    },
+    "field_mapping": {
+      "duration": "seconds",
+      "aspect_ratio": "ratio",
+      "reference_image_urls": "images",
+      "reference_video_urls": "videos",
+      "reference_audio_urls": "audios"
+    },
+    "constraints": [],
+    "unverified": [
+      "max_request_bytes",
+      "max_concurrent_tasks",
+      "observation_seconds",
+      "real_generation",
+      "image.max_count",
+      "image.max_file_bytes",
+      "video.max_count",
+      "video.max_file_bytes",
+      "audio.max_count",
+      "audio.max_file_bytes",
+      "duration_enum",
+      "resolution_enum",
+      "allowed_material_types"
+    ],
+    "delivery": {
+      "poll_seconds": 20,
+      "head": null,
+      "range": null,
+      "refresh": null
+    },
+    "limits": {
+      "max_request_bytes": null,
+      "max_concurrent_tasks": null,
+      "observation_seconds": null
+    }
+  },
+  {
+    "profile_id": "v6k:FF720wan3.0",
+    "version": "draft-v1",
+    "provider": "v6k",
+    "model": "FF720wan3.0",
+    "upstream_model": "FF720wan3.0",
+    "adapter": "v6k_video_gateway",
+    "media_type": "video",
+    "enabled": false,
+    "status": "draft",
+    "validation_status": "待渠道验证",
+    "source": "https://www.v6k.top/docs#video",
+    "scenarios": [
+      "video-submit",
+      "video-query",
+      "video-download"
+    ],
+    "operations": [
+      "video"
+    ],
+    "formats": [
+      "json"
+    ],
+    "duration": {
+      "mode": "unknown",
+      "values": [],
+      "min": null,
+      "max": null,
+      "default": null,
+      "required": false,
+      "scenarios": []
+    },
+    "resolutions": null,
+    "aspect_ratios": null,
+    "qualities": null,
+    "resolution_policy": "unknown",
+    "materials": {
+      "image": {
+        "formats": [
+          "public_url_string",
+          "public_url_object"
+        ],
+        "max_count": null,
+        "max_file_bytes": null,
+        "max_duration_seconds": null
+      },
+      "video": {
+        "formats": [
+          "public_url_string",
+          "public_url_object"
+        ],
+        "max_count": null,
+        "max_file_bytes": null,
+        "max_duration_seconds": null
+      },
+      "audio": {
+        "formats": [
+          "public_url_string",
+          "public_url_object"
+        ],
+        "max_count": null,
+        "max_file_bytes": null,
+        "max_duration_seconds": null
+      }
+    },
+    "field_mapping": {
+      "duration": "seconds",
+      "aspect_ratio": "ratio",
+      "reference_image_urls": "images",
+      "reference_video_urls": "videos",
+      "reference_audio_urls": "audios"
+    },
+    "constraints": [],
+    "unverified": [
+      "max_request_bytes",
+      "max_concurrent_tasks",
+      "observation_seconds",
+      "real_generation",
+      "image.max_count",
+      "image.max_file_bytes",
+      "video.max_count",
+      "video.max_file_bytes",
+      "audio.max_count",
+      "audio.max_file_bytes",
+      "duration_enum",
+      "resolution_enum",
+      "allowed_material_types"
+    ],
+    "delivery": {
+      "poll_seconds": 20,
+      "head": null,
+      "range": null,
+      "refresh": null
+    },
+    "limits": {
+      "max_request_bytes": null,
+      "max_concurrent_tasks": null,
+      "observation_seconds": null
+    }
+  },
+  {
+    "profile_id": "v6k:FF1080wan3.0",
+    "version": "draft-v1",
+    "provider": "v6k",
+    "model": "FF1080wan3.0",
+    "upstream_model": "FF1080wan3.0",
+    "adapter": "v6k_video_gateway",
+    "media_type": "video",
+    "enabled": false,
+    "status": "draft",
+    "validation_status": "待渠道验证",
+    "source": "https://www.v6k.top/docs#video",
+    "scenarios": [
+      "video-submit",
+      "video-query",
+      "video-download"
+    ],
+    "operations": [
+      "video"
+    ],
+    "formats": [
+      "json"
+    ],
+    "duration": {
+      "mode": "unknown",
+      "values": [],
+      "min": null,
+      "max": null,
+      "default": null,
+      "required": false,
+      "scenarios": []
+    },
+    "resolutions": null,
+    "aspect_ratios": null,
+    "qualities": null,
+    "resolution_policy": "unknown",
+    "materials": {
+      "image": {
+        "formats": [
+          "public_url_string",
+          "public_url_object"
+        ],
+        "max_count": null,
+        "max_file_bytes": null,
+        "max_duration_seconds": null
+      },
+      "video": {
+        "formats": [
+          "public_url_string",
+          "public_url_object"
+        ],
+        "max_count": null,
+        "max_file_bytes": null,
+        "max_duration_seconds": null
+      },
+      "audio": {
+        "formats": [
+          "public_url_string",
+          "public_url_object"
+        ],
+        "max_count": null,
+        "max_file_bytes": null,
+        "max_duration_seconds": null
+      }
+    },
+    "field_mapping": {
+      "duration": "seconds",
+      "aspect_ratio": "ratio",
+      "reference_image_urls": "images",
+      "reference_video_urls": "videos",
+      "reference_audio_urls": "audios"
+    },
+    "constraints": [],
+    "unverified": [
+      "max_request_bytes",
+      "max_concurrent_tasks",
+      "observation_seconds",
+      "real_generation",
+      "image.max_count",
+      "image.max_file_bytes",
+      "video.max_count",
+      "video.max_file_bytes",
+      "audio.max_count",
+      "audio.max_file_bytes",
+      "duration_enum",
+      "resolution_enum",
+      "allowed_material_types"
+    ],
+    "delivery": {
+      "poll_seconds": 20,
+      "head": null,
+      "range": null,
+      "refresh": null
+    },
+    "limits": {
+      "max_request_bytes": null,
+      "max_concurrent_tasks": null,
+      "observation_seconds": null
+    }
+  },
+  {
+    "profile_id": "v6k:MinimaxH3-2K",
+    "version": "draft-v1",
+    "provider": "v6k",
+    "model": "MinimaxH3-2K",
+    "upstream_model": "MinimaxH3-2K",
+    "adapter": "v6k_video_gateway",
+    "media_type": "video",
+    "enabled": false,
+    "status": "draft",
+    "validation_status": "待渠道验证",
+    "source": "https://www.v6k.top/docs#video",
+    "scenarios": [
+      "video-submit",
+      "video-query",
+      "video-download"
+    ],
+    "operations": [
+      "video"
+    ],
+    "formats": [
+      "json",
+      "multipart"
+    ],
+    "duration": {
+      "mode": "range",
+      "values": [],
+      "min": 4,
+      "max": 15,
+      "default": 15,
+      "required": false,
+      "scenarios": []
+    },
+    "resolutions": [
+      "2K",
+      "768p"
+    ],
+    "aspect_ratios": null,
+    "qualities": null,
+    "resolution_policy": "enum",
+    "materials": {
+      "image": {
+        "formats": [
+          "public_url_string",
+          "public_url_object",
+          "file"
+        ],
+        "max_count": 9,
+        "max_file_bytes": null,
+        "max_duration_seconds": null
+      },
+      "video": {
+        "formats": [
+          "public_url_string",
+          "public_url_object",
+          "file"
+        ],
+        "max_count": 3,
+        "max_file_bytes": null,
+        "max_duration_seconds": null
+      },
+      "audio": {
+        "formats": [
+          "public_url_string",
+          "public_url_object",
+          "file"
+        ],
+        "max_count": 3,
+        "max_file_bytes": null,
+        "max_duration_seconds": null
+      }
+    },
+    "field_mapping": {
+      "duration": "seconds",
+      "aspect_ratio": "ratio"
+    },
+    "constraints": [],
+    "unverified": [
+      "max_request_bytes",
+      "max_concurrent_tasks",
+      "observation_seconds",
+      "real_generation",
+      "image.max_file_bytes",
+      "video.max_file_bytes",
+      "audio.max_file_bytes",
+      "input_video_duration_cap",
+      "input_audio_duration_cap"
+    ],
+    "delivery": {
+      "poll_seconds": 20,
+      "head": null,
+      "range": null,
+      "refresh": null
+    },
+    "limits": {
+      "max_request_bytes": null,
+      "max_concurrent_tasks": null,
+      "observation_seconds": null
+    }
+  }
+]

@@ -14,6 +14,7 @@ import (
 
 	"golang.org/x/sync/singleflight"
 
+	media "transithub/backend/internal/modules/monitor_media"
 	"transithub/backend/internal/modules/my_sites"
 	"transithub/backend/internal/modules/upstream"
 )
@@ -35,6 +36,16 @@ type Store interface {
 	GetLastRateApplyResult(ctx context.Context, userID, adminAccountID string) (*RateApplyResult, error)
 	GetTestModelConfig(ctx context.Context, userID, adminAccountID string) (*TestModelConfig, error)
 	SaveTestModelConfig(ctx context.Context, config TestModelConfig) error
+}
+
+type RecentResultsBatchStore interface {
+	ListRecentResultsForRules(ctx context.Context, ruleIDs []string, limit int) (map[string][]Result, error)
+}
+
+type MediaTaskStore interface {
+	GetMediaTask(ctx context.Context, key string) (*MediaTask, error)
+	SaveMediaTask(ctx context.Context, task MediaTask) error
+	ResetMediaTask(ctx context.Context, key string) error
 }
 
 type PriorityGroupStore interface {
@@ -88,17 +99,44 @@ type Service struct {
 	balanceRefreshes singleflight.Group
 	schedulerRunMu   sync.Mutex
 	priorityApplyMu  sync.Mutex
+	mediaTaskMu      sync.Mutex
+	runLocks         sync.Map
+	mediaActive      sync.Map
+	mediaWorkers     sync.Once
+	mediaQueue       []func()
+	mediaQueueMu     sync.Mutex
+	mediaQueueCond   *sync.Cond
+	accountLoads     singleflight.Group
+	groupLoads       singleflight.Group
+	groupCacheMu     sync.Mutex
+	groupCache       map[string]cachedGroupState
+	accountCacheMu   sync.Mutex
+	accountCache     map[string]cachedAdminAccounts
+}
+
+type cachedAdminAccounts struct {
+	expiresAt time.Time
+	accounts  map[string]AdminAccountStatus
+}
+
+func (s *Service) invalidateAccountCache(userID, adminAccountID string) {
+	s.accountCacheMu.Lock()
+	delete(s.accountCache, workspaceKey(userID, adminAccountID))
+	s.accountCacheMu.Unlock()
 }
 
 func NewService(store Store, conns ConnectionStore, states StateStore, upstreams UpstreamLookup, platform MonitorPlatform, accounts AdminAccountResolver) *Service {
-	return &Service{
-		store:     store,
-		conns:     conns,
-		states:    states,
-		upstreams: upstreams,
-		platform:  platform,
-		accounts:  accounts,
+	s := &Service{
+		store:        store,
+		conns:        conns,
+		states:       states,
+		upstreams:    upstreams,
+		platform:     platform,
+		accounts:     accounts,
+		accountCache: make(map[string]cachedAdminAccounts),
 	}
+	s.mediaQueueCond = sync.NewCond(&s.mediaQueueMu)
+	return s
 }
 
 func (s *Service) SetSessionProvider(provider SessionProvider) {
@@ -124,6 +162,9 @@ func (s *Service) Summary(ctx context.Context, userID string) (SummaryResponse, 
 }
 
 func (s *Service) SummaryInGroup(ctx context.Context, userID, groupID string) (SummaryResponse, error) {
+	return s.summaryInGroup(ctx, userID, groupID, false)
+}
+func (s *Service) summaryInGroup(ctx context.Context, userID, groupID string, light bool) (SummaryResponse, error) {
 	adminAccountID, err := s.currentAdminAccountID(ctx, userID)
 	if err != nil {
 		return SummaryResponse{}, err
@@ -133,12 +174,43 @@ func (s *Service) SummaryInGroup(ctx context.Context, userID, groupID string) (S
 		return SummaryResponse{}, err
 	}
 	rulesByConnection := make(map[string]Rule, len(connections))
-	for _, conn := range connections {
-		rule, err := s.store.EnsureRuleForConnection(ctx, userID, adminAccountID, conn)
+	if batch, ok := s.store.(interface {
+		EnsureWorkspaceRules(context.Context, string, string) error
+	}); ok {
+		if err = batch.EnsureWorkspaceRules(ctx, userID, adminAccountID); err != nil {
+			return SummaryResponse{}, err
+		}
+		rules, loadErr := s.store.ListRulesForWorkspace(ctx, userID, adminAccountID)
+		if loadErr != nil {
+			return SummaryResponse{}, loadErr
+		}
+		for _, rule := range rules {
+			rulesByConnection[rule.ConnectionID] = rule
+		}
+	} else {
+		for _, conn := range connections {
+			rule, loadErr := s.store.EnsureRuleForConnection(ctx, userID, adminAccountID, conn)
+			if loadErr != nil {
+				return SummaryResponse{}, loadErr
+			}
+			rulesByConnection[conn.ID] = rule
+		}
+	}
+	if batch, ok := s.upstreams.(interface {
+		MonitorSites(context.Context, string, string) (map[string]*upstream.Site, error)
+	}); ok {
+		sites, loadErr := batch.MonitorSites(ctx, userID, adminAccountID)
+		if loadErr != nil {
+			return SummaryResponse{}, loadErr
+		}
+		ctx = context.WithValue(ctx, monitorSitesKey{}, sites)
+	}
+	targetStates := map[string]map[string]TargetState{}
+	if targetStore, ok := s.store.(TargetStore); ok {
+		targetStates, err = targetStore.ListTargetStates(ctx, userID, adminAccountID)
 		if err != nil {
 			return SummaryResponse{}, err
 		}
-		rulesByConnection[conn.ID] = rule
 	}
 	state := s.summaryState(ctx, userID, adminAccountID)
 	accountsByID := s.adminAccountsByID(state)
@@ -178,49 +250,81 @@ func (s *Service) SummaryInGroup(ctx context.Context, userID, groupID string) (S
 		RateRule:        RateRuleView{Rule: rateRule, Summary: rateSummary, Rows: rateRows, PriorityGroups: priorityGroups, LastResult: lastRateResult},
 		TestModelConfig: testModelConfig,
 	}
+	var recentByRule map[string][]Result
+	if light {
+		recentByRule = map[string][]Result{}
+	}
+	if batchStore, ok := s.store.(RecentResultsBatchStore); ok && !light {
+		ruleIDs := make([]string, 0, len(connections))
+		for _, conn := range connections {
+			ruleIDs = append(ruleIDs, rulesByConnection[conn.ID].ID)
+		}
+		recentByRule, _ = batchStore.ListRecentResultsForRules(ctx, ruleIDs, 60)
+	}
 	groupMap := map[string]*GroupSummary{}
-	groupPlatformByName := map[string]string{}
-	groupIDByName := map[string]string{}
 	if state != nil {
-		for _, ownGroup := range state.OwnGroups {
-			name := strings.TrimSpace(ownGroup.Name)
-			if name == "" {
-				continue
+		for _, g := range state.OwnGroups {
+			key := g.ID
+			if key == "" {
+				key = g.Name + "|" + g.Platform
 			}
-			platform := strings.TrimSpace(ownGroup.Platform)
-			groupPlatformByName[name] = platform
-			groupIDByName[name] = strings.TrimSpace(ownGroup.ID)
-			groupMap[name+"|"+platform] = &GroupSummary{GroupID: strings.TrimSpace(ownGroup.ID), GroupName: name, Platform: platform}
+			groupMap[key] = &GroupSummary{GroupID: g.ID, GroupName: g.Name, Platform: g.Platform}
 		}
 	}
 	for _, conn := range connections {
 		rule := rulesByConnection[conn.ID]
-		row := s.channelStatus(ctx, conn, rule, state, accountsByID, testModelConfig)
+		row := s.channelStatusView(ctx, conn, rule, state, accountsByID, testModelConfig, channelViewContext{groupID: groupID, recent: recentByRule, targets: targetStates[rule.ID]})
 		if rateRow, ok := rateRowsByConnection[conn.ID]; ok {
 			applyRatePlanToChannel(&row, rateRow)
 		}
 		response.Channels = append(response.Channels, row)
 		applyStats(&response.Stats, row)
-		ownGroups := row.OwnGroups
-		if len(ownGroups) == 0 {
-			ownGroups = []string{"未分组"}
-		}
-		for _, groupName := range ownGroups {
-			platform := row.GroupType
-			if currentPlatform, exists := groupPlatformByName[groupName]; exists && currentPlatform != "" {
-				platform = currentPlatform
+		ids := []string{}
+		for _, id := range conn.OwnGroupIDs {
+			if groupMap[id] != nil {
+				ids = append(ids, id)
 			}
-			key := groupName + "|" + platform
-			group := groupMap[key]
+		}
+		if len(ids) == 0 {
+			for _, name := range row.OwnGroups {
+				matched := ""
+				count := 0
+				for id, g := range groupMap {
+					if g.GroupName == name {
+						matched = id
+						count++
+					}
+				}
+				if count == 1 {
+					ids = append(ids, matched)
+				} else if state == nil || state.OwnGroups == nil {
+					ids = append(ids, name)
+				}
+			}
+		}
+		if len(ids) == 0 && (state == nil || state.OwnGroups == nil) {
+			ids = []string{"未分组"}
+		}
+
+		for _, id := range ids {
+			group := groupMap[id]
 			if group == nil {
-				group = &GroupSummary{GroupID: groupIDByName[groupName], GroupName: groupName, Platform: platform}
-				groupMap[key] = group
+				group = &GroupSummary{GroupID: id, GroupName: id, Platform: conn.GroupType}
+				groupMap[id] = group
+			}
+			groupRow := row
+			if _, ok := s.store.(TargetStore); ok {
+				t := targetFor(rule, conn, id, state, testModelConfig, targetStates[rule.ID])
+				applyTargetToChannel(&groupRow, t)
+				if rule.ManualPaused {
+					groupRow.Status = StatusManualPaused
+				}
 			}
 			group.Total++
-			if isAvailable(row) {
+			if isAvailable(groupRow) {
 				group.Available++
 			}
-			switch row.Status {
+			switch groupRow.Status {
 			case StatusFailed, StatusAutoPaused:
 				group.Failed++
 			case StatusBalancePaused:
@@ -234,8 +338,8 @@ func (s *Service) SummaryInGroup(ctx context.Context, userID, groupID string) (S
 			if row.Schedulable != nil && !*row.Schedulable {
 				group.DispatchPaused++
 			}
-			if row.LastCheckedAt != nil && (group.LastCheckedAt == nil || row.LastCheckedAt.After(*group.LastCheckedAt)) {
-				group.LastCheckedAt = row.LastCheckedAt
+			if groupRow.LastCheckedAt != nil && (group.LastCheckedAt == nil || groupRow.LastCheckedAt.After(*group.LastCheckedAt)) {
+				group.LastCheckedAt = groupRow.LastCheckedAt
 			}
 		}
 	}
@@ -351,6 +455,9 @@ func (s *Service) RunRule(ctx context.Context, ruleID string, reason string) (Re
 }
 
 func (s *Service) RunRuleForUser(ctx context.Context, userID, ruleID string, reason string) (Result, error) {
+	return s.RunRuleForUserInGroup(ctx, userID, ruleID, reason, "")
+}
+func (s *Service) RunRuleForUserInGroup(ctx context.Context, userID, ruleID string, reason, groupID string) (Result, error) {
 	adminAccountID, err := s.currentAdminAccountID(ctx, userID)
 	if err != nil {
 		return Result{}, err
@@ -359,6 +466,7 @@ func (s *Service) RunRuleForUser(ctx context.Context, userID, ruleID string, rea
 	if err != nil {
 		return Result{}, err
 	}
+	rule.MonitorGroupID = strings.TrimSpace(groupID)
 	return s.runRule(ctx, rule, reason)
 }
 
@@ -367,7 +475,17 @@ func (s *Service) PauseRule(ctx context.Context, userID, ruleID string) (Rule, e
 	if err != nil {
 		return Rule{}, err
 	}
+	defer s.invalidateAccountCache(userID, adminAccountID)
 	rule, err := s.requireRule(ctx, ruleID, userID, adminAccountID)
+	if err != nil {
+		return Rule{}, err
+	}
+	unlock, err := s.lockRuleAccount(ctx, rule)
+	if err != nil {
+		return Rule{}, err
+	}
+	defer unlock()
+	rule, err = s.requireRule(ctx, ruleID, userID, adminAccountID)
 	if err != nil {
 		return Rule{}, err
 	}
@@ -413,6 +531,15 @@ func (s *Service) ResumeRule(ctx context.Context, userID, ruleID string) (Result
 	if err != nil {
 		return Result{}, err
 	}
+	unlock, err := s.lockRuleAccount(ctx, rule)
+	if err != nil {
+		return Result{}, err
+	}
+	defer unlock()
+	rule, err = s.requireRule(ctx, ruleID, userID, adminAccountID)
+	if err != nil {
+		return Result{}, err
+	}
 	state, err := s.workspaceState(ctx, userID, adminAccountID)
 	if err != nil {
 		return Result{}, err
@@ -439,6 +566,7 @@ func (s *Service) ResumeRule(ctx context.Context, userID, ruleID string) (Result
 	if err := s.store.UpdateRule(ctx, rule); err != nil {
 		return Result{}, err
 	}
+	unlock()
 	return s.runRule(ctx, rule, "manual")
 }
 
@@ -448,6 +576,15 @@ func (s *Service) UpdateRule(ctx context.Context, userID, ruleID string, req Upd
 		return Rule{}, err
 	}
 	rule, err := s.requireRule(ctx, ruleID, userID, adminAccountID)
+	if err != nil {
+		return Rule{}, err
+	}
+	unlock, err := s.lockRuleAccount(ctx, rule)
+	if err != nil {
+		return Rule{}, err
+	}
+	defer unlock()
+	rule, err = s.requireRule(ctx, ruleID, userID, adminAccountID)
 	if err != nil {
 		return Rule{}, err
 	}
@@ -534,6 +671,15 @@ func (s *Service) SetRuleSchedulable(ctx context.Context, userID, ruleID string,
 	if err != nil {
 		return err
 	}
+	unlock, err := s.lockRuleAccount(ctx, rule)
+	if err != nil {
+		return err
+	}
+	defer unlock()
+	rule, err = s.requireRule(ctx, ruleID, userID, adminAccountID)
+	if err != nil {
+		return err
+	}
 	state, err := s.workspaceState(ctx, userID, adminAccountID)
 	if err != nil {
 		return err
@@ -548,6 +694,7 @@ func (s *Service) SetRuleSchedulable(ctx context.Context, userID, ruleID string,
 	if err := s.platform.SetSub2APIAdminAccountSchedulable(state.Session, conn.AdminAccountID, schedulable); err != nil {
 		return err
 	}
+	s.invalidateAccountCache(userID, adminAccountID)
 	now := time.Now()
 	rule.DesiredSchedulable = schedulablePtr(schedulable)
 	rule.SchedulableManaged = false
@@ -582,6 +729,15 @@ func (s *Service) setRulePriority(ctx context.Context, userID, ruleID string, pr
 	if err != nil {
 		return err
 	}
+	unlock, err := s.lockRuleAccount(ctx, rule)
+	if err != nil {
+		return err
+	}
+	defer unlock()
+	rule, err = s.requireRule(ctx, ruleID, userID, adminAccountID)
+	if err != nil {
+		return err
+	}
 	state, err := s.workspaceState(ctx, userID, adminAccountID)
 	if err != nil {
 		return err
@@ -600,6 +756,7 @@ func (s *Service) setRulePriority(ctx context.Context, userID, ruleID string, pr
 	if err := s.platform.UpdateSub2APIAdminAccountPriority(state.Session, conn.AdminAccountID, priority); err != nil {
 		return err
 	}
+	s.invalidateAccountCache(userID, adminAccountID)
 	now := time.Now()
 	rule.PriorityManaged = false
 	rule.OriginalPriority = nil
@@ -618,6 +775,15 @@ func (s *Service) SyncAndTakeOverRule(ctx context.Context, userID, ruleID string
 		return Rule{}, err
 	}
 	rule, err := s.requireRule(ctx, ruleID, userID, adminAccountID)
+	if err != nil {
+		return Rule{}, err
+	}
+	unlock, err := s.lockRuleAccount(ctx, rule)
+	if err != nil {
+		return Rule{}, err
+	}
+	defer unlock()
+	rule, err = s.requireRule(ctx, ruleID, userID, adminAccountID)
 	if err != nil {
 		return Rule{}, err
 	}
@@ -640,6 +806,7 @@ func (s *Service) SyncAndTakeOverRule(ctx context.Context, userID, ruleID string
 }
 
 func (s *Service) syncAndTakeOverRule(ctx context.Context, rule Rule, state *my_sites.State, conn *my_sites.RealConnection, accounts []AdminAccountStatus) (Rule, error) {
+	defer s.invalidateAccountCache(rule.UserID, rule.AdminAccountID)
 	if state == nil || state.Session.Platform != upstream.PlatformSub2API || conn == nil || strings.TrimSpace(conn.AdminAccountID) == "" {
 		return Rule{}, requestError("admin.channelMonitor.errors.unsupported")
 	}
@@ -753,7 +920,7 @@ func (s *Service) BulkRunRules(ctx context.Context, userID string, req BulkRunRe
 	}
 	results := make([]Result, 0, len(ruleIDs))
 	for _, ruleID := range ruleIDs {
-		result, err := s.RunRuleForUser(ctx, userID, ruleID, "manual")
+		result, err := s.RunRuleForUserInGroup(ctx, userID, ruleID, "manual", req.GroupID)
 		if err != nil {
 			return nil, err
 		}
@@ -859,6 +1026,7 @@ func findPriorityGroupRule(ctx context.Context, store PriorityGroupStore, userID
 }
 
 func (s *Service) restoreManagedRateOverrides(ctx context.Context, userID, adminAccountID string) error {
+	defer s.invalidateAccountCache(userID, adminAccountID)
 	connections, rulesByConnection, state, accountsByID, err := s.rateRuleContext(ctx, userID, adminAccountID, true)
 	if err != nil {
 		return err
@@ -940,6 +1108,23 @@ func (s *Service) UpdateTestModelConfig(ctx context.Context, userID string, req 
 		if err != nil {
 			return TestModelConfig{}, err
 		}
+		state, stateErr := s.workspaceState(ctx, userID, adminAccountID)
+		if stateErr != nil {
+			return TestModelConfig{}, stateErr
+		}
+		owned := make(map[string]struct{})
+		if state != nil {
+			for _, group := range state.OwnGroups {
+				if id := strings.TrimSpace(group.ID); id != "" {
+					owned[id] = struct{}{}
+				}
+			}
+		}
+		for _, group := range config.GroupModels {
+			if _, ok := owned[group.GroupID]; !ok {
+				return TestModelConfig{}, requestError("admin.channelMonitor.errors.request")
+			}
+		}
 	}
 	if req.BalanceRefreshIntervalMinutes != nil {
 		config.BalanceRefreshIntervalMinutes = clampInt(*req.BalanceRefreshIntervalMinutes, 1, 24*60)
@@ -947,6 +1132,15 @@ func (s *Service) UpdateTestModelConfig(ctx context.Context, userID string, req 
 	config.UpdatedAt = time.Now()
 	if err := s.store.SaveTestModelConfig(ctx, config); err != nil {
 		return TestModelConfig{}, err
+	}
+	s.invalidateAccountCache(userID, adminAccountID)
+	s.invalidateGroupCache(userID, adminAccountID)
+	saved, err := s.store.GetTestModelConfig(ctx, userID, adminAccountID)
+	if err != nil {
+		return TestModelConfig{}, err
+	}
+	if saved != nil {
+		return *saved, nil
 	}
 	return config, nil
 }
@@ -1021,6 +1215,7 @@ func metricsMultiplierChanged(oldMetrics, newMetrics upstream.Metrics) bool {
 }
 
 func (s *Service) applyPriorityForGroup(ctx context.Context, userID, adminAccountID, groupID, siteID, action string) (RateApplyResult, error) {
+	defer s.invalidateAccountCache(userID, adminAccountID)
 	s.priorityApplyMu.Lock()
 	defer s.priorityApplyMu.Unlock()
 	connections, rulesByConnection, state, accountsByID, err := s.rateRuleContext(ctx, userID, adminAccountID, true)
@@ -1168,6 +1363,7 @@ func priorityPlanForGroup(rows []RatePlanRow, connections []my_sites.RealConnect
 }
 
 func (s *Service) applyRateRuleForWorkspace(ctx context.Context, userID, adminAccountID, action string) (RateApplyResult, error) {
+	defer s.invalidateAccountCache(userID, adminAccountID)
 	rule, err := s.ensureRateRule(ctx, userID, adminAccountID)
 	if err != nil {
 		return RateApplyResult{}, err
@@ -1355,7 +1551,7 @@ func (s *Service) StartScheduler(ctx context.Context) {
 	}
 	s.stopScheduler = make(chan struct{})
 	go func() {
-		ticker := time.NewTicker(30 * time.Second)
+		ticker := time.NewTicker(5 * time.Second)
 		defer ticker.Stop()
 		for {
 			select {
@@ -1364,6 +1560,7 @@ func (s *Service) StartScheduler(ctx context.Context) {
 			case <-s.stopScheduler:
 				return
 			case <-ticker.C:
+				s.recoverMediaTasks(ctx)
 				s.runDue(context.Background(), 30, 5)
 			}
 		}
@@ -1381,7 +1578,7 @@ func workspaceKey(userID, adminAccountID string) string {
 	return strings.TrimSpace(userID) + "|" + strings.TrimSpace(adminAccountID)
 }
 
-func (s *Service) runRule(ctx context.Context, rule Rule, reason string) (Result, error) {
+func (s *Service) runRuleLegacy(ctx context.Context, rule Rule, reason string) (Result, error) {
 	started := time.Now()
 	result := Result{
 		ID:           newResultID(),
@@ -1394,6 +1591,9 @@ func (s *Service) runRule(ctx context.Context, rule Rule, reason string) (Result
 	finish := func(status string, success bool, message string, latency *int, model string) (Result, error) {
 		now := time.Now()
 		next := now.Add(time.Duration(rule.CheckIntervalMinutes) * time.Minute)
+		if status == StatusGenerating {
+			next = now.Add(10 * time.Second)
+		}
 		result.Status = status
 		result.Success = success
 		result.Message = message
@@ -1462,7 +1662,7 @@ func (s *Service) runRule(ctx context.Context, rule Rule, reason string) (Result
 	if err != nil {
 		return Result{}, err
 	}
-	site, err := s.upstreams.GetSite(ctx, conn.UpstreamSiteID)
+	site, err := s.monitorSite(ctx, conn.UpstreamSiteID)
 	if err != nil {
 		return Result{}, err
 	}
@@ -1503,11 +1703,11 @@ func (s *Service) runRule(ctx context.Context, rule Rule, reason string) (Result
 		return finish(StatusBalancePaused, false, fmt.Sprintf("余额 %.2f 低于阈值 %.2f，已自动停止", *balance, rule.BalanceThreshold), nil, "")
 	}
 
-	testModel, _ := effectiveTestModel(rule, *conn, nil, testModelConfig)
+	testModel, testOptions := effectiveTestOptions(rule, *conn, nil, testModelConfig)
 	if strings.TrimSpace(testModel) == "" {
 		return finish(StatusUnsupported, false, "当前分组未配置主动检测模型，已跳过检测和自动停启", nil, "")
 	}
-	testResult, testErr := s.platform.ProbeUpstreamConnection(ctx, *site, *conn, AccountTestOptions{ModelID: testModel})
+	testResult, testErr := s.platform.ProbeUpstreamConnection(ctx, *site, *conn, testOptions)
 	if strings.TrimSpace(testResult.Model) == "" {
 		testResult.Model = testModel
 	}
@@ -1587,20 +1787,54 @@ func (s *Service) currentAdminAccountID(ctx context.Context, userID string) (str
 	return s.accounts.RequireCurrentID(ctx, userID)
 }
 
+type cachedGroupState struct {
+	state   *my_sites.State
+	expires time.Time
+}
+
+func (s *Service) invalidateGroupCache(userID, adminID string) {
+	s.groupCacheMu.Lock()
+	delete(s.groupCache, workspaceKey(userID, adminID))
+	s.groupCacheMu.Unlock()
+}
 func (s *Service) summaryState(ctx context.Context, userID, adminAccountID string) *my_sites.State {
-	if s.groupStates != nil {
-		state, err := s.groupStates.RefreshOwnGroups(ctx, userID, adminAccountID)
-		if err == nil {
-			return state
-		}
-		log.Printf("[channel-monitor] admin group refresh failed user_id=%s admin_account_id=%s err=%v", userID, adminAccountID, err)
+	key := workspaceKey(userID, adminAccountID)
+	s.groupCacheMu.Lock()
+	cached, ok := s.groupCache[key]
+	s.groupCacheMu.Unlock()
+	if ok && time.Now().Before(cached.expires) {
+		return cached.state
 	}
-	state, err := s.workspaceState(ctx, userID, adminAccountID)
+	value, err, _ := s.groupLoads.Do(key, func() (any, error) {
+		s.groupCacheMu.Lock()
+		cached, ok := s.groupCache[key]
+		s.groupCacheMu.Unlock()
+		if ok && time.Now().Before(cached.expires) {
+			return cached.state, nil
+		}
+		var state *my_sites.State
+		var err error
+		if s.groupStates != nil {
+			state, err = s.groupStates.RefreshOwnGroups(ctx, userID, adminAccountID)
+		} else {
+			state, err = s.workspaceState(ctx, userID, adminAccountID)
+		}
+		if err != nil {
+			return nil, err
+		}
+		s.groupCacheMu.Lock()
+		if s.groupCache == nil {
+			s.groupCache = map[string]cachedGroupState{}
+		}
+		s.groupCache[key] = cachedGroupState{state: state, expires: time.Now().Add(15 * time.Second)}
+		s.groupCacheMu.Unlock()
+		return state, nil
+	})
 	if err == nil {
+		state, _ := value.(*my_sites.State)
 		return state
 	}
-	log.Printf("[channel-monitor] admin session unavailable user_id=%s admin_account_id=%s err=%v", userID, adminAccountID, err)
-	state, _ = s.states.Get(ctx, userID, adminAccountID)
+	state, _ := s.states.Get(ctx, userID, adminAccountID)
 	return state
 }
 
@@ -1629,8 +1863,13 @@ func (s *Service) workspaceState(ctx context.Context, userID, adminAccountID str
 	return state, nil
 }
 
-func (s *Service) channelStatus(ctx context.Context, conn my_sites.RealConnection, rule Rule, state *my_sites.State, accountsByID map[string]AdminAccountStatus, testModelConfig TestModelConfig) ChannelStatus {
-	effectiveTestModelID, testModelSource := effectiveTestModel(rule, conn, state, testModelConfig)
+func (s *Service) channelStatus(ctx context.Context, conn my_sites.RealConnection, rule Rule, state *my_sites.State, accounts map[string]AdminAccountStatus, config TestModelConfig) ChannelStatus {
+	return s.channelStatusView(ctx, conn, rule, state, accounts, config, channelViewContext{})
+}
+func (s *Service) channelStatusView(ctx context.Context, conn my_sites.RealConnection, rule Rule, state *my_sites.State, accountsByID map[string]AdminAccountStatus, testModelConfig TestModelConfig, view channelViewContext) ChannelStatus {
+	preferredGroupID, recentByRule := view.groupID, view.recent
+	effectiveOptions := effectiveTestOptionsForGroup(rule, conn, state, testModelConfig, preferredGroupID)
+	effectiveTestModelID, testModelSource := effectiveOptions.ModelID, effectiveOptions.Source
 	row := ChannelStatus{
 		RuleID:                      rule.ID,
 		ConnectionID:                conn.ID,
@@ -1651,6 +1890,7 @@ func (s *Service) channelStatus(ctx context.Context, conn my_sites.RealConnectio
 		AdminAccountID:              conn.AdminAccountID,
 		AdminAccountName:            conn.AdminAccountName,
 		OwnGroups:                   ownGroupsForConnection(state, conn),
+		OwnGroupIDs:                 append([]string(nil), conn.OwnGroupIDs...),
 		CheckIntervalMinutes:        rule.CheckIntervalMinutes,
 		FailureThreshold:            rule.FailureThreshold,
 		BalanceThreshold:            rule.BalanceThreshold,
@@ -1689,7 +1929,7 @@ func (s *Service) channelStatus(ctx context.Context, conn my_sites.RealConnectio
 	if strings.TrimSpace(effectiveTestModelID) == "" {
 		row.Status = StatusUnsupported
 	}
-	site, err := s.upstreams.GetSite(ctx, conn.UpstreamSiteID)
+	site, err := s.monitorSite(ctx, conn.UpstreamSiteID)
 	if err == nil && site != nil {
 		row.SiteID = site.ID
 		row.SiteName = site.Name
@@ -1709,7 +1949,48 @@ func (s *Service) channelStatus(ctx context.Context, conn my_sites.RealConnectio
 			row.DispatchUnavailableReason = "admin.channelMonitor.errors.unsupported"
 		}
 	}
-	results, err := s.store.ListRecentResults(ctx, rule.ID, 60)
+	row.EffectiveTestMode = effectiveOptions.Mode
+	row.GroupStates = []TargetState{}
+	if _, ok := s.store.(TargetStore); ok {
+		ids := conn.OwnGroupIDs
+		if len(ids) == 0 {
+			ids = []string{""}
+		}
+		for _, id := range ids {
+			row.GroupStates = append(row.GroupStates, targetFor(rule, conn, id, state, testModelConfig, view.targets))
+		}
+		if preferredGroupID != "" {
+			applyTargetToChannel(&row, targetFor(rule, conn, preferredGroupID, state, testModelConfig, view.targets))
+		} else if len(row.GroupStates) > 0 {
+			chosen := row.GroupStates[0]
+			for _, t := range row.GroupStates {
+				if t.Status == StatusHealthy {
+					chosen = t
+					break
+				}
+				if t.Status == StatusGenerating {
+					chosen = t
+				}
+			}
+			applyTargetToChannel(&row, chosen)
+		}
+		if rule.ManualPaused {
+			row.Status = StatusManualPaused
+		}
+	}
+	results, err := recentByRule[rule.ID], error(nil)
+	if recentByRule == nil {
+		results, err = s.store.ListRecentResults(ctx, rule.ID, 60)
+	}
+	if preferredGroupID != "" {
+		filtered := []Result{}
+		for _, r := range results {
+			if r.GroupID == preferredGroupID {
+				filtered = append(filtered, r)
+			}
+		}
+		results = filtered
+	}
 	if err == nil {
 		if results != nil {
 			row.RecentResults = results
@@ -1732,19 +2013,42 @@ func (s *Service) adminAccountsByID(state *my_sites.State) map[string]AdminAccou
 	if state == nil || state.Session.Platform != upstream.PlatformSub2API {
 		return accountsByID
 	}
-	accounts, err := s.platform.ListSub2APIAdminAccounts(state.Session)
+	key := workspaceKey(state.UserID, state.AdminAccountID)
+	s.accountCacheMu.Lock()
+	if cached, ok := s.accountCache[key]; ok && time.Now().Before(cached.expiresAt) {
+		copy := make(map[string]AdminAccountStatus, len(cached.accounts))
+		for id, account := range cached.accounts {
+			copy[id] = account
+		}
+		s.accountCacheMu.Unlock()
+		return copy
+	}
+	s.accountCacheMu.Unlock()
+	value, err, _ := s.accountLoads.Do(key, func() (any, error) {
+		s.accountCacheMu.Lock()
+		cached, ok := s.accountCache[key]
+		s.accountCacheMu.Unlock()
+		if ok && time.Now().Before(cached.expiresAt) {
+			return cached.accounts, nil
+		}
+		accounts, err := s.platform.ListSub2APIAdminAccounts(state.Session)
+		if err != nil {
+			return nil, err
+		}
+		for _, account := range accounts {
+			if id := strings.TrimSpace(account.ID); id != "" {
+				accountsByID[id] = account
+			}
+		}
+		s.accountCacheMu.Lock()
+		s.accountCache[key] = cachedAdminAccounts{expiresAt: time.Now().Add(15 * time.Second), accounts: accountsByID}
+		s.accountCacheMu.Unlock()
+		return accountsByID, nil
+	})
 	if err != nil {
-		log.Printf("[channel-monitor] list admin accounts failed: %v", err)
 		return nil
 	}
-	for _, account := range accounts {
-		id := strings.TrimSpace(account.ID)
-		if id == "" {
-			continue
-		}
-		accountsByID[id] = account
-	}
-	return accountsByID
+	return value.(map[string]AdminAccountStatus)
 }
 
 func (s *Service) ensureRateRule(ctx context.Context, userID, adminAccountID string) (RateRule, error) {
@@ -1852,7 +2156,7 @@ func (s *Service) buildRatePlanRow(ctx context.Context, conn my_sites.RealConnec
 	if !rule.SchedulableManaged && rule.DesiredSchedulable != nil {
 		row.CurrentSchedulable = rule.DesiredSchedulable
 	}
-	site, err := s.upstreams.GetSite(ctx, conn.UpstreamSiteID)
+	site, err := s.monitorSite(ctx, conn.UpstreamSiteID)
 	if err == nil && site != nil {
 		row.SiteName = site.Name
 		row.UpstreamMultiplier = upstreamGroupMultiplier(site, conn)
@@ -2163,25 +2467,70 @@ func testModelForGroupType(groupType string, config TestModelConfig) string {
 }
 
 func effectiveTestModel(rule Rule, conn my_sites.RealConnection, state *my_sites.State, config TestModelConfig) (string, string) {
+	options := effectiveTestOptionsForGroup(rule, conn, state, config, "")
+	return options.ModelID, options.Source
+}
+
+type effectiveTestConfig struct {
+	ModelID     string
+	Mode        string
+	Prompt      string
+	Size        string
+	Seconds     int
+	Source      string
+	Adapter     string
+	PresetModel string
+}
+
+func effectiveTestOptions(rule Rule, conn my_sites.RealConnection, state *my_sites.State, config TestModelConfig) (string, AccountTestOptions) {
+	options := effectiveTestOptionsForGroup(rule, conn, state, config, "")
+	return options.ModelID, options.options()
+}
+
+func effectiveTestOptionsForGroup(rule Rule, conn my_sites.RealConnection, state *my_sites.State, config TestModelConfig, preferredGroupID string) effectiveTestConfig {
 	if modelID := strings.TrimSpace(rule.TestModelID); modelID != "" {
-		return modelID, "custom"
+		baseRule := rule
+		baseRule.TestModelID = ""
+		base := effectiveTestOptionsForGroup(baseRule, conn, state, config, preferredGroupID)
+		base.ModelID = modelID
+		base.Source = "custom"
+		return base
 	}
-	for _, ownGroupID := range conn.OwnGroupIDs {
+	groupIDs := append([]string(nil), conn.OwnGroupIDs...)
+	if strings.TrimSpace(preferredGroupID) != "" {
+		groupIDs = []string{preferredGroupID}
+	}
+	seen := map[string]bool{}
+	for _, ownGroupID := range groupIDs {
 		groupID := strings.TrimSpace(ownGroupID)
-		if groupID == "" {
+		if groupID == "" || seen[groupID] {
 			continue
 		}
+		seen[groupID] = true
 		for _, groupModel := range config.GroupModels {
 			if strings.TrimSpace(groupModel.GroupID) == groupID && strings.TrimSpace(groupModel.ModelID) != "" {
-				return strings.TrimSpace(groupModel.ModelID), "group"
+				mode := strings.ToLower(strings.TrimSpace(groupModel.Mode))
+				if mode == "" {
+					mode = "text"
+				}
+				return effectiveTestConfig{ModelID: strings.TrimSpace(groupModel.ModelID), Mode: mode, Prompt: strings.TrimSpace(groupModel.Prompt), Size: strings.TrimSpace(groupModel.Size), Seconds: groupModel.Seconds, Source: "group", Adapter: groupModel.Adapter, PresetModel: groupModel.PresetModel}
 			}
 		}
 	}
-	modelID := testModelForGroupType(conn.GroupType, config)
-	if modelID == "" {
-		return "", "unsupported"
+	platform := conn.GroupType
+	if state != nil && preferredGroupID != "" {
+		for _, group := range state.OwnGroups {
+			if group.ID == preferredGroupID && group.Platform != "" {
+				platform = group.Platform
+				break
+			}
+		}
 	}
-	return modelID, "global"
+	modelID := testModelForGroupType(platform, config)
+	if modelID == "" {
+		return effectiveTestConfig{Source: "unsupported"}
+	}
+	return effectiveTestConfig{ModelID: modelID, Mode: "text", Source: "global"}
 }
 
 func normalizeGroupModelConfigs(configs []TestModelGroupConfig) ([]TestModelGroupConfig, error) {
@@ -2196,14 +2545,38 @@ func normalizeGroupModelConfigs(configs []TestModelGroupConfig) ([]TestModelGrou
 		if _, exists := seen[groupID]; exists {
 			return nil, requestError("admin.channelMonitor.errors.request")
 		}
+		rawMode := strings.ToLower(strings.TrimSpace(config.Mode))
+		if rawMode != "" && rawMode != "text" && rawMode != "connection" && rawMode != "image" && rawMode != "video" {
+			return nil, requestError("admin.channelMonitor.errors.request")
+		}
+		if rawMode == "image" || rawMode == "video" {
+			if _, _, err := media.Resolve(media.Options{Model: modelID, Mode: rawMode, Prompt: config.Prompt, Size: config.Size, Seconds: config.Seconds, Adapter: config.Adapter, PresetModel: config.PresetModel}); err != nil {
+				return nil, requestError("admin.channelMonitor.errors.mediaConfig")
+			}
+		}
 		seen[groupID] = struct{}{}
 		result = append(result, TestModelGroupConfig{
-			GroupID:   groupID,
-			GroupName: strings.TrimSpace(config.GroupName),
-			ModelID:   modelID,
+			GroupID:     groupID,
+			GroupName:   strings.TrimSpace(config.GroupName),
+			ModelID:     modelID,
+			Mode:        normalizeTestMode(config.Mode),
+			Prompt:      strings.TrimSpace(config.Prompt),
+			Size:        strings.TrimSpace(config.Size),
+			Seconds:     clampInt(config.Seconds, 0, 120),
+			Adapter:     strings.TrimSpace(config.Adapter),
+			PresetModel: strings.TrimSpace(config.PresetModel),
 		})
 	}
 	return result, nil
+}
+
+func normalizeTestMode(mode string) string {
+	switch strings.ToLower(strings.TrimSpace(mode)) {
+	case "image", "video", "connection":
+		return strings.ToLower(strings.TrimSpace(mode))
+	default:
+		return "text"
+	}
 }
 
 func convertedBalance(site *upstream.Site) *float64 {
@@ -2298,18 +2671,7 @@ func applyStats(stats *SummaryStats, row ChannelStatus) {
 }
 
 func isAvailable(row ChannelStatus) bool {
-	if !row.Enabled || !row.Supported {
-		return false
-	}
-	if row.Schedulable != nil && !*row.Schedulable {
-		return false
-	}
-	switch row.Status {
-	case StatusFailed, StatusAutoPaused, StatusBalancePaused, StatusManualPaused, StatusUnsupported:
-		return false
-	default:
-		return true
-	}
+	return row.Enabled && row.Supported && row.Schedulable != nil && *row.Schedulable && !row.ManualPaused && row.Status == StatusHealthy
 }
 
 func uniqueRuleIDs(ruleIDs []string) []string {

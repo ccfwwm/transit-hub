@@ -58,11 +58,26 @@ const requestJson = async <T>(path: string, options: RequestInit = {}): Promise<
   return payload
 }
 
-export const getChannelMonitorSummary = async (groupId?: string): Promise<ChannelMonitorSummary> =>
-  requestJson<ChannelMonitorSummary>(`/channel-monitor/summary${groupId ? `?groupId=${encodeURIComponent(groupId)}` : ''}`)
+export const getChannelMonitorSummary = async (groupId?: string, options: {light?: boolean, refresh?: boolean, signal?: AbortSignal} = {}): Promise<ChannelMonitorSummary> => {
+  const query = new URLSearchParams()
+  if (groupId) query.set('groupId', groupId)
+  if (options.light) query.set('light', 'true')
+  if (options.refresh) query.set('refresh', 'true')
+  return requestJson<ChannelMonitorSummary>(`/channel-monitor/summary?${query}`, {signal: options.signal})
+}
 
-export const runChannelMonitorRule = async (ruleId: string): Promise<ChannelMonitorResult> =>
-  requestJson<ChannelMonitorResult>(`/channel-monitor/rules/${encodeURIComponent(ruleId)}/run`, { method: 'POST' })
+export interface MonitorPage {channels: ChannelMonitorSummary['channels'], total: number, ruleIds: string[], page: number, pageSize: number}
+export const getChannelMonitorPage = (query: Record<string, string>, signal?: AbortSignal): Promise<MonitorPage> =>
+  requestJson(`/channel-monitor/channels?${new URLSearchParams(query)}`, {signal})
+
+export interface MediaPreset {model: string, adapter: string, media_type: string, sizes?: string[], duration: {values: number[], min?: number}, resolutions: string[]}
+export const getMonitorMediaPresets = (): Promise<MediaPreset[]> => requestJson('/channel-monitor/media-presets')
+export const resetMonitorMediaTask = (key: string): Promise<void> => requestJson('/channel-monitor/media-tasks/reset', {method: 'POST', body: JSON.stringify({key})})
+export const getMonitorTargetHistory = (id: string, groupId: string): Promise<ChannelMonitorResult[]> =>
+  requestJson(`/channel-monitor/rules/${encodeURIComponent(id)}/history?groupId=${encodeURIComponent(groupId)}`)
+
+export const runChannelMonitorRule = async (ruleId: string, groupId?: string): Promise<ChannelMonitorResult> =>
+  requestJson<ChannelMonitorResult>(`/channel-monitor/rules/${encodeURIComponent(ruleId)}/run${groupId ? `?groupId=${encodeURIComponent(groupId)}` : ''}`, { method: 'POST' })
 
 export const pauseChannelMonitorRule = async (ruleId: string): Promise<void> => {
   await requestJson(`/channel-monitor/rules/${encodeURIComponent(ruleId)}/pause`, { method: 'POST' })
@@ -110,10 +125,10 @@ export const bulkSetChannelMonitorRulesSchedulable = async (ruleIds: string[], s
   })
 }
 
-export const bulkRunChannelMonitorRules = async (ruleIds: string[]): Promise<ChannelMonitorResult[]> =>
+export const bulkRunChannelMonitorRules = async (ruleIds: string[], groupId?: string): Promise<ChannelMonitorResult[]> =>
   requestJson<ChannelMonitorResult[]>('/channel-monitor/rules/bulk/run', {
     method: 'POST',
-    body: JSON.stringify({ ruleIds }),
+    body: JSON.stringify({ ruleIds, groupId }),
   })
 
 export const getChannelMonitorRateRule = async (): Promise<ChannelMonitorRateRuleView> =>

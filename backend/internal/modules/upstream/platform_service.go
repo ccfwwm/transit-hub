@@ -2423,9 +2423,15 @@ func (s *PlatformService) ProbeAPIKey(ctx context.Context, options APIKeyProbeOp
 	}
 
 	platform := normalizeGroupPlatform(options.Platform)
+	if options.Mode == "connection" {
+		return s.probeConnection(ctx, options)
+	}
 	prompt := strings.TrimSpace(options.Prompt)
 	if prompt == "" {
 		prompt = "Reply OK"
+	}
+	if mode := strings.ToLower(strings.TrimSpace(options.Mode)); mode == "image" || mode == "video" {
+		return s.probeMedia(ctx, options)
 	}
 	endpoint := apiProbeEndpoint(baseURL, platform)
 	body := apiProbeBody(platform, modelID, prompt)

@@ -20,6 +20,8 @@ const (
 	StatusBalancePaused = "balance_paused"
 	StatusManualPaused  = "manual_paused"
 	StatusUnsupported   = "unsupported"
+	StatusGenerating    = "generating"
+	StatusConfigError   = "config_error"
 )
 
 const (
@@ -61,6 +63,7 @@ type Rule struct {
 	NextCheckAt                 *time.Time `json:"nextCheckAt"`
 	CreatedAt                   time.Time  `json:"createdAt"`
 	UpdatedAt                   time.Time  `json:"updatedAt"`
+	MonitorGroupID              string     `json:"-"`
 }
 
 type Result struct {
@@ -76,18 +79,52 @@ type Result struct {
 	StartedAt    time.Time `json:"startedAt"`
 	FinishedAt   time.Time `json:"finishedAt"`
 	CreatedAt    time.Time `json:"createdAt"`
+	GroupID      string    `json:"groupId,omitempty"`
+	TaskID       string    `json:"taskId,omitempty"`
+	GroupResults []Result  `json:"groupResults,omitempty"`
 }
 
 type AccountTestOptions struct {
-	ModelID string
-	Prompt  string
+	ModelID     string
+	Prompt      string
+	Mode        string // text, image, video, or connection
+	Size        string
+	Seconds     int
+	TaskID      string
+	Adapter     string
+	PresetModel string
 }
 
 type AccountTestResult struct {
-	Success   bool
-	Message   string
-	LatencyMS int
-	Model     string
+	Success      bool
+	Message      string
+	LatencyMS    int
+	Model        string
+	Pending      bool
+	TaskID       string
+	Uncertain    bool
+	MediaTaskKey string
+	Reused       bool
+}
+
+// MediaTask stores the single billable submission for an asynchronous media
+// check. A task remains associated with its config fingerprint until it is
+// completed or explicitly reset, so retries only poll the original task.
+type MediaTask struct {
+	Key               string             `json:"key"`
+	UserID            string             `json:"-"`
+	AdminAccountID    string             `json:"-"`
+	RuleID            string             `json:"ruleId"`
+	GroupID           string             `json:"groupId"`
+	ModelID           string             `json:"modelId"`
+	Mode              string             `json:"mode"`
+	ConfigFingerprint string             `json:"configFingerprint"`
+	TaskID            string             `json:"taskId"`
+	Status            string             `json:"status"`
+	Message           string             `json:"message"`
+	CreatedAt         time.Time          `json:"createdAt"`
+	UpdatedAt         time.Time          `json:"updatedAt"`
+	Options           AccountTestOptions `json:"-"`
 }
 
 type AdminAccountStatus struct {
@@ -132,57 +169,62 @@ type GroupSummary struct {
 }
 
 type ChannelStatus struct {
-	RepairAvailable             bool       `json:"repairAvailable"`
-	CheckSupported              bool       `json:"checkSupported"`
-	DispatchUnavailableReason   string     `json:"dispatchUnavailableReason"`
-	RuleID                      string     `json:"ruleId"`
-	ConnectionID                string     `json:"connectionId"`
-	Enabled                     bool       `json:"enabled"`
-	Supported                   bool       `json:"supported"`
-	ManualPaused                bool       `json:"manualPaused"`
-	Schedulable                 *bool      `json:"schedulable"`
-	SchedulableManaged          bool       `json:"schedulableManaged"`
-	SchedulableConflict         bool       `json:"schedulableConflict"`
-	AutoEnableBlocked           bool       `json:"autoEnableBlocked"`
-	PriorityManaged             bool       `json:"priorityManaged"`
-	PriorityConflict            bool       `json:"priorityConflict"`
-	TakeoverAvailable           bool       `json:"takeoverAvailable"`
-	Status                      string     `json:"status"`
-	SiteID                      string     `json:"siteId"`
-	SiteName                    string     `json:"siteName"`
-	SitePlatform                string     `json:"sitePlatform"`
-	UpstreamGroupID             string     `json:"upstreamGroupId"`
-	UpstreamGroupName           string     `json:"upstreamGroupName"`
-	GroupType                   string     `json:"groupType"`
-	AdminAccountID              string     `json:"adminAccountId"`
-	AdminAccountName            string     `json:"adminAccountName"`
-	OwnGroups                   []string   `json:"ownGroups"`
-	Balance                     *float64   `json:"balance"`
-	AccountRateMultiplier       *float64   `json:"accountRateMultiplier"`
-	AccountPriority             *int       `json:"accountPriority"`
-	UpstreamMultiplier          *float64   `json:"upstreamMultiplier"`
-	UpstreamEffectiveMultiplier *float64   `json:"upstreamEffectiveMultiplier"`
-	UpstreamMultiplierOverride  *float64   `json:"upstreamMultiplierOverride"`
-	AllowWhenUpstreamRateGteOwn bool       `json:"allowWhenUpstreamRateGteOwn"`
-	OwnGroupMultiplier          *float64   `json:"ownGroupMultiplier"`
-	RecommendedPriority         *int       `json:"recommendedPriority"`
-	RateGateStatus              string     `json:"rateGateStatus"`
-	RateGateMessage             string     `json:"rateGateMessage"`
-	CheckIntervalMinutes        int        `json:"checkIntervalMinutes"`
-	FailureThreshold            int        `json:"failureThreshold"`
-	BalanceThreshold            float64    `json:"balanceThreshold"`
-	ConsecutiveFailures         int        `json:"consecutiveFailures"`
-	LastMessage                 string     `json:"lastMessage"`
-	LastLatencyMS               *int       `json:"lastLatencyMs"`
-	LastCheckedAt               *time.Time `json:"lastCheckedAt"`
-	NextCheckAt                 *time.Time `json:"nextCheckAt"`
-	RecentResults               []Result   `json:"recentResults"`
-	RecentTotal                 int        `json:"recentTotal"`
-	RecentSuccess               int        `json:"recentSuccess"`
-	UptimePercent               float64    `json:"uptimePercent"`
-	TestModelID                 string     `json:"testModelId"`
-	EffectiveTestModelID        string     `json:"effectiveTestModelId"`
-	TestModelSource             string     `json:"testModelSource"` // custom, group, global, unsupported
+	RepairAvailable             bool          `json:"repairAvailable"`
+	CheckSupported              bool          `json:"checkSupported"`
+	DispatchUnavailableReason   string        `json:"dispatchUnavailableReason"`
+	RuleID                      string        `json:"ruleId"`
+	ConnectionID                string        `json:"connectionId"`
+	Enabled                     bool          `json:"enabled"`
+	Supported                   bool          `json:"supported"`
+	ManualPaused                bool          `json:"manualPaused"`
+	Schedulable                 *bool         `json:"schedulable"`
+	SchedulableManaged          bool          `json:"schedulableManaged"`
+	SchedulableConflict         bool          `json:"schedulableConflict"`
+	AutoEnableBlocked           bool          `json:"autoEnableBlocked"`
+	PriorityManaged             bool          `json:"priorityManaged"`
+	PriorityConflict            bool          `json:"priorityConflict"`
+	TakeoverAvailable           bool          `json:"takeoverAvailable"`
+	Status                      string        `json:"status"`
+	SiteID                      string        `json:"siteId"`
+	SiteName                    string        `json:"siteName"`
+	SitePlatform                string        `json:"sitePlatform"`
+	UpstreamGroupID             string        `json:"upstreamGroupId"`
+	UpstreamGroupName           string        `json:"upstreamGroupName"`
+	GroupType                   string        `json:"groupType"`
+	AdminAccountID              string        `json:"adminAccountId"`
+	AdminAccountName            string        `json:"adminAccountName"`
+	OwnGroups                   []string      `json:"ownGroups"`
+	OwnGroupIDs                 []string      `json:"ownGroupIds"`
+	Balance                     *float64      `json:"balance"`
+	AccountRateMultiplier       *float64      `json:"accountRateMultiplier"`
+	AccountPriority             *int          `json:"accountPriority"`
+	UpstreamMultiplier          *float64      `json:"upstreamMultiplier"`
+	UpstreamEffectiveMultiplier *float64      `json:"upstreamEffectiveMultiplier"`
+	UpstreamMultiplierOverride  *float64      `json:"upstreamMultiplierOverride"`
+	AllowWhenUpstreamRateGteOwn bool          `json:"allowWhenUpstreamRateGteOwn"`
+	OwnGroupMultiplier          *float64      `json:"ownGroupMultiplier"`
+	RecommendedPriority         *int          `json:"recommendedPriority"`
+	RateGateStatus              string        `json:"rateGateStatus"`
+	RateGateMessage             string        `json:"rateGateMessage"`
+	CheckIntervalMinutes        int           `json:"checkIntervalMinutes"`
+	FailureThreshold            int           `json:"failureThreshold"`
+	BalanceThreshold            float64       `json:"balanceThreshold"`
+	ConsecutiveFailures         int           `json:"consecutiveFailures"`
+	LastMessage                 string        `json:"lastMessage"`
+	LastLatencyMS               *int          `json:"lastLatencyMs"`
+	LastCheckedAt               *time.Time    `json:"lastCheckedAt"`
+	NextCheckAt                 *time.Time    `json:"nextCheckAt"`
+	RecentResults               []Result      `json:"recentResults"`
+	RecentTotal                 int           `json:"recentTotal"`
+	RecentSuccess               int           `json:"recentSuccess"`
+	UptimePercent               float64       `json:"uptimePercent"`
+	TestModelID                 string        `json:"testModelId"`
+	EffectiveTestModelID        string        `json:"effectiveTestModelId"`
+	TestModelSource             string        `json:"testModelSource"` // custom, group, global, unsupported
+	EffectiveTestMode           string        `json:"effectiveTestMode"`
+	GroupStates                 []TargetState `json:"groupStates"`
+	MediaTaskKey                string        `json:"mediaTaskKey,omitempty"`
+	DetectionGroupID            string        `json:"detectionGroupId"`
 }
 
 type UpdateRuleRequest struct {
@@ -219,6 +261,11 @@ type BulkSchedulableRequest struct {
 
 type BulkRunRequest struct {
 	RuleIDs []string `json:"ruleIds"`
+	GroupID string   `json:"groupId,omitempty"`
+}
+
+type ResetMediaTaskRequest struct {
+	Key string `json:"key"`
 }
 
 type TestModelConfig struct {
@@ -243,9 +290,30 @@ type UpdateTestModelConfigRequest struct {
 // TestModelGroupConfig overrides the platform default for one own group.
 // The group ID is authoritative; the name is retained for a readable UI label.
 type TestModelGroupConfig struct {
-	GroupID   string `json:"groupId"`
-	GroupName string `json:"groupName"`
-	ModelID   string `json:"modelId"`
+	GroupID     string `json:"groupId"`
+	GroupName   string `json:"groupName"`
+	ModelID     string `json:"modelId"`
+	Mode        string `json:"mode,omitempty"`
+	Prompt      string `json:"prompt,omitempty"`
+	Size        string `json:"size,omitempty"`
+	Seconds     int    `json:"seconds,omitempty"`
+	Adapter     string `json:"adapter,omitempty"`
+	PresetModel string `json:"presetModel,omitempty"`
+}
+
+type TargetState struct {
+	RuleID              string     `json:"ruleId"`
+	GroupID             string     `json:"groupId"`
+	Fingerprint         string     `json:"fingerprint"`
+	Status              string     `json:"status"`
+	ConsecutiveFailures int        `json:"consecutiveFailures"`
+	Message             string     `json:"message"`
+	Model               string     `json:"model"`
+	Mode                string     `json:"mode"`
+	LatencyMS           *int       `json:"latencyMs"`
+	CheckedAt           *time.Time `json:"checkedAt"`
+	NextCheckAt         *time.Time `json:"nextCheckAt"`
+	MediaTaskKey        string     `json:"mediaTaskKey,omitempty"`
 }
 
 type RateRule struct {
