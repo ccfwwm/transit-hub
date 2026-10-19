@@ -839,6 +839,7 @@ export default {
         network: 'Could not connect to the upstream. Check its URL, TLS settings, and network reachability.',
         auth: 'Upstream authentication failed (HTTP 401). Check the credentials, sign in again, or update the token.',
         forbidden: 'The upstream denied access (HTTP 403). Check account permissions or the site access policy.',
+        endpointMissing: 'The upstream API endpoint is unavailable (HTTP 404/405). Check the site URL and platform; the upstream may have migrated.',
         rateLimited: 'The upstream is rate limiting requests (HTTP 429). Try again later.',
         unavailable: 'The upstream or its gateway is temporarily unavailable. Try again later.',
         credentialsUnavailable: 'No saved password is available. Edit this site and enter its password again.',

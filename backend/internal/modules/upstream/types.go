@@ -27,6 +27,7 @@ const (
 	ErrorInvalidURL             = "admin.upstream.errors.invalidUrl"
 	ErrorAuth                   = "admin.upstream.errors.auth"
 	ErrorForbidden              = "admin.upstream.errors.forbidden"
+	ErrorEndpointMissing        = "admin.upstream.errors.endpointMissing"
 	ErrorRateLimited            = "admin.upstream.errors.rateLimited"
 	ErrorUnavailable            = "admin.upstream.errors.unavailable"
 	ErrorNetwork                = "admin.upstream.errors.network"

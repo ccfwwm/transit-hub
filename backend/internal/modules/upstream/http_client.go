@@ -229,6 +229,8 @@ func requestErrorForStatus(status int, retryAfter string) *RequestError {
 		key = ErrorAuth
 	case status == http.StatusForbidden:
 		key = ErrorForbidden
+	case status == http.StatusNotFound, status == http.StatusMethodNotAllowed:
+		key = ErrorEndpointMissing
 	case status == http.StatusTooManyRequests:
 		key = ErrorRateLimited
 	case status == http.StatusRequestTimeout, status == http.StatusTooEarly, status >= 500:

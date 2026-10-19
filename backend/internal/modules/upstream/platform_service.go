@@ -136,7 +136,22 @@ func (s *PlatformService) RefreshSession(session Session) (Session, error) {
 		if strings.TrimSpace(session.AccessToken) == "" || session.ExpiresAt == nil || *session.ExpiresAt-time.Now().UnixMilli() > refreshSkewMS {
 			return session, nil
 		}
-		return s.refreshNewAPISession(session)
+		refreshed, err := s.refreshNewAPISession(session)
+		if err == nil {
+			return refreshed, nil
+		}
+		if requestErr, ok := err.(*RequestError); ok {
+			switch requestErr.HTTPStatus {
+			case http.StatusUnauthorized, http.StatusForbidden, http.StatusNotFound, http.StatusMethodNotAllowed:
+				// Some New-API forks remove or reject the refresh endpoint. Let
+				// FetchMetrics verify the existing credentials; an actual 401 then
+				// reaches the stored-password recovery in Service.sync.
+				log.Printf("[newapi-refresh] refresh unavailable; verify existing session base_url=%s status=%d", session.BaseURL, requestErr.HTTPStatus)
+				session.ExpiresAt = nil
+				return session, nil
+			}
+		}
+		return Session{}, err
 	}
 	now := time.Now().UnixMilli()
 	if session.RefreshToken == "" || (session.ExpiresAt != nil && *session.ExpiresAt-now > refreshSkewMS) {

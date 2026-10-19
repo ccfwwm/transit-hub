@@ -839,6 +839,7 @@ export default {
         network: '连接上游失败，请检查站点地址、TLS 设置和网络连通性。',
         auth: '上游认证失败（HTTP 401），请核对凭据或重新登录、更新令牌。',
         forbidden: '上游拒绝访问（HTTP 403），请检查账号权限或站点访问策略。',
+        endpointMissing: '上游接口不存在或不支持该请求（HTTP 404/405），请检查站点地址和平台类型，上游可能已迁移系统。',
         rateLimited: '上游请求过于频繁（HTTP 429），请稍后重试。',
         unavailable: '上游暂时不可用或网关超时，请稍后重试。',
         credentialsUnavailable: '未保存可用的登录密码，请编辑站点并重新输入密码。',

@@ -39,6 +39,8 @@ func TestRequestJSONClassifiesHTTPFailuresWithoutRetryingAuthOrForbidden(t *test
 	}{
 		{name: "unauthorized", status: http.StatusUnauthorized, errorKey: ErrorAuth},
 		{name: "forbidden HTML response", status: http.StatusForbidden, errorKey: ErrorForbidden},
+		{name: "missing endpoint", status: http.StatusNotFound, errorKey: ErrorEndpointMissing},
+		{name: "unsupported method", status: http.StatusMethodNotAllowed, errorKey: ErrorEndpointMissing},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {

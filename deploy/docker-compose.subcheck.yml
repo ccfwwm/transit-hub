@@ -15,7 +15,7 @@ services:
     env_file:
       - ../.env.production
     environment:
-      APP_VERSION: "2.1.14"
+      APP_VERSION: "2.1.15"
 
   postgres:
     image: postgres:16-alpine
