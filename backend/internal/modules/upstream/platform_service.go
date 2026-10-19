@@ -1688,7 +1688,9 @@ func (s *PlatformService) UpdateSub2APIAdminAccountPriority(session Session, acc
 // failures can be retried safely. A persisted-value mismatch is never retried.
 func (s *PlatformService) requestPriorityJSON(reqURL string, options requestOptions) (jsonResponse, error) {
 	for attempt := 0; ; attempt++ {
-		response, err := s.httpClient.requestJSON(reqURL, options)
+		// This helper owns retries for the priority write/read pair; bypass the
+		// generic GET retry so attempts are not multiplied.
+		response, err := s.httpClient.requestJSONOnce(reqURL, options)
 		requestErr, ok := err.(*RequestError)
 		if err == nil || !ok || attempt >= 2 {
 			return response, err

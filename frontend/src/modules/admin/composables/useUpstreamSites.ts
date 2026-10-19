@@ -181,6 +181,11 @@ export const useUpstreamSites = () => {
               }
             }
             siteSyncStates.value.set(id, { phase: 'error', errorKey: event.errorKey })
+            setTimeout(() => {
+              if (siteSyncStates.value.get(id)?.phase === 'error') {
+                siteSyncStates.value.delete(id)
+              }
+            }, 2500)
             break
           case 'complete':
             isRefreshing.value = false

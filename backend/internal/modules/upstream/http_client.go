@@ -8,7 +8,16 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"strconv"
+	"strings"
 	"sync"
+	"time"
+)
+
+const (
+	jsonGetMaxAttempts = 2
+	jsonGetRetryDelay  = 300 * time.Millisecond
+	maxRetryAfter      = 5 * time.Second
 )
 
 // BrowserUserAgent 是所有上游 HTTP 请求统一使用的浏览器 User-Agent。
@@ -80,6 +89,43 @@ func (c *HTTPClient) requestJSON(reqURL string, options requestOptions) (jsonRes
 	if method == "" {
 		method = http.MethodGet
 	}
+	options.Method = method
+	attempts := 1
+	if method == http.MethodGet {
+		attempts = jsonGetMaxAttempts
+	}
+
+	for attempt := 1; attempt <= attempts; attempt++ {
+		response, err := c.requestJSONOnce(reqURL, options)
+		if attempt == attempts || !retryableJSONGet(method, err) {
+			return response, err
+		}
+		delay := jsonGetRetryDelay
+		if requestErr, ok := err.(*RequestError); ok && requestErr.RetryAfter > 0 {
+			if requestErr.RetryAfter > maxRetryAfter {
+				return response, err
+			}
+			if requestErr.RetryAfter > delay {
+				delay = requestErr.RetryAfter
+			}
+		}
+		ctx := options.Context
+		if ctx == nil {
+			ctx = context.Background()
+		}
+		timer := time.NewTimer(delay)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return response, ctx.Err()
+		case <-timer.C:
+		}
+	}
+	return jsonResponse{}, newRequestError(ErrorUnknown, "")
+}
+
+func (c *HTTPClient) requestJSONOnce(reqURL string, options requestOptions) (jsonResponse, error) {
+	method := options.Method
 
 	body, err := encodeBody(options.Body)
 	if err != nil {
@@ -122,26 +168,95 @@ func (c *HTTPClient) requestJSON(reqURL string, options requestOptions) (jsonRes
 	}
 	defer response.Body.Close()
 
-	payload, err := parseJSON(response.Body, reqURL)
+	data, readErr := io.ReadAll(response.Body)
+	if response.StatusCode < 200 || response.StatusCode >= 300 {
+		log.Printf("[http-client] 非 2xx 响应 url=%s status=%d", reqURL, response.StatusCode)
+		var payload any
+		if readErr == nil {
+			_ = json.Unmarshal(data, &payload)
+		}
+		if record, ok := payload.(map[string]any); ok && record["reason"] == "LOGIN_AGREEMENT_REQUIRED" {
+			requestErr := requestErrorForStatus(response.StatusCode, response.Header.Get("Retry-After"))
+			requestErr.MessageKey = ErrorLoginAgreementRequired
+			requestErr.Platform = PlatformSub2API
+			return jsonResponse{}, requestErr
+		}
+		return jsonResponse{}, requestErrorForStatus(response.StatusCode, response.Header.Get("Retry-After"))
+	}
+	if readErr != nil {
+		log.Printf("[http-client] 读取响应体失败 url=%s err=%v", reqURL, readErr)
+		requestErr := newRequestError(ErrorNetwork, "")
+		requestErr.HTTPStatus = response.StatusCode
+		return jsonResponse{}, requestErr
+	}
+	payload, err := parseJSON(bytes.NewReader(data), reqURL)
 	if err != nil {
 		if requestErr, ok := err.(*RequestError); ok {
 			requestErr.HTTPStatus = response.StatusCode
 		}
 		return jsonResponse{}, err
 	}
-	if response.StatusCode < 200 || response.StatusCode >= 300 {
-		log.Printf("[http-client] 非 2xx 响应 url=%s status=%d", reqURL, response.StatusCode)
-		if record, ok := payload.(map[string]any); ok && record["reason"] == "LOGIN_AGREEMENT_REQUIRED" {
-			return jsonResponse{}, newRequestError(ErrorLoginAgreementRequired, PlatformSub2API)
-		}
-		if response.StatusCode == http.StatusUnauthorized {
-			return jsonResponse{}, newRequestError(ErrorAuth, "")
-		}
-		requestErr := newRequestError(ErrorRequest, "")
-		requestErr.HTTPStatus = response.StatusCode
-		return jsonResponse{}, requestErr
-	}
 	return jsonResponse{Payload: payload, Header: response.Header}, nil
+}
+
+func retryableJSONGet(method string, err error) bool {
+	if method != http.MethodGet || err == nil {
+		return false
+	}
+	requestErr, ok := err.(*RequestError)
+	if !ok {
+		return false
+	}
+	if requestErr.MessageKey == ErrorNetwork {
+		return true
+	}
+	if requestErr.MessageKey == ErrorInvalidResponse && requestErr.HTTPStatus >= 200 && requestErr.HTTPStatus < 300 {
+		return true
+	}
+	switch requestErr.HTTPStatus {
+	case http.StatusRequestTimeout, http.StatusTooEarly, http.StatusTooManyRequests,
+		http.StatusInternalServerError, http.StatusBadGateway, http.StatusServiceUnavailable, http.StatusGatewayTimeout:
+		return true
+	default:
+		return false
+	}
+}
+
+func requestErrorForStatus(status int, retryAfter string) *RequestError {
+	key := ErrorRequest
+	switch {
+	case status == http.StatusUnauthorized:
+		key = ErrorAuth
+	case status == http.StatusForbidden:
+		key = ErrorForbidden
+	case status == http.StatusTooManyRequests:
+		key = ErrorRateLimited
+	case status == http.StatusRequestTimeout, status == http.StatusTooEarly, status >= 500:
+		key = ErrorUnavailable
+	}
+	requestErr := newRequestError(key, "")
+	requestErr.HTTPStatus = status
+	requestErr.RetryAfter = parseRetryAfter(retryAfter)
+	return requestErr
+}
+
+func parseRetryAfter(value string) time.Duration {
+	trimmed := strings.TrimSpace(value)
+	if seconds, err := strconv.ParseUint(trimmed, 10, 64); err == nil {
+		if seconds > uint64(maxRetryAfter/time.Second) {
+			return maxRetryAfter + time.Nanosecond
+		}
+		return time.Duration(seconds) * time.Second
+	}
+	if trimmed != "" && strings.Trim(trimmed, "0123456789") == "" {
+		return maxRetryAfter + time.Nanosecond
+	}
+	if retryAt, err := http.ParseTime(trimmed); err == nil {
+		if delay := time.Until(retryAt); delay > 0 {
+			return delay
+		}
+	}
+	return 0
 }
 
 func (c *HTTPClient) requestText(reqURL string, options requestOptions) (textResponse, error) {
@@ -196,10 +311,7 @@ func (c *HTTPClient) requestText(reqURL string, options requestOptions) (textRes
 	}
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
 		log.Printf("[http-client] 非 2xx 响应 url=%s status=%d", reqURL, response.StatusCode)
-		if response.StatusCode == http.StatusUnauthorized {
-			return textResponse{}, newRequestError(ErrorAuth, "")
-		}
-		return textResponse{}, newRequestError(ErrorRequest, "")
+		return textResponse{}, requestErrorForStatus(response.StatusCode, response.Header.Get("Retry-After"))
 	}
 	return textResponse{Body: string(data), Header: response.Header, Status: response.StatusCode}, nil
 }
@@ -226,11 +338,7 @@ func parseJSON(reader io.Reader, reqURL string) (any, error) {
 	}
 	var payload any
 	if err := json.Unmarshal(data, &payload); err != nil {
-		preview := string(data)
-		if len(preview) > 500 {
-			preview = preview[:500] + "...(truncated)"
-		}
-		log.Printf("[http-client] JSON 解析失败 url=%s len=%d preview=%s", reqURL, len(data), preview)
+		log.Printf("[http-client] JSON 解析失败 url=%s len=%d", reqURL, len(data))
 		return nil, newRequestError(ErrorInvalidResponse, "")
 	}
 	return payload, nil

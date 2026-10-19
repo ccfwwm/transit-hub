@@ -836,11 +836,14 @@ export default {
       errors: {
         invalidUrl: 'The site URL is invalid. Check it and try again.',
         loginAgreementRequired: 'The upstream requires the latest login agreement. Accept it on the upstream, then enter that revision and sign in again.',
-        network: 'Network or CORS request failed. Check the site URL and cross-origin settings.',
-        auth: 'Login failed. Check the account or password.',
+        network: 'Could not connect to the upstream. Check its URL, TLS settings, and network reachability.',
+        auth: 'Upstream authentication failed (HTTP 401). Check the credentials, sign in again, or update the token.',
+        forbidden: 'The upstream denied access (HTTP 403). Check account permissions or the site access policy.',
+        rateLimited: 'The upstream is rate limiting requests (HTTP 429). Try again later.',
+        unavailable: 'The upstream or its gateway is temporarily unavailable. Try again later.',
         credentialsUnavailable: 'No saved password is available. Edit this site and enter its password again.',
         request: 'The upstream API request failed. Try again later.',
-        invalidResponse: 'The upstream response could not be parsed.',
+        invalidResponse: 'The upstream returned non-JSON or malformed content, possibly a login page, protection page, or gateway error.',
         tokenMissing: 'Login succeeded but no access token was returned.',
         detect: 'The platform could not be auto-detected. Choose a platform and try again.',
         unknown: 'An unknown error occurred while connecting the upstream site.'

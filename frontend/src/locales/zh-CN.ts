@@ -836,11 +836,14 @@ export default {
       errors: {
         invalidUrl: '站点 URL 无效，请检查后重试。',
         loginAgreementRequired: '上游要求确认最新登录协议，请在上游确认后填写该协议版本并重新登录。',
-        network: '网络或 CORS 请求失败，请检查站点地址与跨域配置。',
-        auth: '登录失败，请检查账号或密码。',
+        network: '连接上游失败，请检查站点地址、TLS 设置和网络连通性。',
+        auth: '上游认证失败（HTTP 401），请核对凭据或重新登录、更新令牌。',
+        forbidden: '上游拒绝访问（HTTP 403），请检查账号权限或站点访问策略。',
+        rateLimited: '上游请求过于频繁（HTTP 429），请稍后重试。',
+        unavailable: '上游暂时不可用或网关超时，请稍后重试。',
         credentialsUnavailable: '未保存可用的登录密码，请编辑站点并重新输入密码。',
         request: '上游接口请求失败，请稍后重试。',
-        invalidResponse: '上游返回内容无法解析。',
+        invalidResponse: '上游返回了非 JSON 或格式无效的内容，可能是登录页、防护页或网关错误。',
         tokenMissing: '登录成功但未返回访问令牌。',
         detect: '无法自动识别平台，请手动选择平台后重试。',
         unknown: '连接上游站点时发生未知错误。'

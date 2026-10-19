@@ -1,9 +1,12 @@
 package upstream
 
+import "time"
+
 type RequestError struct {
 	MessageKey string
 	Platform   Platform
 	HTTPStatus int
+	RetryAfter time.Duration
 }
 
 func (e *RequestError) Error() string {

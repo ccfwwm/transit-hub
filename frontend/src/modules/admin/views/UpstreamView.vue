@@ -546,7 +546,7 @@ onBeforeUnmount(() => {
           </template>
           <template v-else-if="siteSyncStates.get(site.id)?.phase === 'error'">
             <XCircle class="h-6 w-6 text-destructive" />
-            <span class="mt-2 text-sm font-medium text-destructive">{{ t('admin.upstream.syncStream.error') }}</span>
+            <span class="mt-2 max-w-[90%] break-words text-center text-sm font-medium text-destructive">{{ t(siteSyncStates.get(site.id)?.errorKey || site.errorKey || 'admin.upstream.syncStream.error') }}</span>
           </template>
         </div>
 
@@ -746,6 +746,12 @@ onBeforeUnmount(() => {
                   <XCircle v-else class="w-3.5 h-3.5" />
                   {{ statusLabel(site.status) }}
                 </div>
+                <p
+                  v-if="siteSyncStates.get(site.id)?.phase === 'error' || site.errorKey"
+                  class="mt-1 max-w-[180px] break-words text-xs leading-4 text-warning"
+                >
+                  {{ t(siteSyncStates.get(site.id)?.errorKey || site.errorKey || 'admin.upstream.syncStream.error') }}
+                </p>
               </td>
               <td class="px-6 py-4">
                 <div class="flex flex-col gap-0.5">
