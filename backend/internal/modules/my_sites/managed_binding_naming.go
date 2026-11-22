@@ -164,3 +164,18 @@ func (m *KeyManagement) skipOccupiedOrdinal(ctx context.Context, uid, aid string
 	}
 	return next, tx.Commit(ctx)
 }
+
+func verifiedKeyGroupRate(record map[string]any, groupID string) *float64 {
+	if upstream.SecurityKeyGroup(upstream.PlatformSub2API, record) != groupID {
+		return nil
+	}
+	group, ok := record["group"].(map[string]any)
+	if !ok || keyString(group["id"]) != groupID {
+		return nil
+	}
+	rate, ok := group["rate_multiplier"].(float64)
+	if !ok {
+		return nil
+	}
+	return &rate
+}

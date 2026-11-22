@@ -412,7 +412,11 @@ func (m *KeyManagement) bindingSummaries(ctx context.Context, uid, aid string, c
 			row.Groups = append(row.Groups, label)
 			if site := sites[conn.UpstreamSiteID]; site != nil {
 				n := existing[conn.ID+"\x00"+group]
-				want, e := managedBindingName(n.Slug, label, managedRate(site, conn.UpstreamGroupID), n.Number, site.Platform)
+				rate := managedRate(site, conn.UpstreamGroupID)
+				if rate == nil && n.Name != "" && n.Name == conn.AdminAccountName {
+					continue
+				}
+				want, e := managedBindingName(n.Slug, label, rate, n.Number, site.Platform)
 				row.Update = row.Update || n.Number == 0 || e != nil || want != n.Name || want != conn.AdminAccountName
 			}
 		}

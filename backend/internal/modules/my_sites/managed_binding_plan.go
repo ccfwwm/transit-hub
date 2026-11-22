@@ -140,13 +140,19 @@ func (m *KeyManagement) buildBindingPlans(ctx context.Context, uid, aid, onlySit
 		for _, entry := range rows {
 			keyRecords = append(keyRecords, map[string]any{"id": entry.ID, "name": entry.Name})
 		}
+		rate := managedRate(site, conn.UpstreamGroupID)
+		if rate == nil && ok && site.Platform == upstream.PlatformSub2API {
+			if record, _, err := m.platform.ReadSecurityKey(ctx, *site.Session, conn.UpstreamKeyID); err == nil {
+				rate = verifiedKeyGroupRate(record, conn.UpstreamGroupID)
+			}
+		}
 		plan.Limits = key.Remaining
 		if len(conn.OwnGroupIDs) == 1 {
 			plan.Limits = nil
 		}
 		for i, name := range byID[conn.ID] {
 			target := bindingTarget{GroupID: name.GroupID, GroupName: labels[name.GroupID], Number: name.Number, Retain: i == 0}
-			target.Name, err = managedBindingName(name.Slug, target.GroupName, managedRate(site, conn.UpstreamGroupID), name.Number, site.Platform)
+			target.Name, err = managedBindingName(name.Slug, target.GroupName, rate, name.Number, site.Platform)
 			for retries := 0; err == nil && adminErr == nil && nameCollision(keyRecords, accounts, target.Name, conn.UpstreamKeyID, conn.AdminAccountID); retries++ {
 				if retries == 10 {
 					err = fmt.Errorf("存在多个名称冲突")
@@ -156,7 +162,7 @@ func (m *KeyManagement) buildBindingPlans(ctx context.Context, uid, aid, onlySit
 				if err != nil {
 					break
 				}
-				target.Name, err = managedBindingName(name.Slug, target.GroupName, managedRate(site, conn.UpstreamGroupID), target.Number, site.Platform)
+				target.Name, err = managedBindingName(name.Slug, target.GroupName, rate, target.Number, site.Platform)
 			}
 			if err != nil {
 				target.Error = err.Error()
