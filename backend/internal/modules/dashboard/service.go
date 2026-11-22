@@ -4,6 +4,7 @@ import (
 	"context"
 	"log"
 	"strings"
+	"sync"
 	"time"
 
 	"transithub/backend/internal/modules/admin_accounts"
@@ -58,10 +59,12 @@ type MySiteStateSync interface {
 
 // Service 负责仪表盘 admin 账户的登录、状态校验、退出与令牌自动刷新。
 type Service struct {
-	store      SessionStore
-	platform   PlatformClient
-	mySiteSync MySiteStateSync
-	accounts   AdminAccountService
+	store           SessionStore
+	platform        PlatformClient
+	mySiteSync      MySiteStateSync
+	accounts        AdminAccountService
+	reloginMu       sync.Mutex
+	reloginAttempts map[string]*passwordReloginAttempt
 }
 
 func NewService(store SessionStore, platform PlatformClient) *Service {
@@ -385,7 +388,7 @@ func (s *Service) ensureUsableSession(ctx context.Context, userID string, adminA
 	return recovered, true, nil
 }
 
-func (s *Service) reloginWithStoredPassword(ctx context.Context, userID string, adminAccountID string, record *AdminSession) (*AdminSession, bool, error) {
+func (s *Service) performPasswordRelogin(ctx context.Context, userID string, adminAccountID string, record *AdminSession) (*AdminSession, bool, error) {
 	if record == nil || record.AuthMethod != AuthMethodPassword {
 		return record, false, nil
 	}

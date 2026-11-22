@@ -26,6 +26,10 @@ func (r *Repository) ensureTargetSchema(ctx context.Context) error {
  CREATE INDEX IF NOT EXISTS idx_channel_monitor_results_target_created ON channel_monitor_results(rule_id,group_id,created_at DESC);
  ALTER TABLE channel_monitor_media_tasks ADD COLUMN IF NOT EXISTS options_json jsonb NOT NULL DEFAULT '{}'::jsonb;
  CREATE INDEX IF NOT EXISTS idx_channel_monitor_media_tasks_active ON channel_monitor_media_tasks(rule_id,status);`)
+	if err != nil {
+		return err
+	}
+	_, err = r.db.Exec(ctx, `UPDATE channel_monitor_media_tasks SET status='failed',message='图片检测失败：旧请求未取得有效图片，可重新检测' WHERE mode='image' AND ((status IN('unknown','timeout') AND task_id='') OR status='timeout' OR status='submitting' AND created_at<now()-interval '10 minutes')`)
 	return err
 }
 
@@ -71,7 +75,7 @@ func (r *Repository) ClaimMediaTask(ctx context.Context, task MediaTask, eligibl
 	}
 	result, err := r.db.Exec(ctx, `INSERT INTO channel_monitor_media_tasks(key,user_id,admin_account_id,rule_id,group_id,model_id,mode,config_fingerprint,task_id,status,message,created_at,updated_at,options_json)
  VALUES($1,$2,$3,$4,$5,$6,$7,$8,'','submitting','',now(),now(),$10) ON CONFLICT(key) DO UPDATE SET task_id='',status='submitting',message='',created_at=now(),updated_at=now(),options_json=EXCLUDED.options_json
- WHERE channel_monitor_media_tasks.status IN ('success','failed') AND channel_monitor_media_tasks.updated_at < $9`, task.Key, task.UserID, task.AdminAccountID, task.RuleID, task.GroupID, task.ModelID, task.Mode, task.ConfigFingerprint, eligibleBefore, raw)
+ WHERE channel_monitor_media_tasks.status IN ('success','failed','blocked') AND channel_monitor_media_tasks.updated_at < $9`, task.Key, task.UserID, task.AdminAccountID, task.RuleID, task.GroupID, task.ModelID, task.Mode, task.ConfigFingerprint, eligibleBefore, raw)
 	return result.RowsAffected() == 1, err
 }
 
@@ -88,7 +92,7 @@ func (r *Repository) ActiveMediaTask(ctx context.Context, ruleID string) (*Media
 }
 
 func (r *Repository) ListPendingMediaTasks(ctx context.Context) ([]MediaTask, error) {
-	rows, err := r.db.Query(ctx, `SELECT key FROM channel_monitor_media_tasks WHERE status='pending' AND updated_at < now()-interval '10 seconds' ORDER BY updated_at LIMIT 500`)
+	rows, err := r.db.Query(ctx, `SELECT key FROM channel_monitor_media_tasks WHERE status IN('pending','unknown','submitting') AND updated_at < now()-interval '10 seconds' ORDER BY updated_at LIMIT 500`)
 	if err != nil {
 		return nil, err
 	}

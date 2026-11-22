@@ -291,7 +291,7 @@ func TestRealDisconnectNewAPIUpstreamDeletesSub2APIAdminAccountAndNewAPIToken(t 
 
 	err := service.RealDisconnect(context.Background(), "user-1", RealDisconnectRequest{
 		ConnectionID: "conn-1",
-		Mode:         "full",
+		// An omitted mode must default to deleting the Key and forwarding account.
 	})
 	if err != nil {
 		t.Fatalf("RealDisconnect returned error: %v", err)

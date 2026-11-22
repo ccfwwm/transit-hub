@@ -256,9 +256,7 @@ onMounted(() => {
             </div>
             <div>
               <h2 class="text-lg font-semibold text-foreground">{{ t('admin.dashboard.groupList.title') }}</h2>
-              <p class="text-sm text-muted-foreground">
-                {{ t('admin.dashboard.groupList.subtitle', { count: totalMappings }) }}
-              </p>
+              
             </div>
           </div>
           <div class="flex items-center gap-2">

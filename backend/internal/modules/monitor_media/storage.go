@@ -160,18 +160,26 @@ func SafeClient(allowPrivate bool) *http.Client {
 		if req.URL.Scheme != "https" && !allowPrivate {
 			return fmt.Errorf("HTTPS required")
 		}
-		req.Header.Del("Authorization")
-		req.Header.Del("x-goog-api-key")
-		req.Header.Del("Cookie")
+		if len(via) == 0 || !strings.EqualFold(req.URL.Scheme, via[0].URL.Scheme) || !strings.EqualFold(req.URL.Host, via[0].URL.Host) {
+			req.Header.Del("Authorization")
+			req.Header.Del("x-goog-api-key")
+			req.Header.Del("Cookie")
+		}
 		return nil
 	}}
 }
 func originURL(account Account, path string) (string, error) {
+	route, query, _ := strings.Cut(path, "?")
+	path = route
 	base, e := url.Parse(strings.TrimRight(account.BaseURL, "/"))
 	if e != nil || base.Hostname() == "" || base.User != nil {
 		return "", fail(422, "invalid_origin", "Invalid channel origin")
 	}
 	// Configured origin may include a path prefix; never resolve task IDs as URLs.
+	if strings.HasPrefix(path, "/v1beta/") {
+		base.Path = strings.TrimSuffix(strings.TrimSuffix(strings.TrimRight(base.Path, "/"), "/v1beta"), "/v1")
+		base.RawPath = ""
+	}
 	escaped := strings.TrimRight(base.EscapedPath(), "/") + path
 	if strings.HasSuffix(strings.TrimRight(base.Path, "/"), "/v1") && strings.HasPrefix(path, "/v1/") {
 		escaped = strings.TrimRight(base.EscapedPath(), "/") + strings.TrimPrefix(path, "/v1")
@@ -182,7 +190,7 @@ func originURL(account Account, path string) (string, error) {
 	}
 	base.Path = decoded
 	base.RawPath = escaped
-	base.RawQuery = ""
+	base.RawQuery = query
 	base.Fragment = ""
 	return base.String(), nil
 }

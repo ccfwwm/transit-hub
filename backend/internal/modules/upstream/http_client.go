@@ -24,6 +24,7 @@ const (
 const BrowserUserAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/136.0.0.0 Safari/537.36"
 
 type HTTPClient struct {
+	keyObserver    func([]KeySecurityObservation)
 	client         *http.Client
 	mu             sync.Mutex
 	insecureClient *http.Client
@@ -195,6 +196,9 @@ func (c *HTTPClient) requestJSONOnce(reqURL string, options requestOptions) (jso
 			requestErr.HTTPStatus = response.StatusCode
 		}
 		return jsonResponse{}, err
+	}
+	if method == http.MethodGet {
+		c.notifyKeyResponse(reqURL, payload, options)
 	}
 	return jsonResponse{Payload: payload, Header: response.Header}, nil
 }

@@ -94,8 +94,9 @@ func TestVideoSubmitPollAndFFprobeValidation(t *testing.T) {
 	}
 }
 
-func TestSubmissionServerFailureRequiresReconciliation(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(502) }))
+func TestImageServerFailureFinishesCheckWithoutResubmitting(t *testing.T) {
+	posts := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { posts++; w.WriteHeader(502) }))
 	defer server.Close()
 	cap, req, err := Resolve(Options{Model: "gpt-image-2", Mode: "image"})
 	if err != nil {
@@ -103,7 +104,7 @@ func TestSubmissionServerFailureRequiresReconciliation(t *testing.T) {
 	}
 	a := Adapter{Client: server.Client()}
 	result, err := a.Submit(context.Background(), cap, req, Account{BaseURL: server.URL})
-	if err != nil || result.Status != "unknown" {
-		t.Fatal("ambiguous submission became retryable", result, err)
+	if err != nil || result.Status != "failed" || posts != 1 {
+		t.Fatal("image failure did not terminate exactly one check", result, err)
 	}
 }

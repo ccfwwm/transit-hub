@@ -9,6 +9,7 @@ func TestSitePayloadPreservesSkipTLSVerify(t *testing.T) {
 	site := &Site{
 		ID:            "site-with-invalid-certificate",
 		SkipTLSVerify: true,
+		Settings:      SiteSettings{GroupAPIURLs: map[string]string{"g": "https://dc.example.test"}, BalanceThreshold: floatPtrForCache(3), MonitorProfile: &MonitorProfile{Template: "sub2api_plaza", Path: "/custom/model-plaza"}},
 		Session: &Session{
 			Platform:        PlatformNewAPI,
 			InsecureSkipTLS: true,
@@ -25,6 +26,12 @@ func TestSitePayloadPreservesSkipTLSVerify(t *testing.T) {
 	}
 
 	restored := fromPayload(payload)
+	if restored.Settings.GroupAPIURLs["g"] != "https://dc.example.test" {
+		t.Fatal("group API address lost in Redis")
+	}
+	if restored.Settings.MonitorProfile == nil || restored.Settings.MonitorProfile.Path != "/custom/model-plaza" || restored.Settings.BalanceThreshold == nil || *restored.Settings.BalanceThreshold != 3 {
+		t.Fatal("site settings were dropped by Redis serialization")
+	}
 	if !restored.SkipTLSVerify {
 		t.Fatal("expected site-scoped TLS bypass to survive the Redis payload round trip")
 	}
@@ -32,3 +39,5 @@ func TestSitePayloadPreservesSkipTLSVerify(t *testing.T) {
 		t.Fatal("expected the session TLS setting to survive the Redis payload round trip")
 	}
 }
+
+func floatPtrForCache(v float64) *float64 { return &v }

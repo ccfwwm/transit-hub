@@ -45,7 +45,42 @@ type BotNotifier interface {
 
 // Service 负责分组映射的查询与保存，以及真实对接的编排。
 // 供仪表盘分组弹窗和分组倍率页面复用。
+type KeyPolicyProvider interface {
+	AllowedIPs(context.Context, string, string) ([]string, error)
+	Record(context.Context, string, string, string, string, []string) error
+	Apply(context.Context, string, string, upstream.Site, string, bool) ([]string, error)
+}
+
+func (s *Service) SetKeyPolicies(p KeyPolicyProvider) { s.keyPolicies = p }
+func (s *Service) keyIPs(ctx context.Context, uid, aid string, site, group string) ([]string, error) {
+	if s.keyPolicies == nil {
+		return []string{upstream.DefaultMonitorIP}, nil
+	}
+	if p, ok := s.keyPolicies.(interface {
+		AllowedIPsForGroup(context.Context, string, string, string, string) ([]string, error)
+	}); ok {
+		return p.AllowedIPsForGroup(ctx, uid, aid, site, group)
+	}
+	return s.keyPolicies.AllowedIPs(ctx, uid, aid)
+}
+
+func (s *Service) applyKeyPolicy(ctx context.Context, uid, aid string, site upstream.Site, key, group string) ([]string, error) {
+	if p, ok := s.keyPolicies.(interface {
+		ApplyCreatedKeyForGroup(context.Context, string, string, upstream.Site, string, string) ([]string, error)
+	}); ok {
+		return p.ApplyCreatedKeyForGroup(ctx, uid, aid, site, key, group)
+	}
+	if p, ok := s.keyPolicies.(interface {
+		ApplyForGroup(context.Context, string, string, upstream.Site, string, string, bool) ([]string, error)
+	}); ok {
+		return p.ApplyForGroup(ctx, uid, aid, site, key, group, false)
+	}
+	return s.keyPolicies.Apply(ctx, uid, aid, site, key, false)
+}
+
 type Service struct {
+	bindingMonitor  BindingMonitor
+	keyPolicies     KeyPolicyProvider
 	repairMu        sync.Mutex
 	repository      StateRepository
 	connRepository  RealConnectionRepository
@@ -350,6 +385,10 @@ func (s *Service) RealConnect(ctx context.Context, userID string, req RealConnec
 	}
 
 	s.addUpstreamMapping(ctx, userID, adminAccountID, req.OwnGroupIDs, req.UpstreamSiteID, groupName)
+	if err := s.configureBindingModel(ctx, &conn, req.TestModelID, req.AllowWhenUpstreamRateGteOwn); err != nil {
+		return RealConnectResponse{}, err
+	}
+	s.membershipChanged(ctx, conn, conn.OwnGroupIDs)
 
 	log.Printf("[real-connect] 真实对接完成 conn_id=%s site=%s group=%s type=%s platform=%s", conn.ID, upstreamSite.Name, groupName, groupType, upstreamSite.Platform)
 	return RealConnectResponse{Connection: conn}, nil
@@ -372,10 +411,20 @@ func (s *Service) realConnectSub2API(ctx context.Context, userID string, req Rea
 
 	log.Printf("[real-connect] sub2api 开始创建上游 key site=%s group=%s type=%s", upstreamSite.Name, groupName, groupType)
 	upstreamSession := *upstreamSite.Session
-	keyID, key, err := s.platformService.CreateSub2APIKey(upstreamSession, keyName, groupIDInt)
+	ips, err := s.keyIPs(ctx, userID, state.AdminAccountID, upstreamSite.ID, req.UpstreamGroupID)
+	if err != nil {
+		return RealConnection{}, err
+	}
+	keyID, key, err := s.platformService.CreateSub2APIKey(upstreamSession, keyName, groupIDInt, ips)
 	if err != nil {
 		log.Printf("[real-connect] 创建上游 key 失败 site=%s err=%v", upstreamSite.Name, err)
 		return RealConnection{}, err
+	}
+	if s.keyPolicies != nil {
+		if _, e := s.applyKeyPolicy(ctx, userID, state.AdminAccountID, *upstreamSite, keyID, req.UpstreamGroupID); e != nil {
+			_ = s.platformService.DeleteSub2APIKey(upstreamSession, keyID)
+			return RealConnection{}, e
+		}
 	}
 	log.Printf("[real-connect] 上游 key 创建成功 key_id=%s", keyID)
 
@@ -385,7 +434,7 @@ func (s *Service) realConnectSub2API(ctx context.Context, userID string, req Rea
 		return RealConnection{}, requestError(ErrorRequest)
 	}
 
-	payload := buildAccountPayload(groupType, upstreamSite.BaseURL, key, ownGroupIDInts, accountName)
+	payload := buildAccountPayload(groupType, upstream.EffectiveAPIURL(*upstreamSite, req.UpstreamGroupID, ""), key, ownGroupIDInts, accountName)
 	accountID, err := s.platformService.CreateSub2APIAdminAccount(state.Session, payload)
 	if err != nil {
 		log.Printf("[real-connect] 创建 admin 账号失败 key_id=%s err=%v", keyID, err)
@@ -402,6 +451,7 @@ func (s *Service) realConnectSub2API(ctx context.Context, userID string, req Rea
 		UserID:                  userID,
 		WorkspaceAdminAccountID: state.AdminAccountID,
 		UpstreamSiteID:          req.UpstreamSiteID,
+		UpstreamAPIURL:          upstream.EffectiveAPIURL(*upstreamSite, req.UpstreamGroupID, ""),
 		UpstreamGroupID:         req.UpstreamGroupID,
 		UpstreamGroupName:       groupName,
 		UpstreamKeyID:           keyID,
@@ -422,12 +472,22 @@ func (s *Service) realConnectNewAPI(ctx context.Context, userID string, req Real
 
 	// 步骤 1：在上游站点创建 Token
 	tokenName := fmt.Sprintf("%s-%s-%s", randomKeyPrefix(), upstreamSite.Name, groupName)
-	tokenID, tokenKey, err := s.platformService.CreateNewAPIToken(upstreamSession, tokenName, req.UpstreamGroupID)
+	ips, err := s.keyIPs(ctx, userID, state.AdminAccountID, upstreamSite.ID, req.UpstreamGroupID)
+	if err != nil {
+		return RealConnection{}, err
+	}
+	tokenID, tokenKey, err := s.platformService.CreateNewAPIToken(upstreamSession, tokenName, req.UpstreamGroupID, ips)
 	if err != nil {
 		log.Printf("[real-connect] new-api 创建 token 失败 site=%s err=%v", upstreamSite.Name, err)
 		return RealConnection{}, err
 	}
-	log.Printf("[real-connect] new-api token 创建成功 token_id=%s key=%s...", tokenID, safeKeyPreview(tokenKey))
+	if s.keyPolicies != nil {
+		if _, e := s.applyKeyPolicy(ctx, userID, state.AdminAccountID, *upstreamSite, tokenID, req.UpstreamGroupID); e != nil {
+			_ = s.platformService.DeleteNewAPIToken(upstreamSession, tokenID)
+			return RealConnection{}, e
+		}
+	}
+	log.Printf("[real-connect] new-api token 创建成功 token_id=%s", tokenID)
 
 	adminTargetID, adminTargetName, err := s.createAdminTargetForNewAPIUpstream(state.Session, req, upstreamSite, groupType, groupName, tokenKey, tokenID)
 	if err != nil {
@@ -443,6 +503,7 @@ func (s *Service) realConnectNewAPI(ctx context.Context, userID string, req Real
 		UserID:                  userID,
 		WorkspaceAdminAccountID: state.AdminAccountID,
 		UpstreamSiteID:          req.UpstreamSiteID,
+		UpstreamAPIURL:          upstream.EffectiveAPIURL(*upstreamSite, req.UpstreamGroupID, ""),
 		UpstreamGroupID:         req.UpstreamGroupID,
 		UpstreamGroupName:       groupName,
 		UpstreamKeyID:           tokenID,
@@ -465,7 +526,7 @@ func (s *Service) createAdminTargetForNewAPIUpstream(adminSession upstream.Sessi
 		}
 		typePrefix := groupTypePrefix(groupType)
 		accountName := fmt.Sprintf("%s-【%s】-%s", typePrefix, upstreamSite.Name, groupName)
-		payload := buildAccountPayload(groupType, upstreamSite.BaseURL, tokenKey, ownGroupIDInts, accountName)
+		payload := buildAccountPayload(groupType, upstream.EffectiveAPIURL(*upstreamSite, req.UpstreamGroupID, ""), tokenKey, ownGroupIDInts, accountName)
 		accountID, err := s.platformService.CreateSub2APIAdminAccount(adminSession, payload)
 		if err != nil {
 			log.Printf("[real-connect] new-api 创建 sub2api admin 账号失败 token_id=%s err=%v", tokenID, err)
@@ -486,7 +547,7 @@ func (s *Service) createAdminTargetForNewAPIUpstream(adminSession upstream.Sessi
 		}
 		channelTypeName := newAPIChannelTypeName(channelType)
 		channelName := fmt.Sprintf("%s-【%s】-%s", channelTypeName, upstreamSite.Name, groupName)
-		channelID, err := s.platformService.CreateNewAPIChannel(adminSession, channelName, upstreamSite.BaseURL, tokenKey, channelType, req.OwnGroupIDs)
+		channelID, err := s.platformService.CreateNewAPIChannel(adminSession, channelName, upstream.EffectiveAPIURL(*upstreamSite, req.UpstreamGroupID, ""), tokenKey, channelType, req.OwnGroupIDs)
 		if err != nil {
 			log.Printf("[real-connect] new-api 创建 channel 失败 token_id=%s err=%v", tokenID, err)
 			return "", "", err
@@ -671,8 +732,12 @@ func (s *Service) ListUpstreamKeys(ctx context.Context, userID string, siteID st
 	if strings.TrimSpace(siteID) == "" {
 		return nil, requestError(ErrorRequest)
 	}
+	aid, err := s.currentAdminAccountID(ctx, userID)
+	if err != nil {
+		return nil, err
+	}
 	upstreamSite, err := s.upstreamLookup.GetSite(ctx, siteID)
-	if err != nil || upstreamSite == nil || upstreamSite.Session == nil {
+	if err != nil || upstreamSite == nil || upstreamSite.Session == nil || upstreamSite.UserID != userID || upstreamSite.AdminAccountID != aid {
 		return nil, requestError(ErrorRequest)
 	}
 	session := *upstreamSite.Session
@@ -742,6 +807,7 @@ func (s *Service) RealBind(ctx context.Context, userID string, req RealBindReque
 		UserID:                  userID,
 		WorkspaceAdminAccountID: adminAccountID,
 		UpstreamSiteID:          req.UpstreamSiteID,
+		UpstreamAPIURL:          upstream.EffectiveAPIURL(*upstreamSite, req.UpstreamGroupID, ""),
 		UpstreamGroupID:         req.UpstreamGroupID,
 		UpstreamGroupName:       groupName,
 		UpstreamKeyID:           strings.TrimSpace(req.UpstreamKeyID),
@@ -760,6 +826,10 @@ func (s *Service) RealBind(ctx context.Context, userID string, req RealBindReque
 	}
 
 	s.addUpstreamMapping(ctx, userID, adminAccountID, req.OwnGroupIDs, req.UpstreamSiteID, groupName)
+	if err := s.configureBindingModel(ctx, &conn, req.TestModelID, req.AllowWhenUpstreamRateGteOwn); err != nil {
+		return RealConnectResponse{}, err
+	}
+	s.membershipChanged(ctx, conn, conn.OwnGroupIDs)
 
 	log.Printf("[real-bind] 手动绑定完成 conn_id=%s site=%s group=%s type=%s", connID, upstreamSite.Name, groupName, groupType)
 	return RealConnectResponse{Connection: conn}, nil
@@ -774,7 +844,11 @@ func (s *Service) ListRealConnections(ctx context.Context, userID string) ([]Rea
 	if err != nil {
 		return nil, err
 	}
-	return s.connRepository.ListRealConnections(ctx, userID, adminAccountID)
+	conns, err := s.connRepository.ListRealConnections(ctx, userID, adminAccountID)
+	if err == nil && s.bindingMonitor != nil {
+		err = s.bindingMonitor.PopulatePrimaryModels(ctx, userID, adminAccountID, conns)
+	}
+	return conns, err
 }
 
 // UpdateRealConnectionGroups updates both the remote forwarding target groups
@@ -797,6 +871,7 @@ func (s *Service) UpdateRealConnectionGroups(ctx context.Context, userID string,
 		return RealConnection{}, requestError(ErrorRequest)
 	}
 
+	oldGroups := append([]string(nil), conn.OwnGroupIDs...)
 	groupIDs := uniqueStrings(req.OwnGroupIDs)
 	state, err := s.authenticatedState(ctx, userID, adminAccountID)
 	if err != nil {
@@ -844,6 +919,10 @@ func (s *Service) UpdateRealConnectionGroups(ctx context.Context, userID string,
 	if err := s.syncConnectionMapping(ctx, userID, adminAccountID, conn); err != nil {
 		return RealConnection{}, err
 	}
+	if err := s.configureBindingModel(ctx, conn, req.TestModelID, req.AllowWhenUpstreamRateGteOwn); err != nil {
+		return RealConnection{}, err
+	}
+	s.membershipChanged(ctx, *conn, append(oldGroups, groupIDs...))
 	return *conn, nil
 }
 
@@ -947,6 +1026,9 @@ func removeTarget(targets []UpstreamGroupRef, target UpstreamGroupRef) []Upstrea
 // mode == "unlink"：仅删除 real_connections 记录（所有平台通用）。
 // mode == "full"：按 admin 站点平台删除转发目标，再按上游站点平台删除 key/token，最后删除记录。
 func (s *Service) RealDisconnect(ctx context.Context, userID string, req RealDisconnectRequest) error {
+	if req.Mode == "" {
+		req.Mode = "full"
+	}
 	if strings.TrimSpace(req.ConnectionID) == "" || (req.Mode != "unlink" && req.Mode != "full") {
 		return requestError(ErrorRequest)
 	}
@@ -991,6 +1073,7 @@ func (s *Service) RealDisconnect(ctx context.Context, userID string, req RealDis
 	}
 
 	s.removeUpstreamMapping(ctx, userID, adminAccountID, conn.UpstreamSiteID, conn.UpstreamGroupName)
+	s.membershipChanged(ctx, *conn, conn.OwnGroupIDs)
 
 	log.Printf("[real-disconnect] 取消对接完成 conn_id=%s mode=%s", req.ConnectionID, req.Mode)
 	return nil

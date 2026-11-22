@@ -105,7 +105,7 @@ onMounted(() => {
             </div>
             <div>
               <h2 class="text-lg font-semibold text-foreground">{{ t('admin.dashboard.balanceFilter.title') }}</h2>
-              <p class="text-sm text-muted-foreground">{{ t('admin.dashboard.balanceFilter.subtitle') }}</p>
+              
             </div>
           </div>
           <button
@@ -129,7 +129,7 @@ onMounted(() => {
             <div class="flex items-center justify-between gap-4 rounded-xl border border-border/60 p-4">
               <div>
                 <p class="text-sm font-medium text-foreground">{{ t('admin.dashboard.balanceFilter.excludeAdmin') }}</p>
-                <p class="mt-0.5 text-xs text-muted-foreground">{{ t('admin.dashboard.balanceFilter.excludeAdminHelp') }}</p>
+                
               </div>
               <button
                 type="button"
@@ -150,7 +150,7 @@ onMounted(() => {
             <div class="space-y-3">
               <div>
                 <p class="text-sm font-medium text-foreground">{{ t('admin.dashboard.balanceFilter.excludeBalances') }}</p>
-                <p class="mt-0.5 text-xs text-muted-foreground">{{ t('admin.dashboard.balanceFilter.excludeBalancesHelp') }}</p>
+                
               </div>
 
               <!-- Existing values -->

@@ -332,7 +332,7 @@ const charts = computed(() =>
       <div class="flex flex-wrap items-end justify-between gap-4">
         <div>
           <h2 class="text-lg font-semibold text-foreground">{{ t('admin.dashboard.charts.title') }}</h2>
-          <p class="mt-1 text-sm text-muted-foreground">{{ t('admin.dashboard.charts.subtitle') }}</p>
+          
         </div>
         <div
           class="inline-flex items-center rounded-xl border border-border/60 bg-surface/40 p-1"
@@ -382,7 +382,7 @@ const charts = computed(() =>
       </div>
       <div class="space-y-1.5">
         <h2 class="text-lg font-semibold text-foreground">{{ t('admin.dashboard.adminAuth.dataLocked.title') }}</h2>
-        <p class="max-w-md text-sm text-muted-foreground">{{ t('admin.dashboard.adminAuth.dataLocked.description') }}</p>
+        
       </div>
       <button
         type="button"

@@ -15,9 +15,19 @@ func NewPlatformAdapter(platform *upstream.PlatformService) PlatformAdapter {
 	return PlatformAdapter{platform: platform}
 }
 
+func (a PlatformAdapter) FetchKeyModels(ctx context.Context, site upstream.Site, conn my_sites.RealConnection) ([]string, error) {
+	return a.platform.FetchAPIKeyModelIDs(ctx, upstream.APIKeyProbeOptions{BaseURL: upstream.EffectiveAPIURL(site, conn.UpstreamGroupID, conn.UpstreamAPIURL), APIKey: conn.UpstreamKey, InsecureSkipTLS: site.SkipTLSVerify || (site.Session != nil && site.Session.InsecureSkipTLS)})
+}
+
 func (a PlatformAdapter) ProbeUpstreamConnection(ctx context.Context, site upstream.Site, connection my_sites.RealConnection, options AccountTestOptions) (AccountTestResult, error) {
+	apiURL := options.APIURL
+	if apiURL == "" {
+		apiURL = upstream.EffectiveAPIURL(site, connection.UpstreamGroupID, connection.UpstreamAPIURL)
+	}
 	result, err := a.platform.ProbeAPIKey(ctx, upstream.APIKeyProbeOptions{
-		BaseURL:         site.BaseURL,
+		Recover:         options.Recover,
+		IdempotencyKey:  options.IdempotencyKey,
+		BaseURL:         apiURL,
 		APIKey:          connection.UpstreamKey,
 		Platform:        connection.GroupType,
 		ModelID:         options.ModelID,
@@ -31,16 +41,18 @@ func (a PlatformAdapter) ProbeUpstreamConnection(ctx context.Context, site upstr
 		InsecureSkipTLS: site.SkipTLSVerify || (site.Session != nil && site.Session.InsecureSkipTLS),
 	})
 	if err != nil {
-		return AccountTestResult{}, err
+		return AccountTestResult{
+			Inconclusive: result.Inconclusive}, err
 	}
 	return AccountTestResult{
-		Success:   result.Success,
-		Message:   result.Message,
-		LatencyMS: result.LatencyMS,
-		Model:     result.Model,
-		Pending:   result.Pending,
-		TaskID:    result.TaskID,
-		Uncertain: result.Uncertain,
+		Inconclusive: result.Inconclusive,
+		Success:      result.Success,
+		Message:      result.Message,
+		LatencyMS:    result.LatencyMS,
+		Model:        result.Model,
+		Pending:      result.Pending,
+		TaskID:       result.TaskID,
+		Uncertain:    result.Uncertain,
 	}, nil
 }
 

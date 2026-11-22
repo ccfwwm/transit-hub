@@ -74,6 +74,10 @@ func (r *Repository) EnsureSchema(ctx context.Context) error {
 		return err
 	}
 	_, err = r.db.Exec(ctx, `ALTER TABLE real_connections ADD COLUMN IF NOT EXISTS workspace_admin_account_id text NOT NULL DEFAULT ''`)
+	if err != nil {
+		return err
+	}
+	_, err = r.db.Exec(ctx, `ALTER TABLE real_connections ADD COLUMN IF NOT EXISTS upstream_api_url text NOT NULL DEFAULT ''`)
 	return err
 }
 
@@ -135,11 +139,11 @@ func (r *Repository) SaveRealConnection(ctx context.Context, conn RealConnection
 		return err
 	}
 	_, err = r.db.Exec(ctx, `
-		INSERT INTO real_connections (id, user_id, workspace_admin_account_id, upstream_site_id, upstream_group_id, upstream_group_name, upstream_key_id, upstream_key, admin_account_id, admin_account_name, own_group_ids, group_type, created_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::jsonb, $12, $13)
+		INSERT INTO real_connections (id, user_id, workspace_admin_account_id, upstream_site_id, upstream_group_id, upstream_group_name, upstream_key_id, upstream_key, admin_account_id, admin_account_name, own_group_ids, group_type, created_at, upstream_api_url)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::jsonb, $12, $13, $14)
 	`, conn.ID, conn.UserID, conn.WorkspaceAdminAccountID, conn.UpstreamSiteID, conn.UpstreamGroupID, conn.UpstreamGroupName,
 		conn.UpstreamKeyID, conn.UpstreamKey, conn.AdminAccountID, conn.AdminAccountName,
-		string(ownGroupIDsJSON), conn.GroupType, conn.CreatedAt)
+		string(ownGroupIDsJSON), conn.GroupType, conn.CreatedAt, conn.UpstreamAPIURL)
 	return err
 }
 
@@ -161,7 +165,7 @@ func (r *Repository) ListRealConnections(ctx context.Context, userID string, adm
 	rows, err := r.db.Query(ctx, `
 		SELECT id, user_id, workspace_admin_account_id, upstream_site_id, upstream_group_id, upstream_group_name,
 		       upstream_key_id, upstream_key, admin_account_id, admin_account_name,
-		       own_group_ids, group_type, created_at
+		       own_group_ids, group_type, created_at, upstream_api_url
 		FROM real_connections WHERE user_id = $1 AND workspace_admin_account_id = $2 ORDER BY created_at DESC
 	`, userID, adminAccountID)
 	if err != nil {
@@ -176,7 +180,7 @@ func (r *Repository) ListRealConnections(ctx context.Context, userID string, adm
 		var createdAt time.Time
 		if err := rows.Scan(&conn.ID, &conn.UserID, &conn.WorkspaceAdminAccountID, &conn.UpstreamSiteID, &conn.UpstreamGroupID, &conn.UpstreamGroupName,
 			&conn.UpstreamKeyID, &conn.UpstreamKey, &conn.AdminAccountID, &conn.AdminAccountName,
-			&ownGroupIDsJSON, &conn.GroupType, &createdAt); err != nil {
+			&ownGroupIDsJSON, &conn.GroupType, &createdAt, &conn.UpstreamAPIURL); err != nil {
 			return nil, err
 		}
 		if err := json.Unmarshal(ownGroupIDsJSON, &conn.OwnGroupIDs); err != nil {
@@ -193,7 +197,7 @@ func (r *Repository) GetRealConnection(ctx context.Context, id string, userID st
 	row := r.db.QueryRow(ctx, `
 		SELECT id, user_id, workspace_admin_account_id, upstream_site_id, upstream_group_id, upstream_group_name,
 		       upstream_key_id, upstream_key, admin_account_id, admin_account_name,
-		       own_group_ids, group_type, created_at
+		       own_group_ids, group_type, created_at, upstream_api_url
 		FROM real_connections WHERE id = $1 AND user_id = $2 AND workspace_admin_account_id = $3
 	`, id, userID, adminAccountID)
 	var conn RealConnection
@@ -201,7 +205,7 @@ func (r *Repository) GetRealConnection(ctx context.Context, id string, userID st
 	var createdAt time.Time
 	if err := row.Scan(&conn.ID, &conn.UserID, &conn.WorkspaceAdminAccountID, &conn.UpstreamSiteID, &conn.UpstreamGroupID, &conn.UpstreamGroupName,
 		&conn.UpstreamKeyID, &conn.UpstreamKey, &conn.AdminAccountID, &conn.AdminAccountName,
-		&ownGroupIDsJSON, &conn.GroupType, &createdAt); err != nil {
+		&ownGroupIDsJSON, &conn.GroupType, &createdAt, &conn.UpstreamAPIURL); err != nil {
 		if err == pgx.ErrNoRows {
 			return nil, nil
 		}

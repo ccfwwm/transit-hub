@@ -100,7 +100,7 @@ const save = async () => {
                 <div class="w-9 h-5 bg-surface-elevated rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-border after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-primary"></div>
               </label>
             </div>
-            <p class="text-xs text-muted-foreground">{{ t('admin.upstream.siteSettings.balanceThresholdHelp') }}</p>
+            
             <div v-if="useCustomThreshold" class="animate-in slide-in-from-top-2 fade-in duration-200">
               <Input
                 type="number"

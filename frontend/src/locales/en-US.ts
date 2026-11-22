@@ -844,6 +844,7 @@ export default {
         unavailable: 'The upstream or its gateway is temporarily unavailable. Try again later.',
         credentialsUnavailable: 'No saved password is available. Edit this site and enter its password again.',
         request: 'The upstream API request failed. Try again later.',
+        tokenCreationRejected: 'The upstream rejected Key creation. Check group permissions and account limits.',
         invalidResponse: 'The upstream returned non-JSON or malformed content, possibly a login page, protection page, or gateway error.',
         tokenMissing: 'Login succeeded but no access token was returned.',
         detect: 'The platform could not be auto-detected. Choose a platform and try again.',

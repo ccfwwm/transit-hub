@@ -92,9 +92,7 @@ watch(() => props.open, (isOpen) => {
             </div>
             <div>
               <h2 class="text-lg font-semibold text-foreground">{{ t('admin.dashboard.upstreamBalanceBreakdown.title') }}</h2>
-              <p class="text-sm text-muted-foreground">
-                {{ t('admin.dashboard.upstreamBalanceBreakdown.subtitle', { count: sites.length, total: formatCny(total) }) }}
-              </p>
+              
             </div>
           </div>
           <div class="flex items-center gap-2">

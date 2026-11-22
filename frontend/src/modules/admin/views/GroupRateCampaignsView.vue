@@ -173,7 +173,7 @@ onMounted(() => {
           <Megaphone class="h-5 w-5" />
         </div>
         <h3 class="mt-4 font-semibold text-foreground">{{ t('admin.groupRateCampaigns.empty.title') }}</h3>
-        <p class="mt-2 max-w-sm text-sm text-muted-foreground">{{ t('admin.groupRateCampaigns.empty.description') }}</p>
+        
       </div>
 
       <div v-else class="flex-1 overflow-auto">

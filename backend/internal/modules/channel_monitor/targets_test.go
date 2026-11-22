@@ -118,6 +118,7 @@ func targetFixture() (context.Context, *testService, *targetTestStore, *targetTe
 	ts.conns.connections[0].OwnGroupIDs = []string{"a", "b"}
 	ts.conns.connections[0].UpstreamKey = "fixture"
 	config := DefaultTestModelConfig("user-1", "admin-1")
+	config.StatusSource = "active"
 	config.GroupModels = []TestModelGroupConfig{{GroupID: "a", ModelID: "good"}, {GroupID: "b", ModelID: "bad"}}
 	repo.testModelConfig = &config
 	platform := &targetTestPlatform{fakeMonitorPlatform: ts.platform, probe: func(o AccountTestOptions) (AccountTestResult, error) {
@@ -283,7 +284,7 @@ func TestMediaPollingTimeoutAndTransportAmbiguity(t *testing.T) {
 	s.conns.connections[0].OwnGroupIDs = []string{"a"}
 	fp := configFingerprint(s.conns.connections[0], effectiveTestOptionsForGroup(store.mustRule("conn-1"), s.conns.connections[0], s.state(), *store.testModelConfig, "a").options())
 	key := "conn-1|" + fp
-	store.tasks[key] = MediaTask{Key: key, RuleID: "conn-1", ModelID: "alias", Mode: "video", Status: "pending", TaskID: "original", CreatedAt: time.Now().Add(-time.Minute), UpdatedAt: time.Now().Add(-20 * time.Second)}
+	store.tasks[key] = MediaTask{Key: key, RuleID: "conn-1", ModelID: "alias", Mode: "video", Status: "pending", TaskID: "original", CreatedAt: time.Now().Add(-time.Minute), UpdatedAt: time.Now().Add(-40 * time.Second)}
 	polled := make(chan struct{}, 1)
 	p.probe = func(o AccountTestOptions) (AccountTestResult, error) {
 		if o.TaskID != "original" {
@@ -311,7 +312,7 @@ func TestMediaPollingTimeoutAndTransportAmbiguity(t *testing.T) {
 		t.Fatal(task)
 	}
 	task.CreatedAt = time.Now().Add(-61 * time.Minute)
-	task.UpdatedAt = time.Now().Add(-20 * time.Second)
+	task.UpdatedAt = time.Now().Add(-70 * time.Second)
 	store.mu.Lock()
 	store.tasks[key] = *task
 	store.mu.Unlock()
@@ -454,5 +455,19 @@ func TestMediaQueueAdmissionNeverWaitsForGeneration(t *testing.T) {
 	}
 	if time.Since(start) > time.Second {
 		t.Fatal("500 media admissions blocked request")
+	}
+}
+
+func TestQueuedMediaDoesNotSubmitAfterActiveSwitchOff(t *testing.T) {
+	ctx, s, store, p := targetFixture()
+	store.testModelConfig.StatusSource = "upstream"
+	conn := s.conns.connections[0]
+	site, _ := s.upstreams.GetSite(ctx, conn.UpstreamSiteID)
+	task := MediaTask{Key: "switch-off-task", RuleID: "conn-1", UserID: "user-1", AdminAccountID: "admin-1", Status: "submitting", CreatedAt: time.Now()}
+	store.tasks[task.Key] = task
+	s.executeMedia(store, task, conn, *site, AccountTestOptions{ModelID: "gpt-image-2", Mode: "image"}, false)
+	saved, _ := store.GetMediaTask(ctx, task.Key)
+	if len(p.testOptions) != 0 || saved.Status != "blocked" {
+		t.Fatal("queued task made a paid submission after disabling active checks")
 	}
 }

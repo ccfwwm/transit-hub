@@ -35,6 +35,10 @@ export interface ChannelMonitorGroup {
 }
 
 export interface ChannelMonitorChannel {
+  keyWhitelistEnabled?:boolean
+  modelSummary?: {id:string;model:string;status:string;source:string;checkedAt?:string|null;message?:string;timeline?:{status:string;checkedAt?:string|null;latencyMs?:number|null}[]}
+  keyPolicy?: {allowedIPs:string[];version:number;inherited:boolean;observedIPs:string[];observedAt?:string;boundKeys:number}
+  dispatchState?: string
   ruleId: string
   connectionId: string
   enabled: boolean
@@ -64,7 +68,7 @@ export interface ChannelMonitorChannel {
   detectionGroupId: string
   effectiveTestMode: string
   mediaTaskKey?: string
-  groupStates: Array<{groupId: string, status: ChannelMonitorStatus, model: string, mode: string, consecutiveFailures: number, message: string}>
+  groupStates: Array<{models?: Array<{model:string,mode:string,status:string,message:string,source?:string}>, groupId: string, status: ChannelMonitorStatus, model: string, mode: string, consecutiveFailures: number, message: string}>
   balance: number | null
   accountRateMultiplier: number | null
   accountPriority: number | null
@@ -94,6 +98,9 @@ export interface ChannelMonitorChannel {
 }
 
 export interface ChannelMonitorSummary {
+  snapshotVersion?: number
+  updatedAt?: string
+  stale?: boolean
   stats: ChannelMonitorStats
   groups: ChannelMonitorGroup[]
   channels: ChannelMonitorChannel[]
@@ -143,6 +150,7 @@ export interface ChannelMonitorRateRule {
 }
 
 export interface ChannelMonitorRateRuleView {
+  planVersion?: string
   rule: ChannelMonitorRateRule
   summary: ChannelMonitorRateSummary
   rows: ChannelMonitorRateRow[]
@@ -231,10 +239,11 @@ export interface ChannelMonitorTestModelConfig {
 }
 
 export interface ChannelMonitorGroupModelConfig {
+  intervalMinutes?: number
   groupId: string
   groupName: string
   modelId: string
-  mode?: 'text' | 'image' | 'video' | 'connection'
+  mode?: 'text' | 'image' | 'video' | 'audio' | 'connection'
   prompt?: string
   size?: string
   seconds?: number

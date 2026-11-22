@@ -14,6 +14,7 @@ import (
 
 	"golang.org/x/sync/singleflight"
 
+	"transithub/backend/internal/modules/jobs"
 	media "transithub/backend/internal/modules/monitor_media"
 	"transithub/backend/internal/modules/my_sites"
 	"transithub/backend/internal/modules/upstream"
@@ -87,6 +88,11 @@ type AdminAccountResolver interface {
 }
 
 type Service struct {
+	bindingSync      monitorBindingSync
+	shadowAutomation bool
+	health           *upstream.HealthService
+	jobs             *jobs.Service
+	keyPolicies      *upstream.KeyPolicies
 	store            Store
 	conns            ConnectionStore
 	states           StateStore
@@ -103,6 +109,8 @@ type Service struct {
 	runLocks         sync.Map
 	mediaActive      sync.Map
 	mediaWorkers     sync.Once
+	mediaPollOnce    sync.Once
+	mediaPollSlots   chan struct{}
 	mediaQueue       []func()
 	mediaQueueMu     sync.Mutex
 	mediaQueueCond   *sync.Cond
@@ -778,6 +786,25 @@ func (s *Service) SyncAndTakeOverRule(ctx context.Context, userID, ruleID string
 	if err != nil {
 		return Rule{}, err
 	}
+	if s.bindingSync != nil {
+		conn, e := s.conns.GetRealConnection(ctx, rule.ConnectionID, userID, adminAccountID)
+		if e != nil {
+			return Rule{}, e
+		}
+		if conn != nil && conn.AdminAccountID != "" {
+			v, e := s.bindingSync.SyncMonitorBindings(ctx, userID, adminAccountID, my_sites.MonitorBindingRequest{AccountID: conn.AdminAccountID})
+			if e != nil {
+				return Rule{}, e
+			}
+			if v.Matched == 0 {
+				message := "未匹配到渠道的上游 Key 和分组"
+				if len(v.Items) > 0 && v.Items[0].Message != "" {
+					message = v.Items[0].Message
+				}
+				return Rule{}, fmt.Errorf("%s", message)
+			}
+		}
+	}
 	unlock, err := s.lockRuleAccount(ctx, rule)
 	if err != nil {
 		return Rule{}, err
@@ -1094,6 +1121,12 @@ func (s *Service) UpdateTestModelConfig(ctx context.Context, userID string, req 
 	if err != nil {
 		return TestModelConfig{}, err
 	}
+	if req.StatusSource != nil {
+		if *req.StatusSource != "upstream" && *req.StatusSource != "active" {
+			return TestModelConfig{}, fmt.Errorf("无效状态来源")
+		}
+		config.StatusSource = *req.StatusSource
+	}
 	if req.OpenAIModelID != nil {
 		config.OpenAIModelID = defaultIfBlank(*req.OpenAIModelID, DefaultOpenAITestModel)
 	}
@@ -1222,6 +1255,9 @@ func (s *Service) applyPriorityForGroup(ctx context.Context, userID, adminAccoun
 	if err != nil {
 		return RateApplyResult{}, err
 	}
+	if accountsByID == nil {
+		return RateApplyResult{}, fmt.Errorf("远端账号列表读取失败，将重试优先级调整")
+	}
 	rateRule, err := s.ensureRateRule(ctx, userID, adminAccountID)
 	if err != nil {
 		return RateApplyResult{}, err
@@ -1267,16 +1303,20 @@ func (s *Service) applyPriorityForGroup(ctx context.Context, userID, adminAccoun
 	for _, row := range filtered {
 		if !row.Supported || row.SuggestedPriority == nil {
 			result.SkippedCount++
+			if action == "membership-change" && row.Supported && row.SuggestedPriority == nil {
+				result.Success = false
+				result.Message = "部分账号缺少实际倍率，等待上游同步后重试优先级"
+			}
 			continue
 		}
 		rule, hasRule := rulesByConnection[row.ConnectionID]
-		if action == "rate-change" && hasRule && (rule.PriorityConflict ||
+		if (action == "rate-change" || action == "membership-change") && hasRule && (rule.PriorityConflict ||
 			(rule.PriorityManaged && rule.LastAppliedPriority != nil && row.CurrentPriority != nil && *rule.LastAppliedPriority != *row.CurrentPriority)) {
 			result.SkippedCount++
 			continue
 		}
 		if row.CurrentPriority != nil && *row.CurrentPriority == *row.SuggestedPriority {
-			if action != "rate-change" && hasRule && rule.PriorityConflict {
+			if action != "rate-change" && action != "membership-change" && hasRule && rule.PriorityConflict {
 				rule.PriorityConflict = false
 				rule.PriorityManaged = true
 				rule.LastAppliedPriority = cloneInt(row.SuggestedPriority)
@@ -1325,9 +1365,41 @@ func priorityPlanForGroup(rows []RatePlanRow, connections []my_sites.RealConnect
 	for _, conn := range connections {
 		connectionsByID[conn.ID] = conn
 	}
+	// Sub2API stores priority on an account, shared by all its groups. Rank
+	// the connected groups together so two group jobs cannot oscillate the
+	// priority of the same account. Unrelated groups remain independent.
+	component := map[string]bool{groupID: true}
+	changed := true
+	for changed {
+		changed = false
+		for _, c := range connections {
+			linked := false
+			for _, g := range c.OwnGroupIDs {
+				if component[g] {
+					linked = true
+					break
+				}
+			}
+			if linked {
+				for _, g := range c.OwnGroupIDs {
+					if !component[g] {
+						component[g] = true
+						changed = true
+					}
+				}
+			}
+		}
+	}
 	selected := make([]RatePlanRow, 0, len(rows))
 	for _, row := range rows {
-		if !containsString(connectionsByID[row.ConnectionID].OwnGroupIDs, groupID) {
+		linked := false
+		for _, g := range connectionsByID[row.ConnectionID].OwnGroupIDs {
+			if component[g] {
+				linked = true
+				break
+			}
+		}
+		if !linked {
 			continue
 		}
 		row.SuggestedPriority = nil
@@ -1359,7 +1431,13 @@ func priorityPlanForGroup(rows []RatePlanRow, connections []my_sites.RealConnect
 		}
 		selected[i].SuggestedPriority = cloneInt(&priority)
 	}
-	return selected
+	filtered := make([]RatePlanRow, 0, len(selected))
+	for _, row := range selected {
+		if containsString(connectionsByID[row.ConnectionID].OwnGroupIDs, groupID) {
+			filtered = append(filtered, row)
+		}
+	}
+	return filtered
 }
 
 func (s *Service) applyRateRuleForWorkspace(ctx context.Context, userID, adminAccountID, action string) (RateApplyResult, error) {
@@ -1781,6 +1859,9 @@ func (s *Service) requireRule(ctx context.Context, id, userID, adminAccountID st
 }
 
 func (s *Service) currentAdminAccountID(ctx context.Context, userID string) (string, error) {
+	if aid, ok := ctx.Value(readWorkspaceKey{}).(string); ok {
+		return aid, nil
+	}
 	if s.accounts == nil {
 		return "", requestError("admin.adminAccounts.errors.noCurrentAccount")
 	}
@@ -2131,7 +2212,24 @@ func (s *Service) buildRatePlan(ctx context.Context, connections []my_sites.Real
 		}
 		rows = append(rows, row)
 	}
-	assignRecommendedPriorities(rows)
+	// The cached page, preview, automatic rate rule and membership jobs must all
+	// use the same account ranking; a global rank would show a false mismatch.
+	byConnection := map[string]*int{}
+	seenGroups := map[string]bool{}
+	for _, c := range connections {
+		for _, g := range c.OwnGroupIDs {
+			if seenGroups[g] {
+				continue
+			}
+			seenGroups[g] = true
+			for _, row := range priorityPlanForGroup(rows, connections, g) {
+				byConnection[row.ConnectionID] = row.SuggestedPriority
+			}
+		}
+	}
+	for i := range rows {
+		rows[i].SuggestedPriority = byConnection[rows[i].ConnectionID]
+	}
 	summary := summarizeRatePlan(rows)
 	return rows, summary
 }
@@ -2493,6 +2591,25 @@ func effectiveTestOptionsForGroup(rule Rule, conn my_sites.RealConnection, state
 		baseRule.TestModelID = ""
 		base := effectiveTestOptionsForGroup(baseRule, conn, state, config, preferredGroupID)
 		base.ModelID = modelID
+		// An explicit model keeps its own known media preset rather than sending
+		// an image to the inherited text protocol (or retaining another preset).
+		if cap, ok := media.ModelPreset(modelID); ok {
+			if base.Mode != cap.MediaType {
+				base.Adapter = ""
+				base.Size = ""
+				base.Seconds = 0
+			}
+			base.Mode = cap.MediaType
+			base.PresetModel = modelID
+		} else if strings.HasPrefix(strings.ToLower(modelID), "gpt-image-") || strings.HasPrefix(strings.ToLower(modelID), "gemini-") && strings.Contains(strings.ToLower(modelID), "image") {
+			if base.Mode != "image" {
+				base.Adapter = ""
+				base.Size = ""
+				base.Seconds = 0
+			}
+			base.Mode = "image"
+			base.PresetModel = ""
+		}
 		base.Source = "custom"
 		return base
 	}
@@ -2542,29 +2659,31 @@ func normalizeGroupModelConfigs(configs []TestModelGroupConfig) ([]TestModelGrou
 		if groupID == "" || modelID == "" {
 			return nil, requestError("admin.channelMonitor.errors.request")
 		}
-		if _, exists := seen[groupID]; exists {
+		key := groupID + "|" + modelID + "|" + normalizeTestMode(config.Mode) + "|" + config.Adapter
+		if _, exists := seen[key]; exists {
 			return nil, requestError("admin.channelMonitor.errors.request")
 		}
 		rawMode := strings.ToLower(strings.TrimSpace(config.Mode))
-		if rawMode != "" && rawMode != "text" && rawMode != "connection" && rawMode != "image" && rawMode != "video" {
+		if rawMode != "" && rawMode != "text" && rawMode != "connection" && rawMode != "image" && rawMode != "video" && rawMode != "audio" {
 			return nil, requestError("admin.channelMonitor.errors.request")
 		}
-		if rawMode == "image" || rawMode == "video" {
+		if rawMode == "image" || rawMode == "video" || rawMode == "audio" {
 			if _, _, err := media.Resolve(media.Options{Model: modelID, Mode: rawMode, Prompt: config.Prompt, Size: config.Size, Seconds: config.Seconds, Adapter: config.Adapter, PresetModel: config.PresetModel}); err != nil {
 				return nil, requestError("admin.channelMonitor.errors.mediaConfig")
 			}
 		}
-		seen[groupID] = struct{}{}
+		seen[key] = struct{}{}
 		result = append(result, TestModelGroupConfig{
-			GroupID:     groupID,
-			GroupName:   strings.TrimSpace(config.GroupName),
-			ModelID:     modelID,
-			Mode:        normalizeTestMode(config.Mode),
-			Prompt:      strings.TrimSpace(config.Prompt),
-			Size:        strings.TrimSpace(config.Size),
-			Seconds:     clampInt(config.Seconds, 0, 120),
-			Adapter:     strings.TrimSpace(config.Adapter),
-			PresetModel: strings.TrimSpace(config.PresetModel),
+			GroupID:         groupID,
+			IntervalMinutes: config.IntervalMinutes,
+			GroupName:       strings.TrimSpace(config.GroupName),
+			ModelID:         modelID,
+			Mode:            normalizeTestMode(config.Mode),
+			Prompt:          strings.TrimSpace(config.Prompt),
+			Size:            strings.TrimSpace(config.Size),
+			Seconds:         clampInt(config.Seconds, 0, 120),
+			Adapter:         strings.TrimSpace(config.Adapter),
+			PresetModel:     strings.TrimSpace(config.PresetModel),
 		})
 	}
 	return result, nil
@@ -2572,7 +2691,7 @@ func normalizeGroupModelConfigs(configs []TestModelGroupConfig) ([]TestModelGrou
 
 func normalizeTestMode(mode string) string {
 	switch strings.ToLower(strings.TrimSpace(mode)) {
-	case "image", "video", "connection":
+	case "image", "video", "audio", "connection":
 		return strings.ToLower(strings.TrimSpace(mode))
 	default:
 		return "text"
@@ -2754,3 +2873,5 @@ func newResultID() string {
 type requestError string
 
 func (e requestError) Error() string { return string(e) }
+
+func (s *Service) SetAutomationShadow(v bool) { s.shadowAutomation = v }

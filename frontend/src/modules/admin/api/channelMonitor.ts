@@ -1,3 +1,4 @@
+import { checkedOperation } from "./operations"
 import type {
   BulkUpdateChannelMonitorRuleRequest,
   ChannelMonitorRateApplyResult,
@@ -66,7 +67,7 @@ export const getChannelMonitorSummary = async (groupId?: string, options: {light
   return requestJson<ChannelMonitorSummary>(`/channel-monitor/summary?${query}`, {signal: options.signal})
 }
 
-export interface MonitorPage {channels: ChannelMonitorSummary['channels'], total: number, ruleIds: string[], page: number, pageSize: number}
+export interface MonitorPage { snapshotVersion:number;updatedAt?:string;channels: ChannelMonitorSummary['channels'], total: number, ruleIds: string[], page: number, pageSize: number}
 export const getChannelMonitorPage = (query: Record<string, string>, signal?: AbortSignal): Promise<MonitorPage> =>
   requestJson(`/channel-monitor/channels?${new URLSearchParams(query)}`, {signal})
 
@@ -77,7 +78,7 @@ export const getMonitorTargetHistory = (id: string, groupId: string): Promise<Ch
   requestJson(`/channel-monitor/rules/${encodeURIComponent(id)}/history?groupId=${encodeURIComponent(groupId)}`)
 
 export const runChannelMonitorRule = async (ruleId: string, groupId?: string): Promise<ChannelMonitorResult> =>
-  requestJson<ChannelMonitorResult>(`/channel-monitor/rules/${encodeURIComponent(ruleId)}/run${groupId ? `?groupId=${encodeURIComponent(groupId)}` : ''}`, { method: 'POST' })
+  checkedOperation<ChannelMonitorResult>({kind: 'run', ids: [ruleId], groupId})
 
 export const pauseChannelMonitorRule = async (ruleId: string): Promise<void> => {
   await requestJson(`/channel-monitor/rules/${encodeURIComponent(ruleId)}/pause`, { method: 'POST' })
@@ -93,43 +94,12 @@ export const updateChannelMonitorRule = async (ruleId: string, request: UpdateCh
   })
 }
 
-export const setChannelMonitorRuleSchedulable = async (ruleId: string, schedulable: boolean): Promise<void> => {
-  await requestJson(`/channel-monitor/rules/${encodeURIComponent(ruleId)}/schedulable`, {
-    method: 'POST',
-    body: JSON.stringify({ schedulable }),
-  })
-}
-
-export const setChannelMonitorRulePriority = async (ruleId: string, priority: number, groupId?: string): Promise<void> => {
-  await requestJson(`/channel-monitor/rules/${encodeURIComponent(ruleId)}/priority${groupId ? `?groupId=${encodeURIComponent(groupId)}` : ''}`, {
-    method: 'POST',
-    body: JSON.stringify({ priority }),
-  })
-}
-
-export const syncAndTakeOverChannelMonitorRule = async (ruleId: string): Promise<void> => {
-  await requestJson(`/channel-monitor/rules/${encodeURIComponent(ruleId)}/takeover`, { method: 'POST' })
-}
-
-export const bulkUpdateChannelMonitorRules = async (request: BulkUpdateChannelMonitorRuleRequest): Promise<void> => {
-  await requestJson('/channel-monitor/rules/bulk', {
-    method: 'PATCH',
-    body: JSON.stringify(request),
-  })
-}
-
-export const bulkSetChannelMonitorRulesSchedulable = async (ruleIds: string[], schedulable: boolean): Promise<void> => {
-  await requestJson('/channel-monitor/rules/bulk/schedulable', {
-    method: 'POST',
-    body: JSON.stringify({ ruleIds, schedulable }),
-  })
-}
-
-export const bulkRunChannelMonitorRules = async (ruleIds: string[], groupId?: string): Promise<ChannelMonitorResult[]> =>
-  requestJson<ChannelMonitorResult[]>('/channel-monitor/rules/bulk/run', {
-    method: 'POST',
-    body: JSON.stringify({ ruleIds, groupId }),
-  })
+export const setChannelMonitorRuleSchedulable = async (ruleId: string, schedulable: boolean): Promise<void> => { await checkedOperation({kind:'schedulable',ids:[ruleId],schedulable}) }
+export const setChannelMonitorRulePriority = async (ruleId: string, priority: number, groupId?: string): Promise<void> => { await checkedOperation({kind:'priority',ids:[ruleId],priority,groupId}) }
+export const syncAndTakeOverChannelMonitorRule = async (ruleId: string): Promise<void> => { await checkedOperation({kind:'takeover',ids:[ruleId]}) }
+export const bulkUpdateChannelMonitorRules = async (request: BulkUpdateChannelMonitorRuleRequest): Promise<void> => { await checkedOperation({kind:'update',ids:request.ruleIds,settings:request}) }
+export const bulkSetChannelMonitorRulesSchedulable = async (ruleIds: string[], schedulable: boolean): Promise<void> => { await checkedOperation({kind:'schedulable',ids:ruleIds,schedulable}) }
+export const bulkRunChannelMonitorRules = async (ruleIds: string[], groupId?: string): Promise<ChannelMonitorResult[]> => { const result=await checkedOperation<ChannelMonitorResult | ChannelMonitorResult[]>({kind:'run',ids:ruleIds,groupId}); return Array.isArray(result)?result:[result] }
 
 export const getChannelMonitorRateRule = async (): Promise<ChannelMonitorRateRuleView> =>
   requestJson<ChannelMonitorRateRuleView>('/channel-monitor/rate-rule')
@@ -141,10 +111,10 @@ export const updateChannelMonitorRateRule = async (request: UpdateChannelMonitor
   })
 
 export const previewChannelMonitorRateRule = async (): Promise<ChannelMonitorRateRuleView> =>
-  requestJson<ChannelMonitorRateRuleView>('/channel-monitor/rate-rule/preview', { method: 'POST' })
+  checkedOperation<ChannelMonitorRateRuleView>({kind:'rate_preview'})
 
-export const applyChannelMonitorRateRule = async (groupId?: string): Promise<ChannelMonitorRateApplyResult> =>
-  requestJson<ChannelMonitorRateApplyResult>(`/channel-monitor/rate-rule/apply${groupId ? `?groupId=${encodeURIComponent(groupId)}` : ''}`, { method: 'POST' })
+export const applyChannelMonitorRateRule = async (groupId?: string, planVersion?: string): Promise<ChannelMonitorRateApplyResult> =>
+  checkedOperation<ChannelMonitorRateApplyResult>({kind:'rate_apply',groupId,planVersion})
 
 export const updateChannelMonitorPriorityGroupRule = async (groupId: string, request: { enabled?: boolean, autoApplyOnRateChange?: boolean }): Promise<void> => {
   await requestJson(`/channel-monitor/priority-groups/${encodeURIComponent(groupId)}`, {
@@ -159,9 +129,8 @@ export const updateChannelMonitorTestModelConfig = async (request: UpdateChannel
     body: JSON.stringify(request),
   })
 
-export const bulkSyncAndTakeOverChannelMonitorRules = async (ruleIds: string[]): Promise<void> => {
-  await requestJson('/channel-monitor/rules/bulk/takeover', {
-    method: 'POST',
-    body: JSON.stringify({ ruleIds }),
-  })
-}
+export const bulkSyncAndTakeOverChannelMonitorRules = async (ruleIds: string[]): Promise<void> => { await checkedOperation({kind:'takeover',ids:ruleIds}) }
+export const getMonitorPageHistory = (query: Record<string,string>, signal?: AbortSignal): Promise<{snapshotVersion:number,histories:Record<string,ChannelMonitorResult[]>}> => requestJson(`/channel-monitor/page-history?${new URLSearchParams(query)}`,{signal})
+
+export const getMonitorStats = (groupId?:string,signal?:AbortSignal):Promise<Pick<ChannelMonitorSummary,'stats'|'updatedAt'|'snapshotVersion'>> => requestJson(`/channel-monitor/stats?${new URLSearchParams({groupId:groupId||''})}`,{signal})
+export const getMonitorGroups = (groupId?:string,signal?:AbortSignal):Promise<Pick<ChannelMonitorSummary,'groups'|'updatedAt'|'snapshotVersion'>> => requestJson(`/channel-monitor/groups?${new URLSearchParams({groupId:groupId||''})}`,{signal})

@@ -18,6 +18,8 @@ func (o effectiveTestConfig) options() AccountTestOptions {
 	return AccountTestOptions{ModelID: o.ModelID, Mode: o.Mode, Prompt: o.Prompt, Size: o.Size, Seconds: o.Seconds, Adapter: o.Adapter, PresetModel: o.PresetModel}
 }
 func configFingerprint(conn my_sites.RealConnection, o AccountTestOptions) string {
+	// APIURL is a persisted task snapshot, not a user model parameter.
+	o.APIURL = ""
 	raw, _ := json.Marshal([]any{conn.UpstreamSiteID, conn.UpstreamKey, conn.GroupType, o})
 	hash := sha256.Sum256(raw)
 	return hex.EncodeToString(hash[:])
@@ -27,6 +29,26 @@ func targetFor(rule Rule, conn my_sites.RealConnection, groupID string, state *m
 	o := effectiveTestOptionsForGroup(rule, conn, state, config, groupID).options()
 	fp := configFingerprint(conn, o)
 	target, ok := stored[groupID]
+	if ok && len(target.Models) > 0 {
+		configs := selectedModelConfigs(rule, conn, state, config, groupID)
+		valid := len(configs) == len(target.Models)
+		for _, selected := range configs {
+			matched := false
+			fp := configFingerprint(conn, AccountTestOptions{ModelID: selected.ModelID, Mode: normalizeTestMode(selected.Mode), Prompt: selected.Prompt, Size: selected.Size, Seconds: selected.Seconds, Adapter: selected.Adapter, PresetModel: selected.PresetModel})
+			for _, model := range target.Models {
+				if model.Fingerprint == fp {
+					matched = true
+				}
+			}
+			if !matched {
+				valid = false
+			}
+		}
+		if valid {
+			return target
+		}
+		return TargetState{RuleID: rule.ID, GroupID: groupID, Fingerprint: fp, Status: StatusUnknown, Message: "配置已变更，等待检测", Model: o.ModelID, Mode: o.Mode}
+	}
 	if !ok || target.Fingerprint != fp {
 		target = TargetState{RuleID: rule.ID, GroupID: groupID, Fingerprint: fp, Status: StatusUnknown, Message: "配置已变更，等待检测", Model: o.ModelID, Mode: o.Mode}
 	}
@@ -50,7 +72,7 @@ func (s *Service) lockRuleAccount(ctx context.Context, rule Rule) (func(), error
 	return func() { once.Do(mu.Unlock) }, nil
 }
 
-func (s *Service) runRule(ctx context.Context, rule Rule, reason string) (Result, error) {
+func (s *Service) runRuleSingle(ctx context.Context, rule Rule, reason string) (Result, error) {
 	targets, ok := s.store.(TargetStore)
 	if !ok {
 		return s.runRuleLegacy(ctx, rule, reason)
@@ -149,31 +171,40 @@ func (s *Service) runRule(ctx context.Context, rule Rule, reason string) (Result
 			target.Message = "余额低于阈值，停止调度"
 			target.ConsecutiveFailures = 0
 		default:
-			if options.Mode == "image" || options.Mode == "video" {
-				if _, _, err = media.Resolve(media.Options{Model: options.ModelID, Mode: options.Mode, Prompt: options.Prompt, Size: options.Size, Seconds: options.Seconds, Adapter: options.Adapter, PresetModel: options.PresetModel}); err != nil {
-					target.Status = StatusConfigError
-					target.Message = err.Error()
-					target.ConsecutiveFailures = 0
-					break
-				}
-				check, checkErr = s.mediaCheck(ctx, rule, *conn, *site, target, options)
-				target.MediaTaskKey = rule.ID + "|" + target.Fingerprint
-				if check.MediaTaskKey != "" {
-					target.MediaTaskKey = check.MediaTaskKey
-				}
+			if normalizeStatusSource(config.StatusSource) != "active" && completionKey == "" {
+				check.Inconclusive = true
+				check.Message = "上游未提供该模型的有效状态"
 			} else {
-				cached, found := dedup[target.Fingerprint]
-				if found {
-					check, checkErr = cached.result, cached.err
+				if options.Mode == "image" || options.Mode == "video" {
+					if _, _, err = media.Resolve(media.Options{Model: options.ModelID, Mode: options.Mode, Prompt: options.Prompt, Size: options.Size, Seconds: options.Seconds, Adapter: options.Adapter, PresetModel: options.PresetModel}); err != nil {
+						target.Status = StatusConfigError
+						target.Message = err.Error()
+						target.ConsecutiveFailures = 0
+						break
+					}
+					check, checkErr = s.mediaCheck(ctx, rule, *conn, *site, target, options)
+					target.MediaTaskKey = rule.ID + "|" + target.Fingerprint
+					if check.MediaTaskKey != "" {
+						target.MediaTaskKey = check.MediaTaskKey
+					}
 				} else {
-					check, checkErr = s.platform.ProbeUpstreamConnection(ctx, *site, *conn, options)
-					dedup[target.Fingerprint] = struct {
-						result AccountTestResult
-						err    error
-					}{result: check, err: checkErr}
+					cached, found := dedup[target.Fingerprint]
+					if found {
+						check, checkErr = cached.result, cached.err
+					} else {
+						check, checkErr = s.platform.ProbeUpstreamConnection(ctx, *site, *conn, options)
+						dedup[target.Fingerprint] = struct {
+							result AccountTestResult
+							err    error
+						}{result: check, err: checkErr}
+					}
 				}
 			}
-			if check.Reused {
+			if check.Inconclusive {
+				target.Status = StatusUnknown
+				target.Message = check.Message
+				target.ConsecutiveFailures = 0
+			} else if check.Reused {
 				// A repeated manual click within the check interval must not add
 				// another failure or history point for the same terminal task.
 				result.Status = target.Status
@@ -271,6 +302,9 @@ func (s *Service) runRule(ctx context.Context, rule Rule, reason string) (Result
 }
 
 func (s *Service) reconcileTargetDispatch(ctx context.Context, rule *Rule, conn my_sites.RealConnection, state *my_sites.State, config TestModelConfig, all map[string]map[string]TargetState) error {
+	if !rule.Enabled || rule.ManualPaused {
+		return nil
+	}
 	if state == nil || state.Session.Platform != upstream.PlatformSub2API || conn.AdminAccountID == "" {
 		return nil
 	}
@@ -296,6 +330,12 @@ func (s *Service) reconcileTargetDispatch(ctx context.Context, rule *Rule, conn 
 		if !exists {
 			allFailed = false
 			continue
+		}
+		if !r.Enabled {
+			continue
+		}
+		if site, e := s.monitorSite(ctx, c.UpstreamSiteID); e == nil && convertedBalance(site) != nil && *convertedBalance(site) < r.BalanceThreshold {
+			balanceBlocked = true
 		}
 		if r.ManualPaused || (!r.SchedulableManaged && r.AutoEnableBlocked) || r.SchedulableConflict {
 			manualBlocked = true
@@ -334,6 +374,19 @@ func (s *Service) reconcileTargetDispatch(ctx context.Context, rule *Rule, conn 
 		desired = false
 	} else if anyHealthy && ((rule.SchedulableManaged && rule.AutoEnableBlocked) || isMonitorDispatchPaused(rule.LastStatus)) {
 		desired = true
+	}
+	if desired {
+		if rate, e := s.store.GetRateRule(ctx, rule.UserID, rule.AdminAccountID); e == nil && rate != nil && rate.Enabled {
+			rateRuleInput := *rule
+			rateRuleInput.LastStatus = StatusHealthy
+			row := s.buildRatePlanRow(ctx, conn, rateRuleInput, state, account, *rate)
+			if !row.SuggestedSchedulable {
+				desired = false
+			}
+		}
+	}
+	if s.shadowAutomation {
+		return nil
 	}
 	if desired == *account.Schedulable {
 		return nil

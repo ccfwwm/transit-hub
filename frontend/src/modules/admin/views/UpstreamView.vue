@@ -1,4 +1,15 @@
 <script setup lang="ts">
+import DomainAllowlist from '../components/DomainAllowlist.vue'
+import PrimaryModelPicker from '../components/PrimaryModelPicker.vue'
+import MonitorProfileEditor from '../components/MonitorProfileEditor.vue'
+import StatusSourceControl from '../components/StatusSourceControl.vue'
+import GroupModelStatus from '../components/GroupModelStatus.vue'
+import GroupKeyPolicy from '../components/GroupKeyPolicy.vue'
+import GroupAPIAddress from '../components/GroupAPIAddress.vue'
+import ModelHealthExplorer from '../components/ModelHealthExplorer.vue'
+import { operationJSON, followJob, checkedOperation,type OperationJob } from '../api/operations'
+import type { UpstreamGroupInfo as PreviewGroup } from '../types/upstream'
+
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { Search, Plus, CheckCircle2, XCircle, X, Loader2, AlertCircle, Trash2, Edit2, LayoutGrid, List, RefreshCw, Settings2, LogIn } from 'lucide-vue-next'
@@ -6,7 +17,7 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Tooltip } from '@/components/ui/tooltip'
 import { getStrategySettings, saveStrategySettings } from '../api/settings'
-import { getMySiteMappingOptions, listRealConnections, realConnect, realDisconnect } from '../api/mySites'
+import { getMySiteMappingOptions, listRealConnections, realConnect, realDisconnect, updateRealConnectionGroups } from '../api/mySites'
 import { getDashboardAdminStatus } from '../api/dashboardAdmin'
 import { listGroupRates } from '../api/groupRates'
 import { useUpstreamSites } from '../composables/useUpstreamSites'
@@ -20,11 +31,14 @@ import type { GroupRate } from '../types/groupRates'
 const { t } = useI18n()
 
 const searchQuery = ref('')
+const domainsOpen = ref(false)
 const isAddModalOpen = ref(false)
-const { sites: upstreamSites, isAdding, isRefreshing, addErrorKey, connectedCount, siteSyncStates, syncingSiteIds, reloggingSiteIds, addSite, updateSite, deleteSite, streamRefreshSites, refreshSingleSite, reloginSingleSite } = useUpstreamSites()
+const { sites: upstreamSites, isAdding, isRefreshing, addErrorKey, connectedCount, siteSyncStates, syncingSiteIds, reloggingSiteIds, loadSites, updateSite, deleteSite, streamRefreshSites, refreshSingleSite, reloginSingleSite } = useUpstreamSites()
 const deletingSiteId = ref<string | null>(null)
 const deleteErrorKey = ref<string | null>(null)
 const editingSiteId = ref<string | null>(null)
+const initialAPIURL = ref('')
+const initialWhitelistEnabled=ref(true)
 const refreshIntervalSeconds = ref<number | null>(null)
 const remainingSeconds = ref(0)
 const refreshSettings = ref<StrategySettings | null>(null)
@@ -45,6 +59,8 @@ const groupActionError = ref('')
 const groupActionGroup = ref<UpstreamGroupInfo | null>(null)
 const groupActionSite = ref<UpstreamSite | null>(null)
 const groupActionOwnGroupIds = ref<string[]>([])
+const groupActionTestModel = ref('')
+const groupActionAllowHigherRate = ref(false)
 const isGroupActionOpen = ref(false)
 const connectionsLoaded = ref(false)
 const connectionsError = ref('')
@@ -53,7 +69,7 @@ const groupActionType = ref('')
 const groupChannelType = ref(0)
 const adminPlatform = ref('')
 const siteGroupRates = ref<GroupRate[]>([])
-const disconnectMode = ref<'unlink' | 'full'>('unlink')
+const disconnectMode = ref<'unlink' | 'full'>('full')
 const normalizeType = (value?: string | null) => value?.trim().toLowerCase().replace(/\bxai\b/g, 'grok').replace(/\bclaude\b/g, 'anthropic') || ''
 const channelTypeForGroupType: Record<string, number> = {
   openai: 1, anthropic: 14, gemini: 24, grok: 48, kimi: 25, moonshot: 25,
@@ -88,7 +104,7 @@ const compatibleOwnGroups = computed(() => {
   const matching = ownGroups.value.filter(group => normalizeType(group.platform) === groupActionType.value)
   return matching.length > 0 ? matching : ownGroups.value
 })
-watch(groupActionType, () => { groupActionOwnGroupIds.value = [] })
+watch(groupActionType, () => { if (!actionConnection.value) groupActionOwnGroupIds.value = [] })
 
 const countdownDisplay = computed(() => {
   if (!refreshIntervalSeconds.value) return t('admin.upstream.refresh.disabled')
@@ -191,6 +207,8 @@ const saveRefreshSettings = async () => {
 const createEmptyForm = (): UpstreamSiteForm => ({
   name: '',
   siteUrl: '',
+  apiUrl: '',
+  keyWhitelistEnabled:true,
   platform: 'auto',
   authMode: 'password',
   account: '',
@@ -201,25 +219,57 @@ const createEmptyForm = (): UpstreamSiteForm => ({
   rechargeRate: 1,
   remark: '',
   skipTlsVerify: false,
+  monitorProfile:{template:'auto',path:''},
 })
 
 const newSiteForm = ref<UpstreamSiteForm>(createEmptyForm())
 
+const preview = ref<{id:string,status:string,groups: PreviewGroup[],jobId?:string}|null>(null)
+watch(()=>[newSiteForm.value.monitorProfile,newSiteForm.value.apiUrl],()=>{preview.value=null},{deep:true})
+const previewBusy = ref(false)
+const previewError = ref('')
+const healthSite = ref<UpstreamSite | null>(null)
 const handleAddSite = async () => {
-  const success = editingSiteId.value
-    ? await updateSite(editingSiteId.value, newSiteForm.value)
-    : await addSite(newSiteForm.value)
-  if (!success) return
-  isAddModalOpen.value = false
-  newSiteForm.value = createEmptyForm()
-  editingSiteId.value = null
+  if(previewBusy.value)return
+  if (!editingSiteId.value && !preview.value) {
+    previewBusy.value=true;previewError.value=''
+    try {
+      const value=await operationJSON<{id:string,status:string,groups:PreviewGroup[],jobId:string}>('/upstream-previews',{method:'POST',body:JSON.stringify(newSiteForm.value)})
+      const job=await followJob(await operationJSON('/channel-monitor/operations/'+value.jobId))
+      if(job.failed)throw new Error(job.items.find(item=>item.error)?.error||'连接失败')
+      preview.value=await operationJSON('/upstream-previews/'+value.id)
+    } catch(e:any){previewError.value=e.message}finally{previewBusy.value=false}
+    return
+  }
+  if (preview.value && !editingSiteId.value) {
+    previewBusy.value=true;previewError.value=''
+    try {await operationJSON('/upstream-previews/'+preview.value.id+'/commit',{method:'POST'});await loadSites();isAddModalOpen.value=false;preview.value=null;newSiteForm.value=createEmptyForm()}
+    catch(e:any){previewError.value=e.message}finally{previewBusy.value=false}
+    return
+  }
+  if (!editingSiteId.value) return
+  const form = {...newSiteForm.value}
+  if (form.apiUrl === initialAPIURL.value) delete form.apiUrl
+  const success=await updateSite(editingSiteId.value,form)
+  if (!success)return
+  if(newSiteForm.value.keyWhitelistEnabled!==initialWhitelistEnabled.value){
+   previewBusy.value=true
+   try{const job=await followJob(await operationJSON<OperationJob>('/my-sites/key-security/site-whitelist',{method:'POST',body:JSON.stringify({siteId:editingSiteId.value})}));if(job.failed)throw new Error(job.items.find(i=>i.error)?.error||'白名单同步失败')}
+   catch(e:any){previewError.value=e.message;return}finally{previewBusy.value=false}
+  }
+  void operationJSON(`/upstream-sites/${editingSiteId.value}/model-health/refresh`,{method:'POST'}).catch(()=>{})
+  isAddModalOpen.value=false;newSiteForm.value=createEmptyForm();editingSiteId.value=null;preview.value=null
 }
 
 const handleEditSite = (site: UpstreamSite) => {
   editingSiteId.value = site.id
+  initialAPIURL.value = site.settings.defaultApiUrl || ''
+  initialWhitelistEnabled.value=!site.settings.keyWhitelistDisabled
   newSiteForm.value = {
     name: site.name,
     siteUrl: site.baseUrl,
+    apiUrl: site.settings.defaultApiUrl || '',
+    keyWhitelistEnabled:!site.settings.keyWhitelistDisabled,
     platform: site.platform,
     authMode: 'password',
     account: site.account,
@@ -230,6 +280,7 @@ const handleEditSite = (site: UpstreamSite) => {
     rechargeRate: site.rechargeRate > 0 ? site.rechargeRate : 1,
     remark: site.remark,
     skipTlsVerify: Boolean(site.skipTlsVerify),
+    monitorProfile:site.settings.monitorProfile?{...site.settings.monitorProfile}:{template:'auto',path:''},
   }
   isAddModalOpen.value = true
 }
@@ -325,13 +376,15 @@ const openGroupAction = async (site: UpstreamSite, group: UpstreamGroupInfo) => 
   groupActionGroup.value = group
   const connection = groupConnection(site, group)
   groupActionOwnGroupIds.value = connection ? [...connection.ownGroupIds] : []
+  groupActionTestModel.value = connection?.testModelId || ''
+  groupActionAllowHigherRate.value = connection?.allowWhenUpstreamRateGteOwn ?? false
   groupActionError.value = ''
   isGroupActionOpen.value = true
   groupActionType.value = groupType(site, group)
   groupChannelType.value = channelTypeForGroupType[groupActionType.value]
     ?? NEW_API_CHANNEL_TYPES.find(type => normalizeType(type.name) === groupActionType.value)?.id
     ?? 0
-  disconnectMode.value = 'unlink'
+  disconnectMode.value = 'full'
   groupOptionsLoading.value = true
   try {
     const [options, status] = await Promise.all([getMySiteMappingOptions(), getDashboardAdminStatus()])
@@ -350,6 +403,8 @@ const closeGroupAction = () => {
   groupActionGroup.value = null
   groupActionSite.value = null
   groupActionOwnGroupIds.value = []
+  groupActionTestModel.value = ''
+  groupActionAllowHigherRate.value = false
 }
 
 const submitGroupAction = async () => {
@@ -366,6 +421,8 @@ const submitGroupAction = async () => {
       groupType: groupActionType.value,
       channelType: adminPlatform.value === 'newapi' ? groupChannelType.value : undefined,
       ownGroupIds: groupActionOwnGroupIds.value,
+      testModelId: groupActionTestModel.value,
+      allowWhenUpstreamRateGteOwn: groupActionAllowHigherRate.value,
     })
     realConnections.value.push(result.connection)
     isGroupActionLoading.value = false
@@ -375,6 +432,18 @@ const submitGroupAction = async () => {
   } finally {
     isGroupActionLoading.value = false
   }
+}
+
+const saveGroupBinding = async () => {
+  const connection=actionConnection.value
+  if(!connection||isGroupActionLoading.value||!groupActionOwnGroupIds.value.length)return
+  isGroupActionLoading.value=true;groupActionError.value=''
+  try {
+    const updated=await updateRealConnectionGroups(connection.id,{connectionId:connection.id,ownGroupIds:[...groupActionOwnGroupIds.value],testModelId:groupActionTestModel.value,allowWhenUpstreamRateGteOwn:groupActionAllowHigherRate.value})
+    realConnections.value=realConnections.value.map(item=>item.id===updated.id?updated:item)
+    await checkedOperation({kind:'refresh'})
+    isGroupActionLoading.value=false;closeGroupAction()
+  }catch(error:any){groupActionError.value=error?.message?.startsWith('admin.')?t(error.message):error.message||'保存分组失败'}finally{isGroupActionLoading.value=false}
 }
 
 const disconnectGroupAction = async () => {
@@ -458,6 +527,7 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
+  <DomainAllowlist v-if="domainsOpen" @close="domainsOpen=false" />
   <div class="space-y-6">
     <!-- Top Action Bar -->
     <div class="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
@@ -476,7 +546,7 @@ onBeforeUnmount(() => {
         </p>
       </div>
 
-      <div class="flex items-center gap-2 w-full sm:w-auto">
+      <div class="flex flex-wrap items-center gap-2 w-full sm:w-auto sm:justify-end">
         <div class="flex items-center bg-surface border border-border/50 rounded-xl p-1 shrink-0">
           <button
             @click="viewMode = 'list'"
@@ -512,6 +582,7 @@ onBeforeUnmount(() => {
           <RefreshCw v-else class="w-4 h-4" />
           {{ isRefreshing ? t('admin.upstream.refresh.refreshing') : t('admin.upstream.refresh.action') }}
         </Button>
+        <Button variant="secondary" class="h-10 shrink-0 rounded-xl px-4" @click="domainsOpen=true">域名白名单</Button>
         <Button @click="isAddModalOpen = true" class="w-full sm:w-auto h-10 rounded-xl px-4 gap-2 bg-primary text-primary-foreground hover:bg-primary/90 shadow-sm">
           <Plus class="w-4 h-4" />
           {{ t('admin.upstream.addSite') }}
@@ -560,7 +631,7 @@ onBeforeUnmount(() => {
               <div class="flex flex-col min-w-0">
                 <a :href="site.baseUrl" target="_blank" rel="noopener noreferrer" class="font-semibold text-lg text-foreground hover:text-primary transition-colors cursor-pointer truncate" :title="site.name">
                   {{ site.name }}
-                </a>
+                </a><button type="button" class="ml-2 text-xs text-primary" @click.stop="healthSite=site">模型状态</button>
                 <span class="px-2 py-0.5 mt-1 rounded-md bg-primary/10 text-primary border border-primary/20 text-[10px] font-bold uppercase tracking-wider w-fit">
                   {{ t(`admin.upstream.modal.form.platforms.${site.platform}`) }}
                 </span>
@@ -662,7 +733,7 @@ onBeforeUnmount(() => {
                 <button
                   type="button"
                   class="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-border/60 text-muted-foreground transition-colors hover:border-primary/60 hover:bg-primary/10 hover:text-primary"
-                  @click="handleEditSite(site)"
+                  aria-label="编辑上游" @click="handleEditSite(site)"
                 >
                   <Edit2 class="h-4 w-4" />
                 </button>
@@ -824,7 +895,7 @@ onBeforeUnmount(() => {
                   <Tooltip :text="t('admin.upstream.action.edit')">
                     <button
                       class="p-1.5 rounded-md text-muted-foreground hover:bg-primary/10 hover:text-primary transition-colors"
-                      @click="handleEditSite(site)"
+                      aria-label="编辑上游" @click="handleEditSite(site)"
                     >
                       <Edit2 class="w-4 h-4" />
                     </button>
@@ -856,7 +927,7 @@ onBeforeUnmount(() => {
         <Search class="w-6 h-6 text-muted-foreground" />
       </div>
       <p class="text-foreground font-medium">{{ t('admin.upstream.empty.title') }}</p>
-      <p class="text-sm text-muted-foreground mt-1">{{ t('admin.upstream.empty.description') }}</p>
+      
     </div>
 
     <!-- Delete Confirm Modal -->
@@ -870,9 +941,7 @@ onBeforeUnmount(() => {
           </div>
           <div class="min-w-0 flex-1">
             <h3 class="text-lg font-semibold text-foreground">{{ t('admin.upstream.delete.title') }}</h3>
-            <p class="mt-2 text-sm leading-6 text-muted-foreground">
-              {{ t('admin.upstream.delete.description', { name: deletingSite.name }) }}
-            </p>
+            
           </div>
         </div>
 
@@ -938,10 +1007,10 @@ onBeforeUnmount(() => {
         ></div>
 
         <!-- Modal Content -->
-        <div class="relative bg-card border border-border/60 rounded-[2rem] shadow-2xl w-full max-w-2xl overflow-hidden animate-in fade-in zoom-in-95 duration-200">
+        <div class="relative bg-card border border-border/60 rounded-[2rem] shadow-2xl w-full max-w-4xl overflow-hidden animate-in fade-in zoom-in-95 duration-200">
           <div class="absolute top-0 left-0 right-0 h-1 bg-gradient-to-r from-primary via-accent to-primary" />
 
-          <div class="flex items-center justify-between px-6 py-5 border-b border-border/40">
+          <div class="flex shrink-0 items-center justify-between px-6 py-5 border-b border-border/40">
             <h3 class="text-lg font-semibold text-foreground">
               {{ t('admin.upstream.fields.availableGroups') }}
               <span class="text-muted-foreground ml-2 text-sm font-medium">{{ selectedSiteForGroups?.name }}</span>
@@ -951,7 +1020,9 @@ onBeforeUnmount(() => {
             </button>
           </div>
 
-          <div class="p-6 max-h-[60vh] overflow-y-auto space-y-6">
+          <div class="px-5 py-3 border-b border-border/40 text-sm text-muted-foreground">上游模型状态</div>
+          <div class="p-5 max-h-[60vh] overflow-y-auto space-y-5">
+
             <p v-if="connectionsError" class="text-sm text-destructive">{{ connectionsError }}</p>
             <p v-if="!selectedSiteForGroups?.metrics.groups.length" class="text-sm text-muted-foreground">{{ t('admin.groupRates.empty.title') }}</p>
             <div v-for="(groups, platform) in groupedGroups" :key="platform" class="space-y-3">
@@ -959,14 +1030,15 @@ onBeforeUnmount(() => {
                 <div class="w-1.5 h-1.5 rounded-full bg-primary"></div>
                 {{ platform }}
               </h4>
-              <div class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-3">
-                <button
+              <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+                <div
                   v-for="group in groups"
                   :key="group.name"
-                  type="button"
-                  :disabled="!connectionsLoaded"
+                  role="button" tabindex="0"
+                  :aria-disabled="!connectionsLoaded"
+                  @keydown.enter.self="selectedSiteForGroups && openGroupAction(selectedSiteForGroups, group)"
                   :class="[
-                    'flex flex-col items-center justify-center p-3 rounded-xl border transition-colors text-center group',
+                    'flex min-w-0 flex-col items-stretch gap-1 rounded-xl border p-3 text-left transition-colors group',
                     groupConnection(selectedSiteForGroups!, group)
                       ? 'border-signal/50 bg-signal/10 hover:bg-signal/15'
                       : 'border-border/60 bg-surface/50 hover:bg-surface hover:border-primary/50'
@@ -974,7 +1046,7 @@ onBeforeUnmount(() => {
                   @click="selectedSiteForGroups && openGroupAction(selectedSiteForGroups, group)"
                 >
                   <span class="text-sm font-medium text-foreground truncate w-full group-hover:text-primary transition-colors">{{ group.name }}</span>
-                  <span class="mt-1 text-[10px] uppercase text-muted-foreground">{{ platform }}</span>
+
                   <span class="mt-1 text-[10px] font-semibold" :class="groupConnection(selectedSiteForGroups!, group) ? 'text-signal' : 'text-muted-foreground'">
                     {{ !connectionsLoaded ? '-' : groupConnection(selectedSiteForGroups!, group) ? t('admin.upstream.fields.connected') : t('admin.upstream.fields.disconnected') }}
                   </span>
@@ -994,15 +1066,16 @@ onBeforeUnmount(() => {
                       {{ t('admin.upstream.fields.dedicatedMultiplierBadge') }}
                     </span>
                   </template>
-                  <span v-else class="text-[10px] text-muted-foreground mt-1">
-                    {{ group.multiplierDisplay }}
-                  </span>
-                </button>
+
+                  <GroupModelStatus upstream-only v-if="selectedSiteForGroups" :site-id="selectedSiteForGroups.id" :group-id="group.id" :group-name="group.name" :multiplier="group.multiplier==null?null:group.multiplier*(selectedSiteForGroups?.rechargeRate??1)" :rule-id="groupConnection(selectedSiteForGroups!,group)?.id" compact summary class="mt-3 w-full text-left" />
+                  <GroupKeyPolicy v-if="selectedSiteForGroups" :site-id="selectedSiteForGroups.id" :group-id="group.id" :group-name="group.name" />
+                  <span class="mt-1 text-xs text-primary">{{groupConnection(selectedSiteForGroups!,group)?'编辑绑定':'对接分组'}} ›</span>
+                </div>
               </div>
             </div>
           </div>
 
-          <div class="p-4 border-t border-border/40 flex justify-end">
+          <div class="p-4 border-t border-border/40 flex justify-between">
              <Button variant="ghost" @click="closeGroupsModal">{{ t('admin.upstream.fields.closeGroupsModal') }}</Button>
           </div>
         </div>
@@ -1013,7 +1086,7 @@ onBeforeUnmount(() => {
     <Teleport defer to="body">
       <div v-if="isGroupActionOpen" class="fixed inset-0 z-[110] flex items-center justify-center p-4">
         <div class="absolute inset-0 bg-background/80 backdrop-blur-sm" @click="closeGroupAction" />
-        <div class="relative w-full max-w-lg rounded-2xl border border-border/70 bg-card p-5 shadow-2xl">
+        <div role="dialog" aria-modal="true" aria-label="分组绑定设置" class="relative max-h-[90vh] w-full max-w-6xl overflow-y-auto rounded-2xl border border-border/70 bg-card p-5 shadow-2xl">
           <div class="flex items-start justify-between gap-4">
             <div>
               <h3 class="text-base font-semibold text-foreground">{{ groupActionGroup?.name }}</h3>
@@ -1026,8 +1099,13 @@ onBeforeUnmount(() => {
             </button>
           </div>
           <div v-if="groupActionError" class="mt-4 rounded-lg border border-warning/30 bg-warning/10 px-3 py-2 text-sm text-warning">{{ groupActionError }}</div>
+          <GroupAPIAddress v-if="groupActionSite && groupActionGroup" :site-id="groupActionSite.id" :group-id="groupActionGroup.id" :account-api-url="actionConnection?.upstreamApiUrl" />
+          <PrimaryModelPicker v-if="groupActionSite && groupActionGroup" :key="`${groupActionSite.id}:${groupActionGroup.id}`" v-model="groupActionTestModel" class="mt-4" :site-id="groupActionSite.id" :group-id="groupActionGroup.id" :connection-id="actionConnection?.id" :disabled="isGroupActionLoading" />
+          <label class="mt-4 flex cursor-pointer items-center justify-between gap-3 rounded-lg border border-border/50 bg-surface px-4 py-3 text-sm"><span>倍率大于等于分组时仍允许启用</span><input v-model="groupActionAllowHigherRate" type="checkbox" :disabled="isGroupActionLoading" class="h-4 w-4 shrink-0 accent-blue-600" /></label>
+          <GroupModelStatus inline selectable @select-model="groupActionTestModel=$event" upstream-only v-if="groupActionSite && groupActionGroup" :site-id="groupActionSite.id" :group-id="groupActionGroup.id" :group-name="groupActionGroup.name" :multiplier="groupActionGroup.multiplier==null?null:groupActionGroup.multiplier*(groupActionSite.rechargeRate??1)" :rule-id="actionConnection?.id" summary class="mt-4" />
           <template v-if="groupActionSite && groupActionGroup && groupConnection(groupActionSite, groupActionGroup)">
             <p class="mt-5 text-sm text-foreground">{{ t('admin.upstream.fields.connected') }} · {{ groupConnection(groupActionSite, groupActionGroup)?.adminAccountName }}</p>
+            <div class="mt-4 rounded-xl border border-border/60 p-3"><h4 class="text-sm font-medium">修改绑定的自有分组</h4><p v-if="groupOptionsLoading" class="mt-2 text-sm">读取分组中…</p><div class="mt-2 max-h-48 space-y-2 overflow-auto"><label v-for="ownGroup in compatibleOwnGroups" :key="ownGroup.id" class="flex items-center justify-between rounded border border-border/50 px-3 py-2 text-sm"><span>{{ownGroup.groupName}} · {{ownGroup.platform}}</span><input v-model="groupActionOwnGroupIds" type="checkbox" :value="ownGroup.id" :disabled="isGroupActionLoading||groupOptionsLoading" /></label></div><Button class="mt-3" :disabled="isGroupActionLoading||groupOptionsLoading||!groupActionOwnGroupIds.length" @click="saveGroupBinding">保存绑定设置</Button></div>
             <label class="mt-4 flex gap-2 text-sm"><input v-model="disconnectMode" type="radio" value="unlink" :disabled="isGroupActionLoading" />{{ t('admin.groupRates.disconnect.unlinkOnly') }}</label>
             <p class="mt-1 text-xs text-muted-foreground">{{ t('admin.groupRates.disconnect.unlinkOnlyHint') }}</p>
             <label class="mt-3 flex gap-2 text-sm"><input v-model="disconnectMode" type="radio" value="full" :disabled="isGroupActionLoading" />{{ t('admin.groupRates.disconnect.deleteAll') }}</label>
@@ -1093,10 +1171,10 @@ onBeforeUnmount(() => {
         ></div>
 
         <!-- Modal Content -->
-        <div class="relative bg-card border border-border/60 rounded-[2rem] shadow-2xl w-full max-w-2xl overflow-hidden animate-in fade-in zoom-in-95 duration-200">
+        <div class="relative bg-card border border-border/60 rounded-[2rem] shadow-2xl flex max-h-[calc(100dvh-2rem)] w-full max-w-2xl flex-col overflow-hidden animate-in fade-in zoom-in-95 duration-200">
           <div class="absolute top-0 left-0 right-0 h-1 bg-gradient-to-r from-primary via-accent to-primary" />
 
-          <div class="flex items-center justify-between px-6 py-5 border-b border-border/40">
+          <div class="flex shrink-0 items-center justify-between px-6 py-5 border-b border-border/40">
             <h3 class="text-lg font-semibold text-foreground">
               {{ t(editingSiteId ? 'admin.upstream.modal.editTitle' : 'admin.upstream.modal.title') }}
             </h3>
@@ -1105,7 +1183,7 @@ onBeforeUnmount(() => {
             </button>
           </div>
 
-          <form @submit.prevent="handleAddSite" class="p-6">
+          <form @submit.prevent="handleAddSite" class="min-h-0 overflow-y-auto p-6">
             <div v-if="addErrorKey" class="flex items-start gap-2 rounded-xl border border-warning/20 bg-warning/10 px-3 py-2 text-sm text-warning mb-5">
               <AlertCircle class="mt-0.5 h-4 w-4 shrink-0" />
               <span>{{ t(addErrorKey) }}</span>
@@ -1154,7 +1232,7 @@ onBeforeUnmount(() => {
               <div class="space-y-2 sm:col-span-2">
                 <label class="text-sm font-medium text-foreground flex items-center gap-1">
                   <span class="text-red-500">*</span>
-                  {{ t('admin.upstream.modal.form.siteUrl') }}
+                  管理地址
                 </label>
                 <Input
                   v-model="newSiteForm.siteUrl"
@@ -1165,12 +1243,17 @@ onBeforeUnmount(() => {
                   class="bg-surface border-border/50 focus:border-primary h-10"
                 />
               </div>
+              <div class="space-y-2">
+                <label for="site-default-api-url" class="text-sm font-medium text-foreground">API 地址</label>
+                <input id="site-default-api-url" v-model="newSiteForm.apiUrl" type="url" :placeholder="newSiteForm.siteUrl || '留空沿用管理地址'" class="h-10 w-full rounded-lg border border-border/60 bg-surface px-3 text-sm text-foreground" />
+                <span class="text-xs text-muted-foreground">保存后自动同步已绑定账号，分组单独设置优先。</span>
+              </div>
 
               <label class="sm:col-span-2 flex cursor-pointer items-start gap-3 rounded-xl border border-warning/30 bg-warning/5 p-3 text-sm">
                 <input v-model="newSiteForm.skipTlsVerify" type="checkbox" :disabled="isAdding" class="mt-1 h-4 w-4 accent-warning" />
                 <span class="space-y-1">
                   <span class="block font-medium text-foreground">{{ t('admin.upstream.modal.form.skipTlsVerify') }}</span>
-                  <span class="block text-xs leading-5 text-muted-foreground">{{ t('admin.upstream.modal.form.skipTlsVerifyHelp') }}</span>
+                  
                 </span>
               </label>
 
@@ -1185,7 +1268,7 @@ onBeforeUnmount(() => {
                     <input v-model="newSiteForm.authMode" type="radio" value="password" :disabled="isAdding" class="mt-1" />
                     <span class="space-y-1">
                       <span class="block font-medium text-foreground">{{ t('admin.upstream.modal.form.authModes.password') }}</span>
-                      <span class="block text-xs leading-5 text-muted-foreground">{{ t('admin.upstream.modal.form.authModes.passwordHelp') }}</span>
+                      
                     </span>
                   </label>
                   <label class="flex cursor-pointer items-start gap-3 rounded-xl border border-border/50 bg-surface p-3 text-sm transition-colors hover:border-primary/50">
@@ -1227,9 +1310,7 @@ onBeforeUnmount(() => {
                   :required="!editingSiteId"
                   class="bg-surface border-border/50 focus:border-primary h-10"
                 />
-                <p v-if="editingSiteId" class="text-xs leading-5 text-muted-foreground">
-                  {{ t('admin.upstream.modal.form.passwordEditHelp') }}
-                </p>
+                
                 <label v-if="newSiteForm.platform !== 'newapi'" class="mt-3 block text-xs text-muted-foreground">
                   {{ t('admin.upstream.modal.form.loginAgreementRevision') }}
                   <Input :model-value="newSiteForm.loginAgreementRevision || ''" @update:model-value="newSiteForm.loginAgreementRevision = $event" :disabled="isAdding" class="mt-1 h-9" />
@@ -1274,9 +1355,7 @@ onBeforeUnmount(() => {
                     :disabled="isAdding"
                     class="bg-surface border-border/50 focus:border-primary h-10"
                   />
-                  <p class="text-xs leading-5 text-muted-foreground">
-                    {{ t('admin.upstream.modal.form.tokenHelp') }}
-                  </p>
+                  
                 </div>
               </template>
 
@@ -1296,9 +1375,7 @@ onBeforeUnmount(() => {
                   required
                   class="w-full h-10 px-3 rounded-xl bg-surface border border-border/50 focus:border-primary focus:ring-1 focus:ring-primary outline-none text-sm text-foreground placeholder:text-muted-foreground transition-all disabled:cursor-not-allowed disabled:opacity-50"
                 />
-                <p class="text-xs text-muted-foreground">
-                  {{ t('admin.upstream.modal.form.rechargeRateHelp') }}
-                </p>
+                
               </div>
 
               <!-- Remark -->
@@ -1315,14 +1392,19 @@ onBeforeUnmount(() => {
               </div>
             </div>
 
+            <label class="mt-4 flex items-center justify-between gap-3 rounded-lg border border-border/50 bg-surface px-4 py-3 text-sm"><span>启用 Key IP 白名单</span><input v-model="newSiteForm.keyWhitelistEnabled" type="checkbox" class="h-4 w-4 accent-blue-600" :disabled="isAdding||previewBusy" /></label>
+            <MonitorProfileEditor v-model="newSiteForm.monitorProfile" :disabled="previewBusy" class="mt-4" />
+            <p v-if="previewError" class="mt-3 text-sm text-red-500">{{ previewError }}</p>
+            <ModelHealthExplorer v-if="preview" :preview-id="preview.id" :groups="preview.groups" class="mt-4" />
+            
             <!-- Actions -->
             <div class="flex items-center justify-end gap-3 pt-4 border-t border-border/40 mt-6">
               <Button type="button" variant="ghost" :disabled="isAdding" @click="isAddModalOpen = false" class="hover:bg-surface-line">
                 {{ t('admin.upstream.modal.cancel') }}
               </Button>
-              <Button type="submit" :disabled="isAdding" class="bg-primary text-primary-foreground hover:bg-primary/90">
+              <Button type="submit" :disabled="isAdding || previewBusy" class="bg-primary text-primary-foreground hover:bg-primary/90">
                 <Loader2 v-if="isAdding" class="h-4 w-4 animate-spin" />
-              {{ isAdding ? t('admin.upstream.modal.submitting') : t(editingSiteId ? 'admin.upstream.modal.updateSubmit' : 'admin.upstream.modal.submit') }}
+              {{ previewBusy ? '连接检查中…' : editingSiteId ? t('admin.upstream.modal.updateSubmit') : preview ? '确认添加上游' : '连接并预览模型状态' }}
             </Button>
             </div>
           </form>
@@ -1330,6 +1412,7 @@ onBeforeUnmount(() => {
       </div>
     </Teleport>
 
+    <Teleport to="body"><div v-if="healthSite" class="fixed inset-0 z-50 flex items-center justify-center bg-background/80 p-6 backdrop-blur-sm" @click.self="healthSite=null"><div class="max-h-[90vh] w-full max-w-4xl overflow-auto rounded-xl bg-card p-5 shadow-xl"><div class="mb-3 flex justify-between"><h2 class="font-semibold">{{healthSite.name}}</h2><button type="button" @click="healthSite=null">关闭</button></div><ModelHealthExplorer :site-id="healthSite.id" :groups="healthSite.metrics.groups" /></div></div></Teleport>
     <SiteSettingsModal
       :open="isSiteSettingsOpen"
       :site="selectedSiteForSettings"

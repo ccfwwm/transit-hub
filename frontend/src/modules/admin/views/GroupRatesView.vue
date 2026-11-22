@@ -1,5 +1,8 @@
 <script setup lang="ts">
+import GroupModelStatus from '../components/GroupModelStatus.vue'
+import PrimaryModelPicker from '../components/PrimaryModelPicker.vue'
 import { computed, ref, watch } from 'vue'
+import GroupAPIAddress from '../components/GroupAPIAddress.vue'
 import { useI18n } from 'vue-i18n'
 import { useRouter } from 'vue-router'
 import { AlertCircle, ArrowUpDown, Edit3, History, Link2, Loader2, Megaphone, RefreshCw, Search, X } from 'lucide-vue-next'
@@ -56,7 +59,7 @@ const mappedFilter = ref<'all' | 'mapped' | 'unmapped' | 'deleted'>('all')
 const sortMode = ref<'multiplierAsc' | 'multiplierDesc' | 'siteNameAsc' | 'groupNameAsc'>('multiplierAsc')
 const realConnectionsData = ref<RealConnection[]>([])
 const disconnectingRate = ref<GroupRate | null>(null)
-const disconnectMode = ref<'unlink' | 'full'>('unlink')
+const disconnectMode = ref<'unlink' | 'full'>('full')
 const isDisconnecting = ref(false)
 const disconnectError = ref('')
 const selectedGroupType = ref('')
@@ -64,6 +67,8 @@ const selectedChannelType = ref(0)
 const adminPlatform = ref('')
 const upstreamKeys = ref<UpstreamKeyItem[]>([])
 const selectedKeyId = ref('')
+const connectTestModel = ref('')
+const connectAllowHigherRate = ref(false)
 const isLoadingKeys = ref(false)
 
 const totalGroups = computed(() => rates.value.length)
@@ -333,6 +338,8 @@ const closeTypeEditor = () => {
 
 const openConnector = async (rate: GroupRate) => {
   connectingRate.value = rate
+  connectTestModel.value = ''
+  connectAllowHigherRate.value = false
   editingConnectionGroups.value = false
   connectOwnGroups.value = []
   connectMode.value = 'real'
@@ -349,6 +356,8 @@ const openGroupEditor = async (rate: GroupRate) => {
   const connection = realConnectionForRate(rate)
   if (!connection) return
   connectingRate.value = rate
+  connectTestModel.value = connection.testModelId || ''
+  connectAllowHigherRate.value = connection.allowWhenUpstreamRateGteOwn ?? false
   editingConnectionGroups.value = true
   connectOwnGroups.value = [...connection.ownGroupIds]
   connectMode.value = 'real'
@@ -360,6 +369,7 @@ const openGroupEditor = async (rate: GroupRate) => {
 }
 
 const closeConnector = () => {
+  connectGroupSearch.value = ''
   connectingRate.value = null
   editingConnectionGroups.value = false
   connectOwnGroups.value = []
@@ -409,7 +419,7 @@ const submitConnector = async () => {
     realConnectError.value = ''
     isActionLoading.value = true
     try {
-      await updateRealConnectionGroups(connection.id, { connectionId: connection.id, ownGroupIds: connectOwnGroups.value })
+      await updateRealConnectionGroups(connection.id, { connectionId: connection.id, testModelId: connectTestModel.value, allowWhenUpstreamRateGteOwn: connectAllowHigherRate.value, ownGroupIds: connectOwnGroups.value })
       closeConnector()
       await Promise.all([loadRates(), loadRealConnections()])
     } catch (err: unknown) {
@@ -427,6 +437,8 @@ const submitConnector = async () => {
   }
 }
 
+const connectGroupSearch = ref('')
+const visibleConnectGroups = computed(()=>filteredOwnGroups.value.filter(g=>!connectGroupSearch.value||g.groupName.toLowerCase().includes(connectGroupSearch.value.toLowerCase())))
 const realConnectError = ref('')
 
 const translatedActionError = (err: unknown, fallbackKey: string): string => {
@@ -444,7 +456,7 @@ const submitRealConnect = async () => {
     upstreamGroupName: connectingRate.value.groupName,
     groupType: selectedGroupType.value,
     channelType: selectedChannelType.value || undefined,
-    ownGroupIds: connectOwnGroups.value,
+    testModelId: connectTestModel.value, allowWhenUpstreamRateGteOwn: connectAllowHigherRate.value, ownGroupIds: connectOwnGroups.value,
   }
   try {
     await realConnect(payload)
@@ -481,7 +493,7 @@ const submitBind = async () => {
       upstreamGroupName: connectingRate.value.groupName,
       upstreamKeyId: selectedKey.id,
       upstreamKey: selectedKey.key,
-      ownGroupIds: connectOwnGroups.value,
+      testModelId: connectTestModel.value, allowWhenUpstreamRateGteOwn: connectAllowHigherRate.value, ownGroupIds: connectOwnGroups.value,
       groupType: selectedGroupType.value,
     })
     closeConnector()
@@ -496,13 +508,13 @@ const submitBind = async () => {
 
 const openDisconnect = (rate: GroupRate) => {
   disconnectingRate.value = rate
-  disconnectMode.value = 'unlink'
+  disconnectMode.value = 'full'
   disconnectError.value = ''
 }
 
 const closeDisconnect = () => {
   disconnectingRate.value = null
-  disconnectMode.value = 'unlink'
+  disconnectMode.value = 'full'
   disconnectError.value = ''
 }
 
@@ -651,7 +663,7 @@ const historyRowKey = (row: GroupRateHistoryRow, index: number): string => (
           <History class="h-5 w-5" />
         </div>
         <h3 class="mt-4 font-semibold text-foreground">{{ t('admin.groupRates.empty.title') }}</h3>
-        <p class="mt-2 max-w-sm text-sm text-muted-foreground">{{ t('admin.groupRates.empty.description') }}</p>
+        
       </div>
 
       <div v-else class="flex-1 overflow-auto">
@@ -661,6 +673,7 @@ const historyRowKey = (row: GroupRateHistoryRow, index: number): string => (
               <th class="px-6 py-3 font-medium text-muted-foreground">{{ t('admin.groupRates.fields.siteName') }}</th>
               <th class="px-6 py-3 font-medium text-muted-foreground">{{ t('admin.groupRates.fields.balance') }}</th>
               <th class="px-6 py-3 font-medium text-muted-foreground">{{ t('admin.groupRates.fields.groupName') }}</th>
+              <th class="w-56 min-w-48 px-4 py-3 font-medium text-muted-foreground">模型状态</th>
               <th class="px-6 py-3 font-medium text-muted-foreground">{{ t('admin.groupRates.fields.type') }}</th>
               <th class="px-6 py-3 font-medium text-muted-foreground">{{ t('admin.groupRates.fields.platform') }}</th>
               <th class="px-6 py-3 font-medium text-muted-foreground">{{ t('admin.groupRates.fields.currentMultiplier') }}</th>
@@ -682,6 +695,7 @@ const historyRowKey = (row: GroupRateHistoryRow, index: number): string => (
                   <span v-if="rate.deleted" class="inline-flex rounded-md border border-red-500/20 bg-red-500/10 px-1.5 py-0.5 text-[10px] font-semibold text-red-500">{{ t('admin.groupRates.status.deleted') }}</span>
                 </div>
               </td>
+              <td class="w-56 min-w-48 px-4 py-2.5"><GroupModelStatus v-if="!rate.deleted" upstream-only summary :site-id="rate.siteId" :group-id="rate.groupId" :group-name="rate.groupName" :multiplier="rate.currentMultiplier" /><span v-else class="text-muted-foreground">—</span></td>
               <td class="px-4 py-2.5">
                 <span :class="['inline-flex rounded-md border px-2 py-1 text-xs font-semibold uppercase tracking-wider', typeClasses(rate.type)]">
                   {{ typeLabel(rate.type) }}
@@ -785,9 +799,7 @@ const historyRowKey = (row: GroupRateHistoryRow, index: number): string => (
         <div class="flex items-start justify-between gap-4 border-b border-border/50 p-6">
           <div>
             <h2 class="text-xl font-semibold text-foreground">{{ historyTitle }}</h2>
-            <p v-if="selectedRate" class="mt-2 text-sm text-muted-foreground">
-              {{ t('admin.groupRates.history.subtitle', { platform: platformLabel(selectedRate.platform) }) }}
-            </p>
+            
           </div>
           <button class="rounded-lg p-2 text-muted-foreground transition-colors hover:bg-surface-line hover:text-foreground" @click="closeHistory">
             <X class="h-5 w-5" />
@@ -808,7 +820,7 @@ const historyRowKey = (row: GroupRateHistoryRow, index: number): string => (
         <div v-else-if="history.length === 0" class="flex min-h-[260px] flex-col items-center justify-center px-6 text-center">
           <History class="h-8 w-8 text-muted-foreground" />
           <h3 class="mt-4 font-semibold text-foreground">{{ t('admin.groupRates.history.emptyTitle') }}</h3>
-          <p class="mt-2 text-sm text-muted-foreground">{{ t('admin.groupRates.history.emptyDescription') }}</p>
+          
         </div>
 
         <div v-else class="max-h-[60vh] overflow-auto">
@@ -860,7 +872,7 @@ const historyRowKey = (row: GroupRateHistoryRow, index: number): string => (
         <div class="flex items-start justify-between gap-4 border-b border-border/50 p-6">
           <div>
             <h2 class="text-xl font-semibold text-foreground">{{ editTypeTitle }}</h2>
-            <p class="mt-2 text-sm text-muted-foreground">{{ t('admin.groupRates.edit.description') }}</p>
+            
           </div>
           <button class="rounded-lg p-2 text-muted-foreground transition-colors hover:bg-surface-line hover:text-foreground" :disabled="isActionLoading" @click="closeTypeEditor">
             <X class="h-5 w-5" />
@@ -895,15 +907,13 @@ const historyRowKey = (row: GroupRateHistoryRow, index: number): string => (
     </div>
 
     <div v-if="connectingRate" class="fixed inset-0 z-50 flex items-center justify-center bg-background/80 p-4 backdrop-blur-sm">
-      <div class="w-full max-w-lg overflow-hidden rounded-2xl border border-border/50 bg-card shadow-xl">
-        <div class="flex items-start justify-between gap-4 border-b border-border/50 p-6">
+      <div role="dialog" aria-modal="true" aria-label="分组对接设置" class="flex max-h-[92vh] w-full max-w-6xl flex-col overflow-hidden rounded-2xl border border-border/50 bg-card shadow-xl">
+        <div class="flex shrink-0 items-start justify-between gap-4 border-b border-border/50 p-6">
           <div>
             <h2 class="text-xl font-semibold text-foreground">
               {{ t(editingConnectionGroups ? 'admin.groupRates.connect.editTitleWithGroup' : 'admin.groupRates.connect.titleWithGroup', { site: connectingRate.siteName, group: connectingRate.groupName }) }}
             </h2>
-            <p class="mt-2 text-sm text-muted-foreground">
-              {{ editingConnectionGroups ? t('admin.groupRates.connect.editDescription') : (connectMode === 'bind' ? t('admin.groupRates.connect.bindDescription') : t('admin.groupRates.connect.realDescription')) }}
-            </p>
+            
           </div>
           <button class="rounded-lg p-2 text-muted-foreground transition-colors hover:bg-surface-line hover:text-foreground" :disabled="isActionLoading" @click="closeConnector">
             <X class="h-5 w-5" />
@@ -911,7 +921,14 @@ const historyRowKey = (row: GroupRateHistoryRow, index: number): string => (
           </button>
         </div>
 
-        <form class="space-y-5 p-6" @submit.prevent="submitConnector">
+        <form class="flex min-h-0 flex-1 flex-col" @submit.prevent="submitConnector">
+          <div class="min-h-0 overflow-y-auto p-6" data-binding-scroll>
+            <div class="grid items-start gap-6 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.25fr)]">
+              <div class="min-w-0 space-y-4">
+          <GroupAPIAddress v-if="connectingRate" :site-id="connectingRate.siteId" :group-id="connectingRate.groupId" :account-api-url="realConnectionForRate(connectingRate)?.upstreamApiUrl" />
+          <PrimaryModelPicker v-if="connectingRate" v-model="connectTestModel" :site-id="connectingRate.siteId" :group-id="connectingRate.groupId || ''" :connection-id="editingConnectionGroups ? realConnectionForRate(connectingRate)?.id : undefined" :key-id="connectMode === 'bind' ? selectedKeyId : undefined" />
+          <label class="flex cursor-pointer items-center justify-between gap-3 rounded-lg border border-border/50 bg-surface px-4 py-3 text-sm"><span>倍率大于等于分组时仍允许启用</span><input v-model="connectAllowHigherRate" type="checkbox" class="h-4 w-4 shrink-0 accent-blue-600" /></label>
+
           <div v-if="!editingConnectionGroups" class="flex items-center gap-1 rounded-xl bg-surface border border-border/50 p-1">
             <button
               type="button"
@@ -937,27 +954,6 @@ const historyRowKey = (row: GroupRateHistoryRow, index: number): string => (
             >
               {{ t('admin.groupRates.connect.modeBind') }}
             </button>
-          </div>
-
-          <div class="rounded-xl border border-border/50 bg-surface/50 p-4 space-y-3">
-            <div class="flex items-center justify-between">
-              <span class="text-xs font-medium text-muted-foreground">{{ t('admin.groupRates.connect.upstreamSiteLabel') }}</span>
-              <span class="text-sm font-medium text-foreground">{{ connectingRate?.siteName }}</span>
-            </div>
-            <div class="flex items-center justify-between">
-              <span class="text-xs font-medium text-muted-foreground">{{ t('admin.groupRates.connect.upstreamGroupNameLabel') }}</span>
-              <span class="text-sm font-medium text-foreground">{{ connectingRate?.groupName }}</span>
-            </div>
-            <div class="flex items-center justify-between">
-              <span class="text-xs font-medium text-muted-foreground">{{ t('admin.groupRates.connect.upstreamMultiplierLabel') }}</span>
-              <span class="text-sm font-semibold text-primary">{{ formatMultiplier(connectingRate?.currentMultiplier ?? null) }}</span>
-            </div>
-            <div class="flex items-center justify-between">
-              <span class="text-xs font-medium text-muted-foreground">{{ t('admin.groupRates.connect.upstreamPlatformLabel') }}</span>
-              <span :class="['inline-flex rounded-md border px-2 py-0.5 text-xs font-semibold uppercase tracking-wider', platformClasses(connectingRate?.platform ?? null)]">
-                {{ platformLabel(connectingRate?.platform ?? null) }}
-              </span>
-            </div>
           </div>
 
           <!-- sub2api admin：分组类型选择（仅在无法自动检测时显示） -->
@@ -1005,7 +1001,7 @@ const historyRowKey = (row: GroupRateHistoryRow, index: number): string => (
             <div v-else-if="upstreamKeys.length === 0" class="px-4 py-6 text-center text-sm text-muted-foreground">
               {{ t('admin.groupRates.connect.bindKeysEmpty') }}
             </div>
-            <div v-else class="max-h-48 overflow-auto rounded-xl border border-border/50 bg-surface divide-y divide-border/30">
+            <div v-else class="grid grid-cols-1 gap-2 sm:grid-cols-2">
               <label
                 v-for="keyItem in upstreamKeys"
                 :key="keyItem.id"
@@ -1045,11 +1041,12 @@ const historyRowKey = (row: GroupRateHistoryRow, index: number): string => (
 
           <div class="space-y-2">
             <span class="text-sm font-medium text-foreground">{{ t('admin.groupRates.connect.ownGroupLabel') }}</span>
-            <div class="max-h-48 overflow-auto rounded-xl border border-border/50 bg-surface divide-y divide-border/30">
+            <input v-model="connectGroupSearch" aria-label="搜索对接分组" placeholder="搜索分组" class="h-9 w-full rounded-lg border border-border/50 bg-surface px-3 text-sm" />
+            <div class="grid grid-cols-1 gap-2 sm:grid-cols-2">
               <label
-                v-for="group in filteredOwnGroups"
+                v-for="group in visibleConnectGroups"
                 :key="group.id"
-                class="flex items-center gap-3 px-4 py-2.5 cursor-pointer transition-colors hover:bg-surface-elevated"
+                class="flex flex-wrap items-center gap-2 rounded-lg border border-border/50 px-3 py-2.5 cursor-pointer transition-colors hover:bg-surface-elevated"
               >
                 <input
                   type="checkbox"
@@ -1058,7 +1055,7 @@ const historyRowKey = (row: GroupRateHistoryRow, index: number): string => (
                   :disabled="isActionLoading"
                   @change="toggleOwnGroup(group.id)"
                 />
-                <span class="text-sm text-foreground">{{ group.groupName }}</span>
+                <span class="min-w-0 flex-1 break-words text-sm text-foreground">{{ group.groupName }}</span>
                 <span v-if="group.platform" class="inline-flex rounded-md border border-border/50 bg-surface-elevated px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
                   {{ group.platform }}
                 </span>
@@ -1075,7 +1072,11 @@ const historyRowKey = (row: GroupRateHistoryRow, index: number): string => (
             <span>{{ realConnectError }}</span>
           </div>
 
-          <div class="flex justify-end gap-2">
+              </div>
+              <div class="min-w-0 border-t border-border/50 pt-4 lg:border-l lg:border-t-0 lg:pl-6 lg:pt-0">          <GroupModelStatus v-if="connectingRate" inline upstream-only summary selectable :site-id="connectingRate.siteId" :group-id="connectingRate.groupId" :group-name="connectingRate.groupName" :multiplier="connectingRate.currentMultiplier" @select-model="connectTestModel = $event" /></div>
+            </div>
+          </div>
+          <div class="flex shrink-0 justify-end gap-2 border-t border-border/50 bg-card px-6 py-4">
             <Button type="button" variant="secondary" :disabled="isActionLoading" @click="closeConnector">
               {{ t('admin.groupRates.actions.cancel') }}
             </Button>
@@ -1084,7 +1085,7 @@ const historyRowKey = (row: GroupRateHistoryRow, index: number): string => (
               {{ editingConnectionGroups ? t('admin.groupRates.actions.saveGroups') : t('admin.groupRates.actions.saveConnect') }}
             </Button>
           </div>
-        </form>
+                </form>
       </div>
     </div>
 
@@ -1093,9 +1094,7 @@ const historyRowKey = (row: GroupRateHistoryRow, index: number): string => (
         <div class="flex items-start justify-between gap-4 border-b border-border/50 p-6">
           <div>
             <h2 class="text-xl font-semibold text-foreground">{{ t('admin.groupRates.disconnect.title') }}</h2>
-            <p class="mt-2 text-sm text-muted-foreground">
-              {{ t('admin.groupRates.disconnect.description', { site: disconnectingRate.siteName, group: disconnectingRate.groupName }) }}
-            </p>
+            
           </div>
           <button class="rounded-lg p-2 text-muted-foreground transition-colors hover:bg-surface-line hover:text-foreground" :disabled="isDisconnecting" @click="closeDisconnect">
             <X class="h-5 w-5" />
@@ -1166,4 +1165,4 @@ const historyRowKey = (row: GroupRateHistoryRow, index: number): string => (
       </div>
     </div>
   </div>
-</template>
+</template>

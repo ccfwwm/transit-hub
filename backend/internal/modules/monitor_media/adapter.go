@@ -22,23 +22,24 @@ func (a *Adapter) Submit(ctx context.Context, cap Capability, req Request, accou
 	for k, v := range req.Parameters {
 		p[k] = v
 	}
-	delete(p, "async")
-	path := "/v1/videos"
+	path := submitPath(cap, req.Operation)
 	switch req.Operation {
 	case "image":
-		path = "/v1/images/generations"
+		path = submitPath(cap, req.Operation)
 	case "image_edit":
 		path = "/v1/images/edits"
 	case "gemini_image":
 		path = "/v1beta/models/" + url.PathEscape(cap.UpstreamModel) + ":generateContent"
 		delete(p, "model")
 	case "audio", "chat_music":
-		path = "/v1/chat/completions"
-		if p["messages"] == nil {
-			p["messages"] = []any{map[string]any{"role": "user", "content": p["prompt"]}}
+		if !isProtocol(cap.Adapter) || cap.Adapter == "audio_chat" {
+			path = "/v1/chat/completions"
+			if p["messages"] == nil {
+				p["messages"] = []any{map[string]any{"role": "user", "content": p["prompt"]}}
+			}
+			delete(p, "prompt")
+			p["stream"] = false
 		}
-		delete(p, "prompt")
-		p["stream"] = false
 	}
 	for from, to := range cap.FieldMapping {
 		if to != "" && !strings.ContainsAny(to, ":.[") && p[from] != nil && from != to {
@@ -137,14 +138,21 @@ func (a *Adapter) Submit(ctx context.Context, cap Capability, req Request, accou
 	return a.call(ctx, account, cap, http.MethodPost, path, body, contentType, true)
 }
 func (a *Adapter) Poll(ctx context.Context, t StoredTask, account Account) (UpstreamResult, error) {
-	path := "/v1/videos/" + url.PathEscape(t.UpstreamID)
+	path := queryPath(t.Snapshot.Capability, url.PathEscape(t.UpstreamID))
 	if t.Snapshot.Capability.Adapter == "ark_native" {
 		path = arkTaskPath(account.BaseURL) + "/" + url.PathEscape(t.UpstreamID)
 	}
-	if t.Snapshot.Capability.MediaType == "audio" {
-		path = "/v1/audio/generations/" + url.PathEscape(t.UpstreamID)
-	}
 	return a.call(ctx, account, t.Snapshot.Capability, http.MethodGet, path, nil, "", false)
+}
+
+// Recover only queries a known managed-media idempotency key. It never sends
+// another generation request after an ambiguous submission.
+func (a *Adapter) Recover(ctx context.Context, cap Capability, operation string, account Account) (UpstreamResult, error) {
+	if cap.Adapter == "sub2api_speech" {
+		operation = "speech"
+	}
+	path := "/v1/media/tasks/recover?" + url.Values{"operation": []string{operation}, "idempotency_key": []string{account.IdempotencyKey}}.Encode()
+	return a.call(ctx, account, cap, http.MethodGet, path, nil, "", false)
 }
 
 func arkTaskPath(base string) string {
@@ -164,13 +172,22 @@ func (a *Adapter) call(ctx context.Context, account Account, cap Capability, met
 		return UpstreamResult{}, e
 	}
 	req.Header.Set("Authorization", "Bearer "+account.Key)
+	if cap.Adapter == "gemini_image" || cap.Adapter == "yunfei_gemini_native" {
+		req.Header.Set("x-goog-api-key", account.Key)
+	}
 	req.Header.Set("Accept", "application/json")
 	req.Header.Set("User-Agent", "TransitHub-monitor/1")
+	if submission && account.IdempotencyKey != "" {
+		req.Header.Set("Idempotency-Key", account.IdempotencyKey)
+	}
 	if mime != "" {
 		req.Header.Set("Content-Type", mime)
 	}
 	response, e := a.Client.Do(req)
 	if e != nil {
+		if submission && cap.MediaType == "image" {
+			return UpstreamResult{Status: "failed", Diagnostic: "图片请求超时或连接中断，未取得图片结果"}, nil
+		}
 		if submission {
 			return UpstreamResult{Status: "unknown", Diagnostic: "Submission transport failed; do not resubmit"}, nil
 		}
@@ -179,6 +196,9 @@ func (a *Adapter) call(ctx context.Context, account Account, cap Capability, met
 	defer func() { _ = response.Body.Close() }()
 	raw, e := io.ReadAll(io.LimitReader(response.Body, (256<<20)+1))
 	if e != nil || len(raw) > 256<<20 {
+		if submission && cap.MediaType == "image" {
+			return UpstreamResult{Status: "failed", Diagnostic: "图片响应中断或超过大小限制，未取得完整图片"}, nil
+		}
 		if submission {
 			return UpstreamResult{Status: "unknown", Diagnostic: "Submission response incomplete; reconcile acceptance"}, nil
 		}
@@ -188,28 +208,72 @@ func (a *Adapter) call(ctx context.Context, account Account, cap Capability, met
 		if !submission {
 			return UpstreamResult{}, fmt.Errorf("upstream query HTTP %d", response.StatusCode)
 		}
-		if response.StatusCode >= 500 || response.StatusCode == 408 || response.StatusCode == 429 {
+		if cap.MediaType != "image" && (response.StatusCode >= 500 || response.StatusCode == 408 || response.StatusCode == 429) {
 			return UpstreamResult{Status: "unknown", Diagnostic: fmt.Sprintf("Upstream HTTP %d; acceptance not confirmed", response.StatusCode)}, nil
 		}
-		return UpstreamResult{Status: "failed", Response: raw, Diagnostic: fmt.Sprintf("Upstream rejected request: HTTP %d", response.StatusCode)}, nil
+		return UpstreamResult{Status: "failed", Response: raw, Diagnostic: safeDiagnostic(fmt.Sprintf("HTTP %d", response.StatusCode), raw, account.Key)}, nil
+	}
+	if cap.MediaType == "image" && strings.HasPrefix(response.Header.Get("Content-Type"), "image/") {
+		mime := strings.Split(response.Header.Get("Content-Type"), ";")[0]
+		return UpstreamResult{Status: "completed", Artifacts: []Artifact{{Type: "image", MIME: mime, Source: "data:" + mime + ";base64," + base64.StdEncoding.EncodeToString(raw)}}}, nil
+	}
+	if strings.HasPrefix(response.Header.Get("Content-Type"), "audio/") {
+		return UpstreamResult{Status: "completed", Artifacts: []Artifact{{Type: "audio", MIME: response.Header.Get("Content-Type"), Source: "data:" + response.Header.Get("Content-Type") + ";base64," + base64.StdEncoding.EncodeToString(raw)}}}, nil
 	}
 	var object map[string]any
 	decoder := json.NewDecoder(bytes.NewReader(raw))
 	decoder.UseNumber()
 	if e = decoder.Decode(&object); e != nil {
+		if cap.MediaType == "image" {
+			return UpstreamResult{Status: "failed", Diagnostic: "上游未返回可解析的图片结果"}, nil
+		}
 		return UpstreamResult{Status: "unknown", Diagnostic: "Non-JSON successful response; acceptance requires reconciliation"}, nil
 	}
 	result := parseResult(object, cap)
 	result.Response = raw
+	if cap.MediaType == "image" && result.Status == "unknown" {
+		result.Status = "failed"
+		result.Diagnostic = "上游未返回图片或有效生成任务"
+	}
+	if result.Status == "failed" && result.Diagnostic == "" {
+		result.Diagnostic = safeDiagnostic("上游生成失败", raw, account.Key)
+	}
 	if result.Status == "unknown" {
 		result.Diagnostic = "Unrecognized successful response; do not resubmit"
 	}
 	return result, nil
 }
 func parseResult(p map[string]any, cap Capability) UpstreamResult {
+	if p["error"] != nil {
+		return UpstreamResult{Status: "failed"}
+	}
+	for _, field := range []string{"result", "output"} {
+		if nested, ok := p[field].(map[string]any); ok {
+			child := parseResult(nested, cap)
+			if child.Status != "unknown" {
+				if child.ID == "" {
+					child.ID = stringValue(p["id"])
+					if child.ID == "" {
+						child.ID = stringValue(p["task_id"])
+					}
+				}
+				if strings.EqualFold(stringValue(p["status"]), "failed") {
+					child.Status = "failed"
+				}
+				return child
+			}
+		}
+	}
+
+	if inner, ok := p["data"].(map[string]any); ok && (inner["id"] != nil || inner["task_id"] != nil || inner["status"] != nil) {
+		return parseResult(inner, cap)
+	}
 	result := UpstreamResult{ID: stringValue(p["id"]), Status: "unknown", Quantities: map[string][]string{}}
 	if result.ID == "" {
 		result.ID = stringValue(p["task_id"])
+	}
+	if result.ID == "" {
+		result.ID = stringValue(p["request_id"])
 	}
 	status := strings.ToLower(stringValue(p["status"]))
 	if status == "" {
@@ -225,6 +289,11 @@ func parseResult(p map[string]any, cap Capability) UpstreamResult {
 	case "failed", "error", "cancelled", "canceled":
 		result.Status = "failed"
 	}
+	if cap.Adapter == "openai_transcription" && strings.TrimSpace(stringValue(p["text"])) != "" {
+		result.Status = "completed"
+		result.Response, _ = json.Marshal(p)
+		return result
+	}
 	seen := map[string]bool{}
 	add := func(raw string, mime string) {
 		if raw == "" || seen[raw] {
@@ -239,8 +308,14 @@ func parseResult(p map[string]any, cap Capability) UpstreamResult {
 	for _, field := range []string{"url", "download_url", "video_url", "audio_url"} {
 		add(stringValue(p[field]), "")
 	}
-	for _, field := range []string{"data", "videos", "artifacts", "content"} {
+	if value := stringValue(p["b64_json"]); value != "" {
+		add("data:image/png;base64,"+value, "image/png")
+	}
+	for _, field := range []string{"data", "images", "results", "videos", "artifacts", "content"} {
 		if item, ok := p[field].(map[string]any); ok {
+			if value := stringValue(item["b64_json"]); value != "" {
+				add("data:image/png;base64,"+value, "image/png")
+			}
 			for _, key := range []string{"url", "download_url", "content_url", cap.MediaType + "_url"} {
 				add(stringValue(item[key]), stringValue(item["mime_type"]))
 			}
@@ -309,7 +384,7 @@ func parseResult(p map[string]any, cap Capability) UpstreamResult {
 	if result.Status == "completed" && len(result.Artifacts) == 0 && cap.MediaType == "video" && result.ID != "" && cap.Adapter != "ark_native" {
 		add("/v1/videos/"+url.PathEscape(result.ID)+"/content", "video/mp4")
 	}
-	if result.ID != "" && result.Status == "unknown" {
+	if result.ID != "" && result.Status == "unknown" && (cap.MediaType != "image" || p["task_id"] != nil) {
 		result.Status = "in_progress"
 	}
 	if (result.Status == "in_progress" || result.Status == "queued") && result.ID == "" {
@@ -337,6 +412,31 @@ func parseResult(p map[string]any, cap Capability) UpstreamResult {
 		}
 	}
 	return result
+}
+
+func safeDiagnostic(prefix string, raw []byte, key string) string {
+	var payload map[string]any
+	if json.Unmarshal(raw, &payload) != nil {
+		return prefix
+	}
+	message := stringValue(payload["message"])
+	if detail, ok := payload["error"].(map[string]any); ok {
+		message = stringValue(detail["message"])
+	} else if value, ok := payload["error"].(string); ok {
+		message = value
+	}
+	if key != "" {
+		message = strings.ReplaceAll(message, key, "[redacted]")
+	}
+	message = regexp.MustCompile(`(?i)(?:sk-|bearer\s+)[A-Za-z0-9_.-]{8,}`).ReplaceAllString(message, "[redacted]")
+	runes := []rune(strings.Join(strings.Fields(message), " "))
+	if len(runes) > 240 {
+		runes = runes[:240]
+	}
+	if len(runes) > 0 {
+		return prefix + "：" + string(runes)
+	}
+	return prefix
 }
 func decodeArtifact(source string) ([]byte, string, error) {
 	pos := strings.Index(source, ",")

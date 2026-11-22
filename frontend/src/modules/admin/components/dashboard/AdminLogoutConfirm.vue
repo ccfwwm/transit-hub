@@ -33,7 +33,7 @@ const { t } = useI18n()
           </div>
           <div class="space-y-1.5">
             <h2 class="text-lg font-semibold text-foreground">{{ t('admin.dashboard.adminAuth.logoutConfirm.title') }}</h2>
-            <p class="text-sm text-muted-foreground">{{ t('admin.dashboard.adminAuth.logoutConfirm.description') }}</p>
+            
           </div>
 
           <div class="mt-2 flex w-full items-center gap-3">

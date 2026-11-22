@@ -1107,8 +1107,10 @@ func TestApplyRateRuleEnablesCheapChannelsAndWritesPriority(t *testing.T) {
 	if got := service.platform.schedulableCalls; len(got) != 2 || !got[0].Schedulable || !got[1].Schedulable {
 		t.Fatalf("expected two enable calls, got %+v", got)
 	}
-	if got := service.platform.priorityCalls; len(got) != 2 || got[0].AccountID != "123" || got[0].Priority != 1 || got[1].AccountID != "456" || got[1].Priority != 2 {
-		t.Fatalf("expected priority updates by ascending multiplier, got %+v", got)
+	// These accounts belong to unrelated groups, so each is first in its own
+	// scheduling order. Global multiplier ranking would create misleading gaps.
+	if got := service.platform.priorityCalls; len(got) != 2 || got[0].AccountID != "123" || got[0].Priority != 1 || got[1].AccountID != "456" || got[1].Priority != 1 {
+		t.Fatalf("expected independent priorities for unrelated groups, got %+v", got)
 	}
 }
 

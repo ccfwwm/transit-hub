@@ -20,6 +20,7 @@ import (
 	"transithub/backend/internal/modules/group_rate_campaigns"
 	"transithub/backend/internal/modules/group_rates"
 	"transithub/backend/internal/modules/health"
+	"transithub/backend/internal/modules/jobs"
 	"transithub/backend/internal/modules/my_sites"
 	"transithub/backend/internal/modules/settings"
 	"transithub/backend/internal/modules/system"
@@ -73,7 +74,8 @@ func New(cfg config.Config, db *pgxpool.Pool, redisClient *redis.Client) *Server
 	}
 	group_rates.RegisterRoutes(server.mux, groupRatesService, adminAccountsService)
 	upstreamHTTPClient := &http.Client{Timeout: upstreamRequestTimeout}
-	platformService := upstream.NewPlatformService(upstream.NewHTTPClient(upstreamHTTPClient))
+	platformHTTPClient := upstream.NewHTTPClient(upstreamHTTPClient)
+	platformService := upstream.NewPlatformService(platformHTTPClient)
 	upstreamCache := upstream.NewRedisSiteCache(redisClient)
 	upstreamService := upstream.NewService(platformService, upstreamRepository, groupRateSnapshotWriter{service: groupRatesService}, upstreamCache)
 	credentialRepository, err := upstream.NewCredentialRepository(db, cfg.UpstreamCredentialEncryptionKey)
@@ -87,13 +89,42 @@ func New(cfg config.Config, db *pgxpool.Pool, redisClient *redis.Client) *Server
 		upstreamService.SetCredentialStore(credentialRepository)
 	}
 	upstreamService.SetAdminAccountResolver(adminAccountsService)
+	operationJobs := jobs.New(db)
+	if err := operationJobs.EnsureSchema(context.Background()); err != nil {
+		panic(err)
+	}
+	keyPolicies := upstream.NewKeyPolicies(db, platformService)
+	if err := keyPolicies.EnsureSchema(context.Background()); err != nil {
+		panic(err)
+	}
+	modelHealth, err := upstream.NewHealthService(db, upstreamService, cfg.UpstreamCredentialEncryptionKey)
+	if err != nil {
+		panic(err)
+	}
+	if err = modelHealth.EnsureSchema(context.Background()); err != nil {
+		panic(err)
+	}
+	modelHealth.Register(server.mux, operationJobs, keyPolicies)
 	upstream.RegisterRoutes(server.mux, upstreamService, adminAccountsService)
 	mySitesService := my_sites.NewService(my_sites.NewRepository(db), platformService, upstreamService)
 	if err := mySitesService.EnsureSchema(context.Background()); err != nil {
 		panic(err)
 	}
 	my_sites.RegisterRoutes(server.mux, mySitesService)
+	apiRouting := my_sites.NewAPIRouting(db, mySitesService, operationJobs)
+	if err := apiRouting.EnsureSchema(context.Background()); err != nil {
+		panic(err)
+	}
+	apiRouting.Register(server.mux)
 	mySitesService.SetAdminAccountResolver(adminAccountsService)
+	mySitesService.SetKeyPolicies(keyPolicies)
+	keySecurity, err := my_sites.NewKeySecurity(db, mySitesService, keyPolicies, operationJobs, cfg.UpstreamCredentialEncryptionKey)
+	if err != nil {
+		panic(err)
+	}
+	keySecurity.Register(server.mux)
+	platformHTTPClient.SetKeyObserver(keySecurity.ObserveKeys)
+	modelHealth.AfterRefresh = keySecurity.QueueSiteAudit
 
 	channelMonitorService := channel_monitor.NewService(
 		channel_monitor.NewRepository(db),
@@ -107,8 +138,15 @@ func New(cfg config.Config, db *pgxpool.Pool, redisClient *redis.Client) *Server
 		panic(err)
 	}
 	channelMonitorService.SetSessionProvider(mySitesService)
+	channelMonitorService.SetBindingSync(mySitesService)
+	channelMonitorService.SetModelHealth(modelHealth)
+	channelMonitorService.SetAutomationShadow(cfg.MonitorShadow)
+	channelMonitorService.SetOperations(operationJobs, keyPolicies)
+	mySitesService.SetBindingMonitor(channelMonitorService)
 	channel_monitor.RegisterRoutes(server.mux, channelMonitorService)
-	channelMonitorService.StartScheduler(context.Background())
+	if !cfg.DisableMonitor {
+		channelMonitorService.StartScheduler(context.Background())
+	}
 
 	settingsService := settings.NewService(http.DefaultClient, settings.NewRepository(db))
 	settingsService.SetAdminAccountResolver(adminAccountsService)
@@ -132,6 +170,10 @@ func New(cfg config.Config, db *pgxpool.Pool, redisClient *redis.Client) *Server
 	if err := upstreamService.RestoreSavedSites(context.Background()); err != nil {
 		panic(err)
 	}
+
+	channelMonitorService.StartReadModels(context.Background())
+	modelHealth.Start(context.Background())
+	operationJobs.Start(context.Background())
 
 	// 注入机器人通知能力，供自动调价成功后发送通知。
 	mySitesService.SetBotNotifier(settingsService)
@@ -175,6 +217,7 @@ func New(cfg config.Config, db *pgxpool.Pool, redisClient *redis.Client) *Server
 
 	// 站点同步成功后检查余额预警和倍率变更，按配置发送通知。
 	upstreamService.AfterSync = func(ctx context.Context, userID, adminAccountID, siteID, siteName string, oldMetrics, newMetrics upstream.Metrics) {
+		keySecurity.QueueSiteAudit(ctx, userID, adminAccountID, siteID)
 		// Group priority automation must not depend on notification settings or delivery.
 		channelMonitorService.ApplyPriorityAfterSync(ctx, userID, adminAccountID, siteID, oldMetrics, newMetrics)
 		strategy, err := settingsService.GetFirstStrategy(ctx)
@@ -196,6 +239,8 @@ func New(cfg config.Config, db *pgxpool.Pool, redisClient *redis.Client) *Server
 	dashboardService.SetAdminAccountService(adminAccountsService)
 	dashboardService.SetMySiteSync(mySitesService)
 	mySitesService.SetAdminSessionProvider(dashboardService)
+	keySecurity.Start(context.Background())
+	apiRouting.Start(context.Background())
 	dashboardService.StartRefresher(context.Background())
 
 	// 仪表盘指标服务：实时计算五项核心指标 + 历史趋势快照。
@@ -251,7 +296,7 @@ func (s *Server) Handler() http.Handler {
 }
 
 func (s *Server) protectedPath(path string) bool {
-	return strings.HasPrefix(path, "/api/admin-accounts") || strings.HasPrefix(path, "/api/upstream-sites") || strings.HasPrefix(path, "/api/group-rates") || strings.HasPrefix(path, "/api/group-rate-campaigns") || strings.HasPrefix(path, "/api/channel-monitor") || strings.HasPrefix(path, "/api/my-sites") || strings.HasPrefix(path, "/api/settings") || strings.HasPrefix(path, "/api/dashboard") || strings.HasPrefix(path, "/api/system")
+	return strings.HasPrefix(path, "/api/upstream-monitor-templates") || strings.HasPrefix(path, "/api/upstream-previews") || strings.HasPrefix(path, "/api/admin-accounts") || strings.HasPrefix(path, "/api/upstream-sites") || strings.HasPrefix(path, "/api/group-rates") || strings.HasPrefix(path, "/api/group-rate-campaigns") || strings.HasPrefix(path, "/api/channel-monitor") || strings.HasPrefix(path, "/api/my-sites") || strings.HasPrefix(path, "/api/settings") || strings.HasPrefix(path, "/api/dashboard") || strings.HasPrefix(path, "/api/system")
 }
 
 func bearerToken(header string) string {

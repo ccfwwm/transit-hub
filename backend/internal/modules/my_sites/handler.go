@@ -22,6 +22,7 @@ func RegisterRoutes(mux *http.ServeMux, service *Service) {
 	mux.HandleFunc("POST /api/my-sites/real-connect", handler.realConnect)
 	mux.HandleFunc("POST /api/my-sites/real-bind", handler.realBind)
 	mux.HandleFunc("GET /api/my-sites/upstream-keys", handler.listUpstreamKeys)
+	mux.HandleFunc("GET /api/my-sites/binding-models", handler.bindingModels)
 	mux.HandleFunc("GET /api/my-sites/real-connections", handler.listRealConnections)
 	mux.HandleFunc("PATCH /api/my-sites/real-connections/{id}/groups", handler.updateRealConnectionGroups)
 	mux.HandleFunc("POST /api/my-sites/real-disconnect", handler.realDisconnect)

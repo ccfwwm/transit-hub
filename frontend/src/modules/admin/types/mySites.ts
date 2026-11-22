@@ -48,6 +48,8 @@ export interface MySiteMappingOwnGroupOption {
 }
 
 export interface RealConnectRequest {
+  allowWhenUpstreamRateGteOwn?: boolean
+  testModelId?: string
   upstreamSiteId: string
   upstreamGroupId: string
   upstreamGroupName: string
@@ -122,6 +124,9 @@ export const NEW_API_CHANNEL_TYPES: NewAPIChannelType[] = [
 ]
 
 export interface RealConnection {
+  allowWhenUpstreamRateGteOwn?: boolean
+  testModelId?: string
+	upstreamApiUrl?: string
   id: string
   upstreamSiteId: string
   upstreamGroupId: string
@@ -136,6 +141,8 @@ export interface RealConnection {
 }
 
 export interface RealBindRequest {
+  allowWhenUpstreamRateGteOwn?: boolean
+  testModelId?: string
   upstreamSiteId: string
   upstreamGroupId: string
   upstreamGroupName: string
@@ -164,6 +171,8 @@ export interface RealDisconnectRequest {
 }
 
 export interface UpdateRealConnectionGroupsRequest {
+  allowWhenUpstreamRateGteOwn?: boolean
+  testModelId?: string
   connectionId: string
   ownGroupIds: string[]
-}
+}

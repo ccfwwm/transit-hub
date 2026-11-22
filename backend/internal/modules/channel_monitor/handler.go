@@ -17,6 +17,8 @@ type Handler struct {
 
 func RegisterRoutes(mux *http.ServeMux, service *Service) {
 	handler := &Handler{service: service}
+	handler.registerOperations(mux)
+	handler.registerModelBrowser(mux)
 	mux.HandleFunc("GET /api/channel-monitor/summary", handler.summary)
 	mux.HandleFunc("GET /api/channel-monitor/channels", handler.channels)
 	mux.HandleFunc("GET /api/channel-monitor/rules/{id}/history", handler.history)
@@ -45,6 +47,28 @@ func (h *Handler) summary(w http.ResponseWriter, r *http.Request) {
 	userID, ok := authctx.UserID(r.Context())
 	if !ok {
 		httpjson.WriteError(w, http.StatusUnauthorized, "auth.errors.unauthorized")
+		return
+	}
+	if repo, ok := h.service.store.(*Repository); ok {
+		aid, err := h.service.currentAdminAccountID(r.Context(), userID)
+		if err != nil {
+			writeMonitorError(w, err)
+			return
+		}
+		v, err := repo.readSnapshot(r.Context(), userID, aid, r.URL.Query().Get("groupId"))
+		if err != nil {
+			writeMonitorError(w, err)
+			return
+		}
+		if strings.HasSuffix(r.URL.Path, "/stats") {
+			httpjson.Write(w, 200, map[string]any{"stats": v.Stats, "snapshotVersion": v.SnapshotVersion, "updatedAt": v.UpdatedAt})
+			return
+		}
+		if strings.HasSuffix(r.URL.Path, "/groups") {
+			httpjson.Write(w, 200, map[string]any{"groups": v.Groups, "snapshotVersion": v.SnapshotVersion, "updatedAt": v.UpdatedAt})
+			return
+		}
+		httpjson.Write(w, http.StatusOK, v)
 		return
 	}
 	if r.URL.Query().Get("refresh") == "true" {

@@ -109,12 +109,14 @@ type GroupOption struct {
 // 前端传入上游站点 ID、上游分组 ID/名称和自有分组 ID 列表。
 // GroupType 可选：为空时后端从上游站点缓存的分组列表中自动识别平台类型。
 type RealConnectRequest struct {
-	UpstreamSiteID    string   `json:"upstreamSiteId"`
-	UpstreamGroupID   string   `json:"upstreamGroupId"`
-	UpstreamGroupName string   `json:"upstreamGroupName"`
-	GroupType         string   `json:"groupType"`
-	ChannelType       int      `json:"channelType"`
-	OwnGroupIDs       []string `json:"ownGroupIds"`
+	AllowWhenUpstreamRateGteOwn *bool    `json:"allowWhenUpstreamRateGteOwn,omitempty"`
+	TestModelID                 *string  `json:"testModelId,omitempty"`
+	UpstreamSiteID              string   `json:"upstreamSiteId"`
+	UpstreamGroupID             string   `json:"upstreamGroupId"`
+	UpstreamGroupName           string   `json:"upstreamGroupName"`
+	GroupType                   string   `json:"groupType"`
+	ChannelType                 int      `json:"channelType"`
+	OwnGroupIDs                 []string `json:"ownGroupIds"`
 }
 
 // RealDisconnectRequest 取消真实对接请求体。
@@ -125,20 +127,24 @@ type RealDisconnectRequest struct {
 }
 
 type UpdateRealConnectionGroupsRequest struct {
-	ConnectionID string   `json:"connectionId"`
-	OwnGroupIDs  []string `json:"ownGroupIds"`
+	AllowWhenUpstreamRateGteOwn *bool    `json:"allowWhenUpstreamRateGteOwn,omitempty"`
+	TestModelID                 *string  `json:"testModelId,omitempty"`
+	ConnectionID                string   `json:"connectionId"`
+	OwnGroupIDs                 []string `json:"ownGroupIds"`
 }
 
 // RealBindRequest 手动绑定请求体。
 // 用户从上游 key 列表中选择要绑定的 key，此接口仅创建绑定记录，不调用任何 platform API。
 type RealBindRequest struct {
-	UpstreamSiteID    string   `json:"upstreamSiteId"`
-	UpstreamGroupID   string   `json:"upstreamGroupId"`
-	UpstreamGroupName string   `json:"upstreamGroupName"`
-	UpstreamKeyID     string   `json:"upstreamKeyId"`
-	UpstreamKey       string   `json:"upstreamKey"`
-	OwnGroupIDs       []string `json:"ownGroupIds"`
-	GroupType         string   `json:"groupType"`
+	AllowWhenUpstreamRateGteOwn *bool    `json:"allowWhenUpstreamRateGteOwn,omitempty"`
+	TestModelID                 *string  `json:"testModelId,omitempty"`
+	UpstreamSiteID              string   `json:"upstreamSiteId"`
+	UpstreamGroupID             string   `json:"upstreamGroupId"`
+	UpstreamGroupName           string   `json:"upstreamGroupName"`
+	UpstreamKeyID               string   `json:"upstreamKeyId"`
+	UpstreamKey                 string   `json:"upstreamKey"`
+	OwnGroupIDs                 []string `json:"ownGroupIds"`
+	GroupType                   string   `json:"groupType"`
 }
 
 // RealConnectResponse 真实对接成功后返回的绑定记录。
@@ -156,17 +162,20 @@ type RealConnectResponse struct {
 //   - AdminAccountID: 上游平台的 admin 转发账号 ID，是真实对接业务逻辑中的字段，
 //     表示在上游 sub2api/new-api 站点上为 key 创建或绑定的管理员账号。
 type RealConnection struct {
-	ID                      string   `json:"id"`
-	UserID                  string   `json:"-"`
-	WorkspaceAdminAccountID string   `json:"-"` // TransitHub workspace 归属（隔离字段）
-	UpstreamSiteID          string   `json:"upstreamSiteId"`
-	UpstreamGroupID         string   `json:"upstreamGroupId"`
-	UpstreamGroupName       string   `json:"upstreamGroupName"`
-	UpstreamKeyID           string   `json:"upstreamKeyId"`
-	UpstreamKey             string   `json:"upstreamKey"`
-	AdminAccountID          string   `json:"adminAccountId"` // 上游平台 admin 转发账号 ID（业务字段）
-	AdminAccountName        string   `json:"adminAccountName"`
-	OwnGroupIDs             []string `json:"ownGroupIds"`
-	GroupType               string   `json:"groupType"`
-	CreatedAt               string   `json:"createdAt"`
+	AllowWhenUpstreamRateGteOwn bool     `json:"allowWhenUpstreamRateGteOwn"`
+	TestModelID                 string   `json:"testModelId,omitempty"`
+	ID                          string   `json:"id"`
+	UserID                      string   `json:"-"`
+	WorkspaceAdminAccountID     string   `json:"-"` // TransitHub workspace 归属（隔离字段）
+	UpstreamSiteID              string   `json:"upstreamSiteId"`
+	UpstreamAPIURL              string   `json:"upstreamApiUrl,omitempty"`
+	UpstreamGroupID             string   `json:"upstreamGroupId"`
+	UpstreamGroupName           string   `json:"upstreamGroupName"`
+	UpstreamKeyID               string   `json:"upstreamKeyId"`
+	UpstreamKey                 string   `json:"upstreamKey"`
+	AdminAccountID              string   `json:"adminAccountId"` // 上游平台 admin 转发账号 ID（业务字段）
+	AdminAccountName            string   `json:"adminAccountName"`
+	OwnGroupIDs                 []string `json:"ownGroupIds"`
+	GroupType                   string   `json:"groupType"`
+	CreatedAt                   string   `json:"createdAt"`
 }

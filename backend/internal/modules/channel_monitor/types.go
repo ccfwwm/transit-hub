@@ -1,6 +1,9 @@
 package channel_monitor
 
-import "time"
+import (
+	"time"
+	"transithub/backend/internal/modules/upstream"
+)
 
 const (
 	DefaultCheckIntervalMinutes  = 2
@@ -85,17 +88,22 @@ type Result struct {
 }
 
 type AccountTestOptions struct {
-	ModelID     string
-	Prompt      string
-	Mode        string // text, image, video, or connection
-	Size        string
-	Seconds     int
-	TaskID      string
-	Adapter     string
-	PresetModel string
+	APIURL         string `json:"apiUrl,omitempty"`
+	OneShot        bool   `json:"oneShot,omitempty"`
+	Recover        bool   `json:"-"`
+	IdempotencyKey string `json:"-"`
+	ModelID        string
+	Prompt         string
+	Mode           string // text, image, video, or connection
+	Size           string
+	Seconds        int
+	TaskID         string
+	Adapter        string
+	PresetModel    string
 }
 
 type AccountTestResult struct {
+	Inconclusive bool
 	Success      bool
 	Message      string
 	LatencyMS    int
@@ -136,6 +144,9 @@ type AdminAccountStatus struct {
 }
 
 type SummaryResponse struct {
+	SnapshotVersion int64           `json:"snapshotVersion"`
+	UpdatedAt       *time.Time      `json:"updatedAt"`
+	Stale           bool            `json:"stale"`
 	Stats           SummaryStats    `json:"stats"`
 	Groups          []GroupSummary  `json:"groups"`
 	Channels        []ChannelStatus `json:"channels"`
@@ -169,62 +180,67 @@ type GroupSummary struct {
 }
 
 type ChannelStatus struct {
-	RepairAvailable             bool          `json:"repairAvailable"`
-	CheckSupported              bool          `json:"checkSupported"`
-	DispatchUnavailableReason   string        `json:"dispatchUnavailableReason"`
-	RuleID                      string        `json:"ruleId"`
-	ConnectionID                string        `json:"connectionId"`
-	Enabled                     bool          `json:"enabled"`
-	Supported                   bool          `json:"supported"`
-	ManualPaused                bool          `json:"manualPaused"`
-	Schedulable                 *bool         `json:"schedulable"`
-	SchedulableManaged          bool          `json:"schedulableManaged"`
-	SchedulableConflict         bool          `json:"schedulableConflict"`
-	AutoEnableBlocked           bool          `json:"autoEnableBlocked"`
-	PriorityManaged             bool          `json:"priorityManaged"`
-	PriorityConflict            bool          `json:"priorityConflict"`
-	TakeoverAvailable           bool          `json:"takeoverAvailable"`
-	Status                      string        `json:"status"`
-	SiteID                      string        `json:"siteId"`
-	SiteName                    string        `json:"siteName"`
-	SitePlatform                string        `json:"sitePlatform"`
-	UpstreamGroupID             string        `json:"upstreamGroupId"`
-	UpstreamGroupName           string        `json:"upstreamGroupName"`
-	GroupType                   string        `json:"groupType"`
-	AdminAccountID              string        `json:"adminAccountId"`
-	AdminAccountName            string        `json:"adminAccountName"`
-	OwnGroups                   []string      `json:"ownGroups"`
-	OwnGroupIDs                 []string      `json:"ownGroupIds"`
-	Balance                     *float64      `json:"balance"`
-	AccountRateMultiplier       *float64      `json:"accountRateMultiplier"`
-	AccountPriority             *int          `json:"accountPriority"`
-	UpstreamMultiplier          *float64      `json:"upstreamMultiplier"`
-	UpstreamEffectiveMultiplier *float64      `json:"upstreamEffectiveMultiplier"`
-	UpstreamMultiplierOverride  *float64      `json:"upstreamMultiplierOverride"`
-	AllowWhenUpstreamRateGteOwn bool          `json:"allowWhenUpstreamRateGteOwn"`
-	OwnGroupMultiplier          *float64      `json:"ownGroupMultiplier"`
-	RecommendedPriority         *int          `json:"recommendedPriority"`
-	RateGateStatus              string        `json:"rateGateStatus"`
-	RateGateMessage             string        `json:"rateGateMessage"`
-	CheckIntervalMinutes        int           `json:"checkIntervalMinutes"`
-	FailureThreshold            int           `json:"failureThreshold"`
-	BalanceThreshold            float64       `json:"balanceThreshold"`
-	ConsecutiveFailures         int           `json:"consecutiveFailures"`
-	LastMessage                 string        `json:"lastMessage"`
-	LastLatencyMS               *int          `json:"lastLatencyMs"`
-	LastCheckedAt               *time.Time    `json:"lastCheckedAt"`
-	NextCheckAt                 *time.Time    `json:"nextCheckAt"`
-	RecentResults               []Result      `json:"recentResults"`
-	RecentTotal                 int           `json:"recentTotal"`
-	RecentSuccess               int           `json:"recentSuccess"`
-	UptimePercent               float64       `json:"uptimePercent"`
-	TestModelID                 string        `json:"testModelId"`
-	EffectiveTestModelID        string        `json:"effectiveTestModelId"`
-	TestModelSource             string        `json:"testModelSource"` // custom, group, global, unsupported
-	EffectiveTestMode           string        `json:"effectiveTestMode"`
-	GroupStates                 []TargetState `json:"groupStates"`
-	MediaTaskKey                string        `json:"mediaTaskKey,omitempty"`
-	DetectionGroupID            string        `json:"detectionGroupId"`
+	KeyWhitelistEnabled         *bool                           `json:"keyWhitelistEnabled,omitempty"`
+	ModelSummary                *upstream.ModelHealth           `json:"modelSummary,omitempty"`
+	ModelSummaries              map[string]upstream.ModelHealth `json:"-"`
+	KeyPolicy                   *upstream.GroupKeyPolicy        `json:"keyPolicy,omitempty"`
+	DispatchState               string                          `json:"dispatchState"`
+	RepairAvailable             bool                            `json:"repairAvailable"`
+	CheckSupported              bool                            `json:"checkSupported"`
+	DispatchUnavailableReason   string                          `json:"dispatchUnavailableReason"`
+	RuleID                      string                          `json:"ruleId"`
+	ConnectionID                string                          `json:"connectionId"`
+	Enabled                     bool                            `json:"enabled"`
+	Supported                   bool                            `json:"supported"`
+	ManualPaused                bool                            `json:"manualPaused"`
+	Schedulable                 *bool                           `json:"schedulable"`
+	SchedulableManaged          bool                            `json:"schedulableManaged"`
+	SchedulableConflict         bool                            `json:"schedulableConflict"`
+	AutoEnableBlocked           bool                            `json:"autoEnableBlocked"`
+	PriorityManaged             bool                            `json:"priorityManaged"`
+	PriorityConflict            bool                            `json:"priorityConflict"`
+	TakeoverAvailable           bool                            `json:"takeoverAvailable"`
+	Status                      string                          `json:"status"`
+	SiteID                      string                          `json:"siteId"`
+	SiteName                    string                          `json:"siteName"`
+	SitePlatform                string                          `json:"sitePlatform"`
+	UpstreamGroupID             string                          `json:"upstreamGroupId"`
+	UpstreamGroupName           string                          `json:"upstreamGroupName"`
+	GroupType                   string                          `json:"groupType"`
+	AdminAccountID              string                          `json:"adminAccountId"`
+	AdminAccountName            string                          `json:"adminAccountName"`
+	OwnGroups                   []string                        `json:"ownGroups"`
+	OwnGroupIDs                 []string                        `json:"ownGroupIds"`
+	Balance                     *float64                        `json:"balance"`
+	AccountRateMultiplier       *float64                        `json:"accountRateMultiplier"`
+	AccountPriority             *int                            `json:"accountPriority"`
+	UpstreamMultiplier          *float64                        `json:"upstreamMultiplier"`
+	UpstreamEffectiveMultiplier *float64                        `json:"upstreamEffectiveMultiplier"`
+	UpstreamMultiplierOverride  *float64                        `json:"upstreamMultiplierOverride"`
+	AllowWhenUpstreamRateGteOwn bool                            `json:"allowWhenUpstreamRateGteOwn"`
+	OwnGroupMultiplier          *float64                        `json:"ownGroupMultiplier"`
+	RecommendedPriority         *int                            `json:"recommendedPriority"`
+	RateGateStatus              string                          `json:"rateGateStatus"`
+	RateGateMessage             string                          `json:"rateGateMessage"`
+	CheckIntervalMinutes        int                             `json:"checkIntervalMinutes"`
+	FailureThreshold            int                             `json:"failureThreshold"`
+	BalanceThreshold            float64                         `json:"balanceThreshold"`
+	ConsecutiveFailures         int                             `json:"consecutiveFailures"`
+	LastMessage                 string                          `json:"lastMessage"`
+	LastLatencyMS               *int                            `json:"lastLatencyMs"`
+	LastCheckedAt               *time.Time                      `json:"lastCheckedAt"`
+	NextCheckAt                 *time.Time                      `json:"nextCheckAt"`
+	RecentResults               []Result                        `json:"recentResults"`
+	RecentTotal                 int                             `json:"recentTotal"`
+	RecentSuccess               int                             `json:"recentSuccess"`
+	UptimePercent               float64                         `json:"uptimePercent"`
+	TestModelID                 string                          `json:"testModelId"`
+	EffectiveTestModelID        string                          `json:"effectiveTestModelId"`
+	TestModelSource             string                          `json:"testModelSource"` // custom, group, global, unsupported
+	EffectiveTestMode           string                          `json:"effectiveTestMode"`
+	GroupStates                 []TargetState                   `json:"groupStates"`
+	MediaTaskKey                string                          `json:"mediaTaskKey,omitempty"`
+	DetectionGroupID            string                          `json:"detectionGroupId"`
 }
 
 type UpdateRuleRequest struct {
@@ -269,6 +285,7 @@ type ResetMediaTaskRequest struct {
 }
 
 type TestModelConfig struct {
+	StatusSource                  string                 `json:"statusSource"`
 	UserID                        string                 `json:"-"`
 	AdminAccountID                string                 `json:"-"`
 	OpenAIModelID                 string                 `json:"openaiModelId"`
@@ -280,6 +297,7 @@ type TestModelConfig struct {
 }
 
 type UpdateTestModelConfigRequest struct {
+	StatusSource                  *string                 `json:"statusSource"`
 	OpenAIModelID                 *string                 `json:"openaiModelId"`
 	AnthropicModelID              *string                 `json:"anthropicModelId"`
 	GrokModelID                   *string                 `json:"grokModelId"`
@@ -290,30 +308,34 @@ type UpdateTestModelConfigRequest struct {
 // TestModelGroupConfig overrides the platform default for one own group.
 // The group ID is authoritative; the name is retained for a readable UI label.
 type TestModelGroupConfig struct {
-	GroupID     string `json:"groupId"`
-	GroupName   string `json:"groupName"`
-	ModelID     string `json:"modelId"`
-	Mode        string `json:"mode,omitempty"`
-	Prompt      string `json:"prompt,omitempty"`
-	Size        string `json:"size,omitempty"`
-	Seconds     int    `json:"seconds,omitempty"`
-	Adapter     string `json:"adapter,omitempty"`
-	PresetModel string `json:"presetModel,omitempty"`
+	IntervalMinutes int    `json:"intervalMinutes,omitempty"`
+	GroupID         string `json:"groupId"`
+	GroupName       string `json:"groupName"`
+	ModelID         string `json:"modelId"`
+	Mode            string `json:"mode,omitempty"`
+	Prompt          string `json:"prompt,omitempty"`
+	Size            string `json:"size,omitempty"`
+	Seconds         int    `json:"seconds,omitempty"`
+	Adapter         string `json:"adapter,omitempty"`
+	PresetModel     string `json:"presetModel,omitempty"`
 }
 
 type TargetState struct {
-	RuleID              string     `json:"ruleId"`
-	GroupID             string     `json:"groupId"`
-	Fingerprint         string     `json:"fingerprint"`
-	Status              string     `json:"status"`
-	ConsecutiveFailures int        `json:"consecutiveFailures"`
-	Message             string     `json:"message"`
-	Model               string     `json:"model"`
-	Mode                string     `json:"mode"`
-	LatencyMS           *int       `json:"latencyMs"`
-	CheckedAt           *time.Time `json:"checkedAt"`
-	NextCheckAt         *time.Time `json:"nextCheckAt"`
-	MediaTaskKey        string     `json:"mediaTaskKey,omitempty"`
+	Source              string        `json:"source,omitempty"`
+	SourceCheckedAt     *time.Time    `json:"sourceCheckedAt,omitempty"`
+	Models              []TargetState `json:"models,omitempty"`
+	RuleID              string        `json:"ruleId"`
+	GroupID             string        `json:"groupId"`
+	Fingerprint         string        `json:"fingerprint"`
+	Status              string        `json:"status"`
+	ConsecutiveFailures int           `json:"consecutiveFailures"`
+	Message             string        `json:"message"`
+	Model               string        `json:"model"`
+	Mode                string        `json:"mode"`
+	LatencyMS           *int          `json:"latencyMs"`
+	CheckedAt           *time.Time    `json:"checkedAt"`
+	NextCheckAt         *time.Time    `json:"nextCheckAt"`
+	MediaTaskKey        string        `json:"mediaTaskKey,omitempty"`
 }
 
 type RateRule struct {
@@ -328,6 +350,7 @@ type RateRule struct {
 }
 
 type RateRuleView struct {
+	PlanVersion    string              `json:"planVersion,omitempty"`
 	Rule           RateRule            `json:"rule"`
 	Summary        RateApplySummary    `json:"summary"`
 	Rows           []RatePlanRow       `json:"rows"`

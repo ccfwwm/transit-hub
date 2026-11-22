@@ -308,7 +308,7 @@ onMounted(async () => {
           <div class="flex items-center justify-between">
             <div>
               <h3 class="text-lg font-semibold text-foreground">{{ t('admin.settings.tabs.strategy') }}</h3>
-              <p class="text-sm text-muted-foreground mt-0.5">{{ t('admin.settings.strategyDescription') }}</p>
+              
             </div>
             <Button :disabled="isSavingStrategy" @click="saveStrategy" class="min-w-[120px]">
               <Loader2 v-if="isSavingStrategy" class="h-4 w-4 animate-spin mr-2" />
@@ -331,7 +331,7 @@ onMounted(async () => {
                 </div>
                 <div>
                   <h4 class="text-sm font-semibold text-foreground">{{ t('admin.settings.sections.basic.refreshInterval') }}</h4>
-                  <p class="text-xs text-muted-foreground mt-0.5">{{ t('admin.settings.sections.basic.refreshIntervalHelp') }}</p>
+                  
                 </div>
               </div>
               <label class="relative inline-flex items-center cursor-pointer shrink-0 mt-1">
@@ -358,7 +358,7 @@ onMounted(async () => {
                 </div>
                 <div>
                   <h4 class="text-sm font-semibold text-foreground">{{ t('admin.settings.sections.thresholds.balanceWarning') }}</h4>
-                  <p class="text-xs text-muted-foreground mt-0.5">{{ t('admin.settings.sections.thresholds.balanceWarningHelp') }}</p>
+                  
                   <div v-if="!enableRefreshInterval" class="flex items-center gap-1.5 mt-1.5">
                     <Info class="w-3.5 h-3.5 text-blue-500 shrink-0" />
                     <span class="text-xs text-blue-500">{{ t('admin.settings.requiresRefresh') }}</span>
@@ -422,7 +422,7 @@ onMounted(async () => {
                 </div>
                 <div>
                   <h4 class="text-sm font-semibold text-foreground">{{ t('admin.settings.sections.thresholds.multiplierChangeWarning') }}</h4>
-                  <p class="text-xs text-muted-foreground mt-0.5">{{ t('admin.settings.sections.thresholds.multiplierChangeWarningHelp') }}</p>
+                  
                   <div v-if="!enableRefreshInterval" class="flex items-center gap-1.5 mt-1.5">
                     <Info class="w-3.5 h-3.5 text-blue-500 shrink-0" />
                     <span class="text-xs text-blue-500">{{ t('admin.settings.requiresRefresh') }}</span>
@@ -486,7 +486,7 @@ onMounted(async () => {
               </div>
               <div>
                 <h3 class="text-lg font-semibold text-foreground">{{ t('admin.settings.sections.channels.title') }}</h3>
-                <p class="text-sm text-muted-foreground">{{ t('admin.settings.sections.channels.description') }}</p>
+                
               </div>
             </div>
             <Button :disabled="isSavingChannels || isLoadingChannels" @click="saveChannels" class="min-w-[120px]">
@@ -530,7 +530,7 @@ onMounted(async () => {
               <div class="flex items-center justify-between">
                 <div>
                   <h4 class="font-medium text-foreground">{{ t('admin.settings.sections.channels.dingtalk') }}</h4>
-                  <p class="text-xs text-muted-foreground mt-0.5">{{ t('admin.settings.sections.channels.dingtalkHelp') }}</p>
+                  
                 </div>
                 <Button variant="secondary" size="sm" class="h-8" @click="addBot('dingtalk')">
                   <Plus class="h-3 w-3 mr-1.5" /> {{ t('admin.settings.addDingtalkBot') }}
@@ -576,7 +576,7 @@ onMounted(async () => {
               <div class="flex items-center justify-between">
                 <div>
                   <h4 class="font-medium text-foreground">{{ t('admin.settings.sections.channels.feishu') }}</h4>
-                  <p class="text-xs text-muted-foreground mt-0.5">{{ t('admin.settings.sections.channels.feishuHelp') }}</p>
+                  
                 </div>
                 <Button variant="secondary" size="sm" class="h-8" @click="addBot('feishu')">
                   <Plus class="h-3 w-3 mr-1.5" /> {{ t('admin.settings.addFeishuBot') }}
@@ -622,7 +622,7 @@ onMounted(async () => {
               <div class="flex items-center justify-between">
                 <div>
                   <h4 class="font-medium text-foreground">{{ t('admin.settings.sections.channels.telegram') }}</h4>
-                  <p class="text-xs text-muted-foreground mt-0.5">{{ t('admin.settings.sections.channels.telegramHelp') }}</p>
+                  
                 </div>
                 <Button variant="secondary" size="sm" class="h-8" @click="addBot('telegram')">
                   <Plus class="h-3 w-3 mr-1.5" /> {{ t('admin.settings.addTelegramBot') }}
@@ -649,7 +649,7 @@ onMounted(async () => {
                     <div class="grid gap-2">
                       <label class="text-xs font-medium text-muted-foreground">{{ t('admin.settings.sections.channels.proxyUrl') }}</label>
                       <Input type="url" v-model="bot.proxyUrl" :placeholder="t('admin.settings.sections.channels.proxyUrlPlaceholder')" class="h-8 text-sm" />
-                      <p class="text-xs text-muted-foreground">{{ t('admin.settings.sections.channels.proxyUrlHelp') }}</p>
+                      
                     </div>
                     <div>
                       <Button variant="secondary" size="sm" class="h-8" :disabled="testingBotId === bot.id || !bot.botToken || !bot.chatId" @click="testBot('telegram', bot.id)">

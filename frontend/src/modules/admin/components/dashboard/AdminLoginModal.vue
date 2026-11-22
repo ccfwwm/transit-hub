@@ -119,7 +119,7 @@ const handleSubmit = () => {
             </div>
             <div>
               <h2 class="text-lg font-semibold text-foreground">{{ t('admin.dashboard.adminAuth.modal.title') }}</h2>
-              <p class="text-sm text-muted-foreground">{{ t('admin.dashboard.adminAuth.modal.subtitle') }}</p>
+              
             </div>
           </div>
           <button
@@ -201,7 +201,7 @@ const handleSubmit = () => {
             <Input v-model="accessToken" :placeholder="t('admin.dashboard.adminAuth.modal.fields.accessTokenPlaceholder')" autocomplete="off" />
             <Input v-model="refreshToken" :placeholder="t('admin.dashboard.adminAuth.modal.fields.refreshTokenPlaceholder')" autocomplete="off" />
             <Input v-model="tokenType" :placeholder="t('admin.dashboard.adminAuth.modal.fields.tokenTypePlaceholder')" autocomplete="off" />
-            <p class="text-xs text-muted-foreground">{{ t('admin.dashboard.adminAuth.modal.fields.tokenHelp') }}</p>
+            
           </div>
 
           <!-- 错误提示 -->

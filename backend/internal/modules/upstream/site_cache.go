@@ -44,27 +44,29 @@ func NewRedisSiteCache(client *redis.Client) *RedisSiteCache {
 // 嵌入 Site 后通过额外字段覆盖 json:"-" 标记的 UserID 和 Session，
 // 确保这些关键字段不会在序列化时丢失。
 type sitePayload struct {
-	ID                string   `json:"id"`
-	UserID            string   `json:"userId"`
-	AdminAccountID    string   `json:"adminAccountId"`
-	Name              string   `json:"name"`
-	BaseURL           string   `json:"baseUrl"`
-	Platform          Platform `json:"platform"`
-	RequestedPlatform Platform `json:"requestedPlatform"`
-	Account           string   `json:"account"`
-	Remark            string   `json:"remark"`
-	RechargeRate      float64  `json:"rechargeRate"`
-	SkipTLSVerify     bool     `json:"skipTlsVerify"`
-	Status            Status   `json:"status"`
-	ErrorKey          *string  `json:"errorKey"`
-	Metrics           Metrics  `json:"metrics"`
-	LastSyncedAt      *int64   `json:"lastSyncedAt"`
-	CanRelogin        bool     `json:"canRelogin"`
-	Session           *Session `json:"session,omitempty"`
+	Settings          SiteSettings `json:"settings"`
+	ID                string       `json:"id"`
+	UserID            string       `json:"userId"`
+	AdminAccountID    string       `json:"adminAccountId"`
+	Name              string       `json:"name"`
+	BaseURL           string       `json:"baseUrl"`
+	Platform          Platform     `json:"platform"`
+	RequestedPlatform Platform     `json:"requestedPlatform"`
+	Account           string       `json:"account"`
+	Remark            string       `json:"remark"`
+	RechargeRate      float64      `json:"rechargeRate"`
+	SkipTLSVerify     bool         `json:"skipTlsVerify"`
+	Status            Status       `json:"status"`
+	ErrorKey          *string      `json:"errorKey"`
+	Metrics           Metrics      `json:"metrics"`
+	LastSyncedAt      *int64       `json:"lastSyncedAt"`
+	CanRelogin        bool         `json:"canRelogin"`
+	Session           *Session     `json:"session,omitempty"`
 }
 
 func toPayload(site *Site) sitePayload {
 	return sitePayload{
+		Settings:          site.Settings,
 		ID:                site.ID,
 		UserID:            site.UserID,
 		AdminAccountID:    site.AdminAccountID,
@@ -87,6 +89,7 @@ func toPayload(site *Site) sitePayload {
 
 func fromPayload(p sitePayload) *Site {
 	return &Site{
+		Settings:          p.Settings,
 		ID:                p.ID,
 		UserID:            p.UserID,
 		AdminAccountID:    p.AdminAccountID,

@@ -11,6 +11,11 @@ var presetJSON []byte
 // ModelPreset returns an independent copy: account overrides must never mutate
 // the shared catalog. A preset describes a protocol, not a verification result.
 func ModelPreset(model string) (Capability, bool) {
+	for _, c := range omniVideoPresets() {
+		if c.Model == model {
+			return CapabilityDefaults(c), true
+		}
+	}
 	var profiles []Capability
 	_ = json.Unmarshal(presetJSON, &profiles)
 	for _, c := range profiles {
@@ -19,6 +24,18 @@ func ModelPreset(model string) (Capability, bool) {
 		}
 	}
 	return Capability{}, false
+}
+
+// These exact model IDs use /v1/videos, not Gemini's generateContent endpoint.
+// Keep the aliases explicit; suffixes must not guess a paid protocol.
+func omniVideoPresets() []Capability {
+	out := []Capability{}
+	for _, model := range []string{"gemini-omni-flash", "gemini-omni-1.1-flash", "gemini-omni-1.2-flash", "gemini-omni-1.2-flash-v"} {
+		c := Capability{ID: "openai-video:" + model, Model: model, UpstreamModel: model, MediaType: "video", Adapter: "openai_video", Enabled: true, Status: "configured", Operations: []string{"video"}, Sizes: []string{"1280x720"}}
+		c.Duration = Duration{Mode: "enum", Values: []int{4, 6, 8, 10}}
+		out = append(out, c)
+	}
+	return out
 }
 
 func CapabilityDefaults(c Capability) Capability {

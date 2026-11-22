@@ -3,6 +3,7 @@ package upstream
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -14,6 +15,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 )
 
 // jsonUnmarshalString 将 JSON 字符串解析到目标结构。
@@ -1455,9 +1457,13 @@ func (s *PlatformService) ListSub2APIKeys(session Session) ([]Sub2APIKeyItem, er
 // CreateSub2APIKey 在上游 Sub2API 站点创建一个 API Key。
 // name 为 key 名称，groupID 为关联分组的数字 ID。
 // 返回新建 key 的 ID（字符串）和 key 值；失败时返回 error。
-func (s *PlatformService) CreateSub2APIKey(session Session, name string, groupID int) (string, string, error) {
+func (s *PlatformService) CreateSub2APIKey(session Session, name string, groupID int, whitelist ...[]string) (string, string, error) {
 	if session.Platform != PlatformSub2API || strings.TrimSpace(session.AccessToken) == "" {
 		return "", "", newRequestError(ErrorAuth, PlatformSub2API)
+	}
+	ips := []string{DefaultMonitorIP}
+	if len(whitelist) > 0 {
+		ips = whitelist[0]
 	}
 	response, err := s.httpClient.requestJSON(session.BaseURL+"/api/v1/keys", requestOptions{
 		AccessToken:     session.AccessToken,
@@ -1465,8 +1471,9 @@ func (s *PlatformService) CreateSub2APIKey(session Session, name string, groupID
 		InsecureSkipTLS: session.InsecureSkipTLS,
 		Method:          http.MethodPost,
 		Body: map[string]any{
-			"name":     name,
-			"group_id": groupID,
+			"name":         name,
+			"ip_whitelist": ips,
+			"group_id":     groupID,
 		},
 	})
 	if err != nil {
@@ -1575,7 +1582,9 @@ func (s *PlatformService) ListSub2APIAdminAccounts(session Session) ([]Sub2APIAd
 			if value := firstString(record, []string{"name", "username", "display_name", "displayName"}); value != nil {
 				name = *value
 			}
+			baseURL, apiKey, platform, groupIDs := forwardingFields(record)
 			accounts = append(accounts, Sub2APIAdminAccountStatus{
+				BaseURL: baseURL, APIKey: apiKey, Platform: platform, GroupIDs: groupIDs, Type: safeString(record, "type"),
 				ID: id, Name: name,
 				Schedulable:    firstBool(record, []string{"schedulable", "is_schedulable", "isSchedulable"}),
 				RateMultiplier: firstNumber(record, []string{"rate_multiplier", "rateMultiplier", "multiplier", "rate"}),
@@ -2099,25 +2108,33 @@ func strconvInt(value int64) string {
 //  1. 使用唯一 name 创建 token；
 //  2. 按 name 搜索回查 token ID；
 //  3. 调用 /api/token/:id/key 获取完整 key。
-func (s *PlatformService) CreateNewAPIToken(session Session, name string, group string) (string, string, error) {
+func (s *PlatformService) CreateNewAPIToken(session Session, name string, group string, whitelist ...[]string) (string, string, error) {
 	if session.Platform != PlatformNewAPI || !session.IsAuthenticated() {
 		return "", "", newRequestError(ErrorAuth, PlatformNewAPI)
 	}
+	name = boundedNewAPITokenName(name)
 
+	ips := []string{DefaultMonitorIP}
+	if len(whitelist) > 0 {
+		ips = whitelist[0]
+	}
 	// 步骤 1：创建 token
-	_, err := s.httpClient.requestJSON(session.BaseURL+"/api/token/", newAPIRequestOptionsWith(session, http.MethodPost, map[string]any{
+	created, err := s.httpClient.requestJSON(session.BaseURL+"/api/token/", newAPIRequestOptionsWith(session, http.MethodPost, map[string]any{
 		"name":                 name,
 		"remain_quota":         0,
 		"unlimited_quota":      true,
 		"expired_time":         -1,
 		"model_limits_enabled": false,
 		"model_limits":         "",
-		"allow_ips":            "",
+		"allow_ips":            strings.Join(ips, "\n"),
 		"group":                group,
 		"cross_group_retry":    false,
 	}))
 	if err != nil {
 		return "", "", err
+	}
+	if record, ok := created.Payload.(map[string]any); ok && record["success"] == false {
+		return "", "", newRequestError(ErrorTokenCreationRejected, PlatformNewAPI)
 	}
 
 	// 步骤 2：按 name 搜索回查 token ID
@@ -2133,6 +2150,21 @@ func (s *PlatformService) CreateNewAPIToken(session Session, name string, group 
 	}
 
 	return tokenID, fullKey, nil
+}
+
+// New API limits names to 50 UTF-8 bytes. Keep the group request unchanged;
+// a deterministic suffix preserves uniqueness when a descriptive name is long.
+func boundedNewAPITokenName(name string) string {
+	if len(name) <= 50 {
+		return name
+	}
+	sum := sha256.Sum256([]byte(name))
+	suffix := fmt.Sprintf("-%x", sum[:4])
+	for len(name) > 50-len(suffix) {
+		_, size := utf8.DecodeLastRuneInString(name)
+		name = name[:len(name)-size]
+	}
+	return name + suffix
 }
 
 // searchNewAPITokenByName 通过分页查询 token 列表，按 name 精确匹配回查 token ID。
@@ -2447,7 +2479,7 @@ func (s *PlatformService) ProbeAPIKey(ctx context.Context, options APIKeyProbeOp
 	if prompt == "" {
 		prompt = "Reply OK"
 	}
-	if mode := strings.ToLower(strings.TrimSpace(options.Mode)); mode == "image" || mode == "video" {
+	if mode := strings.ToLower(strings.TrimSpace(options.Mode)); mode == "image" || mode == "video" || mode == "audio" {
 		return s.probeMedia(ctx, options)
 	}
 	endpoint := apiProbeEndpoint(baseURL, platform)
@@ -2482,7 +2514,8 @@ func (s *PlatformService) ProbeAPIKey(ctx context.Context, options APIKeyProbeOp
 	latency := int(time.Since(started).Milliseconds())
 	if status < http.StatusOK || status >= http.StatusMultipleChoices {
 		return APIKeyProbeResult{
-			Success: false, Message: apiProbeErrorMessage(status, data),
+			Inconclusive: status == 400 || status == 401 || status == 403 || status == 404 || status == 422,
+			Success:      false, Message: apiProbeErrorMessage(status, data),
 			LatencyMS: latency, Model: modelID,
 		}, nil
 	}

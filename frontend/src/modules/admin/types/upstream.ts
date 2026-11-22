@@ -7,6 +7,9 @@ export type UpstreamStatus = 'connecting' | 'syncing' | 'connected' | 'error'
 export type UpstreamAuthMode = 'password' | 'token'
 
 export interface UpstreamSiteForm {
+  keyWhitelistEnabled?:boolean
+  apiUrl?: string
+	monitorProfile?: MonitorProfile
   loginAgreementRevision?: string
   name: string
   siteUrl: string
@@ -68,8 +71,16 @@ export interface Sub2ApiSession {
 export type UpstreamSession = NewApiSession | Sub2ApiSession
 
 export interface SiteSettings {
+  keyWhitelistDisabled?:boolean
+  defaultApiUrl?: string
+  apiUrlManaged?: boolean
+	groupApiUrls?: Record<string,string>
+	monitorProfile?: MonitorProfile
   balanceThreshold: number | null
 }
+
+export interface MonitorProfile {template:string;path:string;detailPath?:string;pricingPath?:string}
+export interface MonitorTemplate extends MonitorProfile {name:string;description:string}
 
 export interface UpstreamSite {
   id: string
@@ -113,4 +124,4 @@ export type SiteSyncPhase = 'idle' | 'syncing' | 'done' | 'error'
 export interface SiteSyncState {
   phase: SiteSyncPhase
   errorKey?: string
-}
+}

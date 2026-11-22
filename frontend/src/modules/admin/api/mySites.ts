@@ -109,3 +109,10 @@ export const realDisconnect = async (req: RealDisconnectRequest): Promise<void> 
 export const repairRealConnectionAccount = async (connectionId: string): Promise<void> => {
   await requestJson(`/my-sites/real-connections/${encodeURIComponent(connectionId)}/repair`, { method: 'POST' })
 }
+
+export const listBindingModels = (query: { siteId: string; groupId: string; connectionId?: string; keyId?: string }): Promise<{items: string[]; source: string; warning?: string}> => {
+ const params = new URLSearchParams({siteId: query.siteId, groupId: query.groupId})
+ if (query.connectionId) params.set('connectionId',query.connectionId)
+ if (query.keyId) params.set('keyId',query.keyId)
+ return requestJson(`/my-sites/binding-models?${params}`)
+}

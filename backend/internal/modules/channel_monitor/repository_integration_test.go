@@ -91,6 +91,9 @@ func TestMonitorPostgresMigrationClaimsAnd500ChannelPerformance(t *testing.T) {
 	counts := []int64{}
 	for _, n := range []int{50, 500} {
 		fixture.conns.connections = connections[:n]
+		if err = service.RefreshReadModel(ctx, "user-1", "admin-1"); err != nil {
+			t.Fatal(err)
+		}
 		if _, err = service.summaryInGroup(ctx, "user-1", "a", true); err != nil {
 			t.Fatal(err)
 		}
@@ -116,7 +119,7 @@ func TestMonitorPostgresMigrationClaimsAnd500ChannelPerformance(t *testing.T) {
 				t.Fatal(e)
 			}
 			pages = append(pages, time.Since(start))
-			if page.Total != n || len(page.Channels) != 25 || len(page.Channels[0].RecentResults) != 60 {
+			if page.Total != n || len(page.Channels) != 25 || len(page.Channels[0].RecentResults) != 0 {
 				t.Fatalf("incorrect bounded page n=%d total=%d", n, page.Total)
 			}
 		}
@@ -130,6 +133,7 @@ func TestMonitorPostgresMigrationClaimsAnd500ChannelPerformance(t *testing.T) {
 	if counts[0] != counts[1] {
 		t.Fatalf("summary query growth: %v", counts)
 	}
+	_, _ = db.Exec(ctx, `DELETE FROM channel_monitor_media_tasks WHERE key='claim-once'`)
 	task := MediaTask{Key: "claim-once", UserID: "user-1", AdminAccountID: "admin-1", RuleID: "verify-0", Mode: "video", Options: AccountTestOptions{ModelID: "alias", Mode: "video", Seconds: 4}}
 	var claims atomic.Int64
 	var wg sync.WaitGroup

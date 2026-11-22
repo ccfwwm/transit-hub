@@ -11,10 +11,12 @@ const (
 	defaultPort       = "10621"
 	defaultRedisURL   = "redis://127.0.0.1:6379/0"
 	defaultPublicDir  = "/app/public"
-	defaultAppVersion = "2.1.15"
+	defaultAppVersion = "2.2.17"
 )
 
 type Config struct {
+	DisableMonitor bool
+	MonitorShadow  bool
 	// 基础运行配置
 	Port        string
 	DatabaseURL string
@@ -50,8 +52,10 @@ func Load() Config {
 	)
 
 	return Config{
-		Port:        envOrDefault("PORT", defaultPort),
-		DatabaseURL: os.Getenv("DATABASE_URL"),
+		DisableMonitor: envOrDefault("DISABLE_BACKGROUND_MONITOR", "false") == "true",
+		MonitorShadow:  envOrDefault("MONITOR_AUTOMATION_MODE", "active") == "shadow",
+		Port:           envOrDefault("PORT", defaultPort),
+		DatabaseURL:    os.Getenv("DATABASE_URL"),
 		// 仪表盘 admin 会话与令牌刷新调度依赖 Redis。未显式配置时回退到本地默认地址，
 		// 便于开发环境直接通过 docker-compose 中的 redis 服务连通。
 		RedisURL:    envOrDefault("REDIS_URL", defaultRedisURL),

@@ -3,6 +3,7 @@ package channel_monitor
 import (
 	"context"
 	"strings"
+	"time"
 
 	"transithub/backend/internal/modules/upstream"
 )
@@ -35,18 +36,27 @@ func applyTargetToChannel(row *ChannelStatus, t TargetState) {
 }
 
 type ChannelPageQuery struct {
-	GroupID, GroupStatus, Status, Search, RuleID string
-	Page, PageSize                               int
+	GroupID, GroupStatus, Status, Search, RuleID, Dispatch string
+	Page, PageSize                                         int
 }
 type ChannelPage struct {
-	Channels []ChannelStatus `json:"channels"`
-	Total    int             `json:"total"`
-	RuleIDs  []string        `json:"ruleIds"`
-	Page     int             `json:"page"`
-	PageSize int             `json:"pageSize"`
+	SnapshotVersion int64           `json:"snapshotVersion"`
+	UpdatedAt       *time.Time      `json:"updatedAt"`
+	Channels        []ChannelStatus `json:"channels"`
+	Total           int             `json:"total"`
+	RuleIDs         []string        `json:"ruleIds"`
+	Page            int             `json:"page"`
+	PageSize        int             `json:"pageSize"`
 }
 
 func (s *Service) ChannelPage(ctx context.Context, userID string, q ChannelPageQuery) (ChannelPage, error) {
+	if r, ok := s.store.(*Repository); ok {
+		aid, err := s.currentAdminAccountID(ctx, userID)
+		if err != nil {
+			return ChannelPage{}, err
+		}
+		return r.readPage(ctx, userID, aid, q)
+	}
 	overview, err := s.summaryInGroup(ctx, userID, q.GroupID, true)
 	if err != nil {
 		return ChannelPage{}, err
@@ -69,6 +79,23 @@ func (s *Service) channelPageFromSummary(ctx context.Context, overview SummaryRe
 	matches := []ChannelStatus{}
 	search := strings.ToLower(strings.TrimSpace(q.Search))
 	for _, row := range overview.Channels {
+		if q.Dispatch != "" && q.Dispatch != "all" {
+			state := row.DispatchState
+			if state == "" {
+				state = dispatchState(row)
+			}
+			if q.Dispatch == "paused" {
+				if row.Schedulable == nil || *row.Schedulable {
+					continue
+				}
+			} else if q.Dispatch == "monitor" {
+				if row.Enabled {
+					continue
+				}
+			} else if state != q.Dispatch {
+				continue
+			}
+		}
 		if q.RuleID != "" && row.RuleID != q.RuleID {
 			continue
 		}

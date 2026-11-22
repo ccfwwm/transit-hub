@@ -215,7 +215,8 @@ func (r *Repository) EnsureSchema(ctx context.Context) error {
 	if _, err := r.db.Exec(ctx, `
 		ALTER TABLE channel_monitor_test_model_configs
 		ADD COLUMN IF NOT EXISTS balance_refresh_interval_minutes integer NOT NULL DEFAULT 5,
-		ADD COLUMN IF NOT EXISTS group_models_json jsonb NOT NULL DEFAULT '[]'::jsonb
+		ADD COLUMN IF NOT EXISTS group_models_json jsonb NOT NULL DEFAULT '[]'::jsonb,
+        ADD COLUMN IF NOT EXISTS status_source text NOT NULL DEFAULT 'upstream'
 	`); err != nil {
 		return err
 	}
@@ -262,7 +263,16 @@ func (r *Repository) EnsureSchema(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	return r.ensureTargetSchema(ctx)
+	if err = r.ensureTargetSchema(ctx); err != nil {
+		return err
+	}
+	if err = r.ensureModelTargets(ctx); err != nil {
+		return err
+	}
+	if err = r.ensureManualChecks(ctx); err != nil {
+		return err
+	}
+	return r.ensureReadSchema(ctx)
 }
 
 func (r *Repository) EnsureRulesForExistingConnections(ctx context.Context) error {
@@ -655,7 +665,7 @@ func (r *Repository) GetLastRateApplyResult(ctx context.Context, userID, adminAc
 
 func (r *Repository) GetTestModelConfig(ctx context.Context, userID, adminAccountID string) (*TestModelConfig, error) {
 	rows, err := r.db.Query(ctx, `
-		SELECT user_id, admin_account_id, openai_model_id, anthropic_model_id, grok_model_id, group_models_json, balance_refresh_interval_minutes, updated_at
+		SELECT user_id, admin_account_id, openai_model_id, anthropic_model_id, grok_model_id, group_models_json, balance_refresh_interval_minutes, updated_at, status_source
 		FROM channel_monitor_test_model_configs
 		WHERE user_id = $1 AND admin_account_id = $2
 	`, userID, adminAccountID)
@@ -677,6 +687,7 @@ func (r *Repository) GetTestModelConfig(ctx context.Context, userID, adminAccoun
 		&groupModelsJSON,
 		&config.BalanceRefreshIntervalMinutes,
 		&config.UpdatedAt,
+		&config.StatusSource,
 	); err != nil {
 		return nil, err
 	}
@@ -702,17 +713,18 @@ func (r *Repository) SaveTestModelConfig(ctx context.Context, config TestModelCo
 	}
 	_, err = r.db.Exec(ctx, `
 		INSERT INTO channel_monitor_test_model_configs (
-			user_id, admin_account_id, openai_model_id, anthropic_model_id, grok_model_id, group_models_json, balance_refresh_interval_minutes, updated_at
+			user_id, admin_account_id, openai_model_id, anthropic_model_id, grok_model_id, group_models_json, balance_refresh_interval_minutes, updated_at, status_source
 		)
-		VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7, now())
+		VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7, now(), $8)
 		ON CONFLICT (user_id, admin_account_id) DO UPDATE SET
 			openai_model_id = EXCLUDED.openai_model_id,
 			anthropic_model_id = EXCLUDED.anthropic_model_id,
 			grok_model_id = EXCLUDED.grok_model_id,
 			group_models_json = EXCLUDED.group_models_json,
 			balance_refresh_interval_minutes = EXCLUDED.balance_refresh_interval_minutes,
-			updated_at = now()
-	`, config.UserID, config.AdminAccountID, config.OpenAIModelID, config.AnthropicModelID, config.GrokModelID, string(groupModelsJSON), config.BalanceRefreshIntervalMinutes)
+			status_source = EXCLUDED.status_source,
+            updated_at = now()
+	`, config.UserID, config.AdminAccountID, config.OpenAIModelID, config.AnthropicModelID, config.GrokModelID, string(groupModelsJSON), config.BalanceRefreshIntervalMinutes, normalizeStatusSource(config.StatusSource))
 	return err
 }
 

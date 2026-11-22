@@ -141,6 +141,7 @@ type UpstreamResult struct {
 	Accepted               bool
 }
 type Account struct {
+	IdempotencyKey         string
 	CostMultiplier         string
 	ID                     int64
 	BaseURL, Key, Platform string

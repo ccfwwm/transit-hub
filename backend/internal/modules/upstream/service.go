@@ -371,9 +371,11 @@ func (s *Service) Create(ctx context.Context, userID string, dto CreateRequest) 
 	if err != nil {
 		return Response{}, err
 	}
+	dto.APIURL, _ = NormalizeRoutingURL(dto.APIURL)
 	requestedPlatform := dto.Platform
 	platform := resolvedPlatform(dto.Platform)
 	site := &Site{
+		Settings:          SiteSettings{KeyWhitelistDisabled: dto.KeyWhitelistEnabled != nil && !*dto.KeyWhitelistEnabled, MonitorProfile: dto.MonitorProfile, DefaultAPIURL: strings.TrimRight(strings.TrimSpace(dto.APIURL), "/"), APIURLManaged: true},
 		ID:                id,
 		UserID:            userID,
 		AdminAccountID:    adminAccountID,
@@ -402,7 +404,12 @@ func (s *Service) Create(ctx context.Context, userID string, dto CreateRequest) 
 	}
 
 	log.Printf("[upstream] 创建站点登录开始 name=%s url=%s platform=%s", dto.Name, dto.SiteURL, dto.Platform)
-	result, loginErr := s.createLogin(dto)
+	result, loginErr := LoginResult{}, error(nil)
+	if preview, ok := ctx.Value(previewLoginKey{}).(*LoginResult); ok {
+		result = *preview
+	} else {
+		result, loginErr = s.createLogin(dto)
+	}
 	if loginErr != nil {
 		log.Printf("[upstream] 创建站点登录失败 name=%s err=%v", dto.Name, loginErr)
 		site.Status = StatusError
@@ -468,6 +475,17 @@ func (s *Service) Update(ctx context.Context, userID string, id string, dto Upda
 
 	// 保存更新前的状态，以便数据库写入失败时回滚。
 	previousSite := *site
+	if dto.KeyWhitelistEnabled != nil {
+		site.Settings.KeyWhitelistDisabled = !*dto.KeyWhitelistEnabled
+	}
+	if dto.APIURL != nil {
+		site.Settings.DefaultAPIURL, _ = NormalizeRoutingURL(*dto.APIURL)
+		site.Settings.APIURLManaged = true
+	}
+	if dto.MonitorProfile != nil {
+		p, _ := normalizeMonitorProfile(dto.MonitorProfile)
+		site.Settings.MonitorProfile = &p
+	}
 	site.Name = strings.TrimSpace(dto.Name)
 	site.BaseURL = strings.TrimSpace(dto.SiteURL)
 	site.RequestedPlatform = dto.Platform
@@ -1039,6 +1057,12 @@ func (s *Service) clearTimerLocked(id string) {
 }
 
 func validateCreate(dto CreateRequest) error {
+	if _, e := NormalizeRoutingURL(dto.APIURL); e != nil {
+		return invalidBodyError("apiUrl")
+	}
+	if _, e := normalizeMonitorProfile(dto.MonitorProfile); e != nil {
+		return invalidBodyError("monitorProfile")
+	}
 	fields := make([]string, 0)
 	if strings.TrimSpace(dto.Name) == "" {
 		fields = append(fields, "name")
@@ -1074,6 +1098,14 @@ func validateCreate(dto CreateRequest) error {
 }
 
 func validateUpdate(dto UpdateRequest) error {
+	if dto.APIURL != nil {
+		if _, e := NormalizeRoutingURL(*dto.APIURL); e != nil {
+			return invalidBodyError("apiUrl")
+		}
+	}
+	if _, e := normalizeMonitorProfile(dto.MonitorProfile); e != nil {
+		return invalidBodyError("monitorProfile")
+	}
 	fields := make([]string, 0)
 	if strings.TrimSpace(dto.Name) == "" {
 		fields = append(fields, "name")
@@ -1122,6 +1154,20 @@ func (s *Service) UpdateSettings(ctx context.Context, userID string, siteID stri
 	if site.AdminAccountID != aid {
 		return Response{}, newRequestError(ErrorNotFound, "")
 	}
+	if dto.MonitorProfile == nil {
+		dto.MonitorProfile = site.Settings.MonitorProfile
+	} else {
+		p, e := normalizeMonitorProfile(dto.MonitorProfile)
+		if e != nil {
+			return Response{}, invalidBodyError("monitorProfile")
+		}
+		dto.MonitorProfile = &p
+	}
+	// Other settings forms must not erase independently edited API routes.
+	dto.GroupAPIURLs = site.Settings.GroupAPIURLs
+	dto.KeyWhitelistDisabled = site.Settings.KeyWhitelistDisabled
+	dto.DefaultAPIURL = site.Settings.DefaultAPIURL
+	dto.APIURLManaged = site.Settings.APIURLManaged
 	site.Settings = dto
 	_ = s.cache.Set(ctx, site)
 	if saveErr := s.saveSite(ctx, site); saveErr != nil {

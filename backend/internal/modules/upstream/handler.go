@@ -25,6 +25,8 @@ type HandlerAccountResolver interface {
 func RegisterRoutes(mux *http.ServeMux, service *Service, accounts HandlerAccountResolver) {
 	handler := &Handler{service: service, accounts: accounts}
 	mux.HandleFunc("GET /api/upstream-sites", handler.list)
+	mux.HandleFunc("GET /api/upstream-sites/{id}/group-api-url", handler.groupAPIURL)
+	mux.HandleFunc("PUT /api/upstream-sites/{id}/group-api-url", handler.groupAPIURL)
 	mux.HandleFunc("POST /api/upstream-sites", handler.create)
 	mux.HandleFunc("POST /api/upstream-sites/sync-all", handler.syncAll)
 	mux.HandleFunc("GET /api/upstream-sites/sync-stream", handler.syncStream)

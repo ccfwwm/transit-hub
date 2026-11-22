@@ -109,7 +109,7 @@ const handleAddSubmit = async (form: DashboardAdminLoginForm) => {
       <div class="w-full max-w-3xl">
         <div class="mb-10 text-center">
           <h2 class="text-2xl font-bold text-foreground">{{ t('admin.adminAccounts.title') }}</h2>
-          <p class="mt-2 text-sm text-muted-foreground">{{ t('admin.adminAccounts.subtitle') }}</p>
+          
         </div>
 
         <div v-if="errorKey" class="mb-6 rounded-lg border border-destructive/50 bg-destructive/10 p-4 text-sm text-destructive">

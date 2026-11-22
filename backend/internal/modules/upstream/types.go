@@ -33,6 +33,7 @@ const (
 	ErrorNetwork                = "admin.upstream.errors.network"
 	ErrorRequest                = "admin.upstream.errors.request"
 	ErrorInvalidResponse        = "admin.upstream.errors.invalidResponse"
+	ErrorTokenCreationRejected  = "admin.upstream.errors.tokenCreationRejected"
 	ErrorUnknown                = "admin.upstream.errors.unknown"
 	ErrorCredentialsUnavailable = "admin.upstream.errors.credentialsUnavailable"
 	ErrorLoginAgreementRequired = "admin.upstream.errors.loginAgreementRequired"
@@ -114,40 +115,51 @@ type Metrics struct {
 }
 
 type CreateRequest struct {
-	LoginAgreementRevision string   `json:"loginAgreementRevision"`
-	Name                   string   `json:"name"`
-	SiteURL                string   `json:"siteUrl"`
-	Platform               Platform `json:"platform"`
-	AuthMode               AuthMode `json:"authMode"`
-	Account                string   `json:"account"`
-	Password               string   `json:"password"`
-	AccessToken            string   `json:"accessToken"`
-	RefreshToken           string   `json:"refreshToken"`
-	TokenType              string   `json:"tokenType"`
-	Remark                 string   `json:"remark"`
-	RechargeRate           float64  `json:"rechargeRate"`
-	SkipTLSVerify          bool     `json:"skipTlsVerify"`
+	KeyWhitelistEnabled    *bool           `json:"keyWhitelistEnabled,omitempty"`
+	APIURL                 string          `json:"apiUrl,omitempty"`
+	MonitorProfile         *MonitorProfile `json:"monitorProfile,omitempty"`
+	LoginAgreementRevision string          `json:"loginAgreementRevision"`
+	Name                   string          `json:"name"`
+	SiteURL                string          `json:"siteUrl"`
+	Platform               Platform        `json:"platform"`
+	AuthMode               AuthMode        `json:"authMode"`
+	Account                string          `json:"account"`
+	Password               string          `json:"password"`
+	AccessToken            string          `json:"accessToken"`
+	RefreshToken           string          `json:"refreshToken"`
+	TokenType              string          `json:"tokenType"`
+	Remark                 string          `json:"remark"`
+	RechargeRate           float64         `json:"rechargeRate"`
+	SkipTLSVerify          bool            `json:"skipTlsVerify"`
 }
 
 type UpdateRequest struct {
-	LoginAgreementRevision string   `json:"loginAgreementRevision"`
-	Name                   string   `json:"name"`
-	SiteURL                string   `json:"siteUrl"`
-	Platform               Platform `json:"platform"`
-	AuthMode               AuthMode `json:"authMode"`
-	Account                string   `json:"account"`
-	Password               string   `json:"password"`
-	AccessToken            string   `json:"accessToken"`
-	RefreshToken           string   `json:"refreshToken"`
-	TokenType              string   `json:"tokenType"`
-	Remark                 string   `json:"remark"`
-	RechargeRate           float64  `json:"rechargeRate"`
-	SkipTLSVerify          bool     `json:"skipTlsVerify"`
+	KeyWhitelistEnabled    *bool           `json:"keyWhitelistEnabled,omitempty"`
+	APIURL                 *string         `json:"apiUrl,omitempty"`
+	MonitorProfile         *MonitorProfile `json:"monitorProfile,omitempty"`
+	LoginAgreementRevision string          `json:"loginAgreementRevision"`
+	Name                   string          `json:"name"`
+	SiteURL                string          `json:"siteUrl"`
+	Platform               Platform        `json:"platform"`
+	AuthMode               AuthMode        `json:"authMode"`
+	Account                string          `json:"account"`
+	Password               string          `json:"password"`
+	AccessToken            string          `json:"accessToken"`
+	RefreshToken           string          `json:"refreshToken"`
+	TokenType              string          `json:"tokenType"`
+	Remark                 string          `json:"remark"`
+	RechargeRate           float64         `json:"rechargeRate"`
+	SkipTLSVerify          bool            `json:"skipTlsVerify"`
 }
 
 // SiteSettings 站点级预警覆盖配置。nil 表示使用全局默认值。
 type SiteSettings struct {
-	BalanceThreshold *float64 `json:"balanceThreshold"`
+	KeyWhitelistDisabled bool              `json:"keyWhitelistDisabled,omitempty"`
+	DefaultAPIURL        string            `json:"defaultApiUrl,omitempty"`
+	APIURLManaged        bool              `json:"apiUrlManaged,omitempty"`
+	GroupAPIURLs         map[string]string `json:"groupApiUrls,omitempty"`
+	MonitorProfile       *MonitorProfile   `json:"monitorProfile,omitempty"`
+	BalanceThreshold     *float64          `json:"balanceThreshold"`
 }
 
 type Site struct {
@@ -288,6 +300,11 @@ type Sub2APIAccountTestResult struct {
 }
 
 type Sub2APIAdminAccountStatus struct {
+	Type           string   `json:"-"`
+	BaseURL        string   `json:"-"`
+	APIKey         string   `json:"-"`
+	Platform       string   `json:"-"`
+	GroupIDs       []string `json:"-"`
 	ID             string
 	Name           string
 	Schedulable    *bool
@@ -309,6 +326,8 @@ type BalanceBreakdownItem struct {
 }
 
 type APIKeyProbeOptions struct {
+	Recover         bool
+	IdempotencyKey  string
 	BaseURL         string
 	APIKey          string
 	Platform        string
@@ -324,11 +343,12 @@ type APIKeyProbeOptions struct {
 }
 
 type APIKeyProbeResult struct {
-	Success   bool
-	Message   string
-	LatencyMS int
-	Model     string
-	Pending   bool
-	TaskID    string
-	Uncertain bool
+	Inconclusive bool
+	Success      bool
+	Message      string
+	LatencyMS    int
+	Model        string
+	Pending      bool
+	TaskID       string
+	Uncertain    bool
 }
