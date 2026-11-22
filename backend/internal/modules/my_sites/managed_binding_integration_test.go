@@ -187,3 +187,41 @@ func TestManagedSplitResumesAfterAccountMembershipFailure(t *testing.T) {
 		})
 	}
 }
+
+func TestManagedUsageAggregatesRemainCompleteWithPaginatedLogs(t *testing.T) {
+	ctx := context.Background()
+	db := securityTestDatabase(t)
+	repo := NewRepository(db)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Query().Get("api_key_id") != "7" {
+			t.Error("usage request missing key ID")
+		}
+		w.Header().Set("Content-Type", "application/json")
+		if r.URL.Path == "/api/v1/usage/dashboard/snapshot-v2" {
+			_, _ = w.Write([]byte(`{"data":{"granularity":"day","start_date":"2026-11-22","end_date":"2026-11-22","trend":[{"date":"2026-11-22","requests":9999,"actual_cost":6.25}],"models":[{"model":"gpt","requests":9999,"actual_cost":6.25}]}}`))
+			return
+		}
+		if r.URL.Path == "/api/v1/usage" && r.URL.Query().Get("page") == "1" {
+			_, _ = w.Write([]byte(`{"data":{"items":[{"id":2,"api_key_id":7,"created_at":"2026-11-22T08:00:00+08:00","actual_cost":0.01,"model":"gpt","ip_address":"192.0.2.1"}],"total":9999}}`))
+			return
+		}
+		t.Errorf("unexpected native usage request %s %s", r.Method, r.URL.Path)
+		http.NotFound(w, r)
+	}))
+	defer server.Close()
+	session := upstream.Session{Platform: upstream.PlatformSub2API, BaseURL: server.URL, AccessToken: "fixture-auth"}
+	site := &upstream.Site{ID: "site", UserID: "user", AdminAccountID: "workspace", Platform: session.Platform, Session: &session}
+	client := upstream.NewPlatformService(upstream.NewHTTPClient(server.Client()))
+	manager, err := NewKeyManagement(ctx, db, NewService(repo, client, nil), jobs.New(db))
+	if err != nil {
+		t.Fatal(err)
+	}
+	start := time.Date(2026, 11, 22, 0, 0, 0, 0, usageZone)
+	report, err := manager.readKeyUsage(ctx, "user", "workspace", site, "7", "day", start, start.AddDate(0, 0, 1))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if report.State != "complete" || report.Total.Requests != 9999 || report.Total.Amount == nil || *report.Total.Amount != 6.25 || len(report.Logs) != 1 || report.Logs[0].IP != "192.0.2.1" {
+		t.Fatalf("unexpected aggregate or recent logs: %+v", report)
+	}
+}

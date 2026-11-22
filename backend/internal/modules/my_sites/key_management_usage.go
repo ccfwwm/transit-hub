@@ -170,6 +170,33 @@ func (m *KeyManagement) readKeyUsage(ctx context.Context, uid, aid string, site 
 			out.Trend = append(out.Trend, p)
 		}
 	}
+	native := false
+	if site.Platform == upstream.PlatformSub2API && len(queries) <= 6 {
+		native = true
+		var aggregateTrend, aggregateModels []upstream.KeyUsageAggregate
+		for _, query := range queries {
+			series, models, err := m.platform.FetchManagedKeyAggregates(ctx, *site.Session, query.id, interval, start, end)
+			if err != nil {
+				native = false
+				break
+			}
+			aggregateTrend = append(aggregateTrend, series...)
+			aggregateModels = append(aggregateModels, models...)
+		}
+		if native {
+			for _, p := range aggregateTrend {
+				point := trend[usageBucket(p.Time, interval)]
+				addAggregate(point, p)
+				addAggregate(&out.Total, p)
+			}
+			for _, p := range aggregateModels {
+				if models[p.Label] == nil {
+					models[p.Label] = &keyUsagePoint{Label: p.Label}
+				}
+				addAggregate(models[p.Label], p)
+			}
+		}
+	}
 	fetched := false
 	budget := 20
 	queried := map[queryKey]bool{}
@@ -185,7 +212,9 @@ func (m *KeyManagement) readKeyUsage(ctx context.Context, uid, aid string, site 
 			budget--
 			rows, more, err := m.platform.ManagedKeyUsagePage(ctx, *site.Session, query.id, query.name, start.Unix(), end.Unix(), start.Format("2006-01-02"), end.AddDate(0, 0, -1).Format("2006-01-02"), page)
 			if err != nil {
-				out.State = "partial"
+				if !native {
+					out.State = "partial"
+				}
 				break
 			}
 			fetched = true
@@ -207,23 +236,25 @@ func (m *KeyManagement) readKeyUsage(ctx context.Context, uid, aid string, site 
 				}
 				seen[row.ID] = true
 				added++
-				if row.Amount == nil {
+				if row.Amount == nil && !native {
 					out.State = "partial"
 				}
-				point := trend[usageBucket(time.Unix(row.At, 0), interval)]
-				usageAmount(point, row.Amount)
-				usageAmount(&out.Total, row.Amount)
 				model := strings.TrimSpace(row.Model)
 				if model == "" {
 					model = "—"
 				}
-				if models[model] == nil {
-					models[model] = &keyUsagePoint{Label: model}
+				if !native {
+					point := trend[usageBucket(time.Unix(row.At, 0), interval)]
+					usageAmount(point, row.Amount)
+					usageAmount(&out.Total, row.Amount)
+					if models[model] == nil {
+						models[model] = &keyUsagePoint{Label: model}
+					}
+					usageAmount(models[model], row.Amount)
 				}
-				usageAmount(models[model], row.Amount)
 				out.Logs = append(out.Logs, keyLogItem{Time: row.At, Model: model, IP: keyLogIP(row.IP), Amount: row.Amount})
 			}
-			if !more {
+			if native || !more {
 				break
 			}
 			if added == 0 && page > 1 {
@@ -236,7 +267,9 @@ func (m *KeyManagement) readKeyUsage(ctx context.Context, uid, aid string, site 
 			break
 		}
 	}
-	if !fetched {
+	if native {
+		out.State = "complete"
+	} else if !fetched {
 		out.State = "unavailable"
 	}
 	if out.State == "complete" {
@@ -266,4 +299,12 @@ func identityIDs(ids map[string]bool) []string {
 		result = append(result, id)
 	}
 	return result
+}
+
+func addAggregate(point *keyUsagePoint, value upstream.KeyUsageAggregate) {
+	point.Requests += value.Requests
+	if point.Amount == nil {
+		point.Amount = new(float64)
+	}
+	*point.Amount += value.Amount
 }

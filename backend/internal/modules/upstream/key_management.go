@@ -286,3 +286,69 @@ func (s *PlatformService) UpdateNewAPIKeyStatus(ctx context.Context, session Ses
 	_, err = s.httpClient.requestJSON(session.BaseURL+"/api/token/?status_only=true", options)
 	return err
 }
+
+type KeyUsageAggregate struct {
+	Time     time.Time
+	Label    string
+	Requests int
+	Amount   float64
+}
+
+func (s *PlatformService) FetchManagedKeyAggregates(ctx context.Context, session Session, id, granularity string, start, end time.Time) ([]KeyUsageAggregate, []KeyUsageAggregate, error) {
+	if granularity != "hour" {
+		granularity = "day"
+	}
+	dates := url.Values{
+		"api_key_id": {id}, "start_date": {start.Format("2006-01-02")},
+		"end_date": {end.AddDate(0, 0, -1).Format("2006-01-02")}, "timezone": {"Asia/Shanghai"},
+		"granularity": {granularity}, "include_trend": {"true"}, "include_models": {"true"},
+	}
+	opts := sub2APIRequestOptions(session)
+	opts.Context = ctx
+	res, err := s.httpClient.requestJSON(session.BaseURL+"/api/v1/usage/dashboard/snapshot-v2?"+dates.Encode(), opts)
+	if err != nil {
+		return nil, nil, err
+	}
+	data := dataRecord(res.Payload)
+	if safeString(data, "granularity") != granularity || safeString(data, "start_date") != dates.Get("start_date") || safeString(data, "end_date") != dates.Get("end_date") {
+		return nil, nil, fmt.Errorf("上游聚合返回的周期不匹配")
+	}
+	trend, err := decodeManagedKeyAggregates(data["trend"], "date")
+	if err != nil {
+		return nil, nil, err
+	}
+	layout := "2006-01-02"
+	if granularity == "hour" {
+		layout += " 15:04"
+	}
+	for i := range trend {
+		trend[i].Time, err = time.ParseInLocation(layout, trend[i].Label, start.Location())
+		if err != nil || trend[i].Time.Before(start) || !trend[i].Time.Before(end) {
+			return nil, nil, fmt.Errorf("上游返回的聚合周期无效")
+		}
+	}
+	models, err := decodeManagedKeyAggregates(data["models"], "model")
+	return trend, models, err
+}
+
+func decodeManagedKeyAggregates(value any, labelField string) ([]KeyUsageAggregate, error) {
+	rows, ok := value.([]any)
+	if !ok {
+		return nil, fmt.Errorf("上游聚合数据不可用")
+	}
+	values := make([]KeyUsageAggregate, 0, len(rows))
+	for _, row := range rows {
+		m, ok := row.(map[string]any)
+		if !ok {
+			return nil, fmt.Errorf("上游聚合格式不可识别")
+		}
+		requests := firstInt(m, []string{"requests"})
+		cost := firstNumber(m, []string{"actual_cost"})
+		label := safeString(m, labelField)
+		if requests == nil || cost == nil || label == "" {
+			return nil, fmt.Errorf("上游聚合字段不完整")
+		}
+		values = append(values, KeyUsageAggregate{Label: label, Requests: *requests, Amount: *cost})
+	}
+	return values, nil
+}
