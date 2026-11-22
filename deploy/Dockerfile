@@ -26,7 +26,7 @@ COPY --from=frontend-builder /src/frontend/dist /app/public
 
 ENV PORT=10621
 ENV PUBLIC_DIR=/app/public
-ARG APP_VERSION=2.2.18
+ARG APP_VERSION=2.2.19
 ENV APP_VERSION=${APP_VERSION}
 EXPOSE 10621
 

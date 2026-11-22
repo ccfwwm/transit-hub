@@ -8,6 +8,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"net/http"
 	"net/netip"
+	"net/url"
 	"sort"
 	"strings"
 
@@ -42,7 +43,9 @@ func (p *KeyPolicies) EnsureSchema(ctx context.Context) error {
  CREATE TABLE IF NOT EXISTS upstream_key_policy_bindings(user_id text NOT NULL,admin_account_id text NOT NULL,site_id text NOT NULL,key_id text NOT NULL,managed_ips jsonb NOT NULL,updated_at timestamptz NOT NULL DEFAULT now(),PRIMARY KEY(user_id,admin_account_id,site_id,key_id));
  CREATE TABLE IF NOT EXISTS upstream_group_key_policies(user_id text NOT NULL,admin_account_id text NOT NULL,site_id text NOT NULL,group_id text NOT NULL,allowed_ips jsonb NOT NULL,version bigint NOT NULL DEFAULT 1,PRIMARY KEY(user_id,admin_account_id,site_id,group_id));
  ALTER TABLE upstream_key_policy_bindings ADD COLUMN IF NOT EXISTS observed_ips jsonb;
- ALTER TABLE upstream_key_policy_bindings ADD COLUMN IF NOT EXISTS observed_at timestamptz;`)
+ ALTER TABLE upstream_key_policy_bindings ADD COLUMN IF NOT EXISTS observed_at timestamptz; CREATE TABLE IF NOT EXISTS upstream_key_ip_overrides (
+ user_id text NOT NULL,admin_account_id text NOT NULL,site_id text NOT NULL,key_id text NOT NULL,addresses jsonb NOT NULL,
+ PRIMARY KEY(user_id,admin_account_id,site_id,key_id));`)
 	return e
 }
 func NormalizeAllowedIPs(values []string) ([]string, error) {
@@ -185,10 +188,10 @@ func (p *KeyPolicies) applyForGroup(ctx context.Context, uid, aid string, site S
 	return got, p.observe(ctx, uid, aid, site.ID, keyID, got)
 }
 func (s *PlatformService) readKeyPolicy(ctx context.Context, session Session, id string) (map[string]any, []string, error) {
-	path := "/api/v1/keys/" + id
+	path := "/api/v1/keys/" + url.PathEscape(id)
 	opts := requestOptions{AccessToken: session.AccessToken, TokenType: session.TokenType, InsecureSkipTLS: session.InsecureSkipTLS, Context: ctx}
 	if session.Platform == PlatformNewAPI {
-		path = "/api/token/" + id
+		path = "/api/token/" + url.PathEscape(id)
 		opts = newAPIRequestOptions(session)
 		opts.Context = ctx
 	}
@@ -216,7 +219,7 @@ func (s *PlatformService) readKeyPolicy(ctx context.Context, session Session, id
 	return record, out, nil
 }
 func (s *PlatformService) writeKeyPolicy(ctx context.Context, session Session, id string, record map[string]any, ips []string) error {
-	path := "/api/v1/keys/" + id
+	path := "/api/v1/keys/" + url.PathEscape(id)
 	opts := requestOptions{AccessToken: session.AccessToken, TokenType: session.TokenType, InsecureSkipTLS: session.InsecureSkipTLS, Context: ctx, Method: http.MethodPut, Body: map[string]any{"ip_whitelist": ips}}
 	if session.Platform == PlatformNewAPI {
 		path = "/api/token/"

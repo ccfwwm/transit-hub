@@ -163,6 +163,7 @@ export interface UpstreamKeyItem {
 
 export interface RealConnectResponse {
   connection: RealConnection
+  connections?: RealConnection[]
 }
 
 export interface RealDisconnectRequest {

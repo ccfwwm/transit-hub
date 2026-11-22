@@ -175,7 +175,7 @@ func (s *Service) Start(ctx context.Context) {
 	s.once.Do(func() {
 		// A crashed mutation is never replayed blindly. Read back or explicitly retry
 		// an interrupted item; media generation is independently durable/idempotent.
-		_, _ = s.db.Exec(ctx, `UPDATE operation_items i SET status=CASE WHEN j.kind IN('health_preview','health_refresh','health_probe','model_catalog','manual_model_check','key_security','key_security_bindings','membership_priority','upstream_api_sync') THEN 'waiting' ELSE 'failed' END,error=CASE WHEN j.kind IN('health_preview','health_refresh','health_probe','model_catalog','manual_model_check','key_security','key_security_bindings','membership_priority','upstream_api_sync') THEN '' ELSE '服务重启，操作结果待核对；核对后可重试' END,updated_at=now() FROM operation_jobs j WHERE i.job_id=j.id AND i.status='running'`)
+		_, _ = s.db.Exec(ctx, `UPDATE operation_items i SET status=CASE WHEN j.kind IN('health_preview','health_refresh','health_probe','model_catalog','manual_model_check','key_security','key_security_bindings','managed_key_binding','membership_priority','upstream_api_sync') THEN 'waiting' ELSE 'failed' END,error=CASE WHEN j.kind IN('health_preview','health_refresh','health_probe','model_catalog','manual_model_check','key_security','key_security_bindings','managed_key_binding','membership_priority','upstream_api_sync') THEN '' ELSE '服务重启，操作结果待核对；核对后可重试' END,updated_at=now() FROM operation_jobs j WHERE i.job_id=j.id AND i.status='running'`)
 		for i := 0; i < 4; i++ {
 			go func() {
 				timer := time.NewTicker(250 * time.Millisecond)

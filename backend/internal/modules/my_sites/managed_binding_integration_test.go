@@ -1,0 +1,189 @@
+package my_sites
+
+import (
+	"context"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"slices"
+	"strings"
+	"testing"
+	"time"
+	"unicode/utf8"
+
+	"transithub/backend/internal/modules/jobs"
+	"transithub/backend/internal/modules/upstream"
+)
+
+func TestManagedBindingName(t *testing.T) {
+	rate := 0.150
+	for input, want := range map[string]string{
+		"https://api.foxrouter.com/v1": "foxrouter", "https://api.Example.co.uk": "example",
+		"http://192.0.2.12": "", "http://foo.internal": "", "https://api.食狮.com.cn": "xn--85x722f",
+	} {
+		if got := bindingSlug(input); got != want {
+			t.Errorf("bindingSlug(%s) = %q, want %q", input, got, want)
+		}
+	}
+	if name, err := managedBindingName("foxrouter", " codex · 企业 分组 ", &rate, 6, upstream.PlatformSub2API); err != nil || name != "foxrouter-codex-企业-分组-0.15x-006" {
+		t.Fatalf("name = %q, err = %v", name, err)
+	}
+	name, err := managedBindingName("foxrouter", strings.Repeat("限", 30), &rate, 1000, upstream.PlatformNewAPI)
+	if err != nil || len(name) > 50 || !utf8.ValidString(name) || !strings.HasSuffix(name, "-0.15x-1000") {
+		t.Fatalf("New API name = %q, err = %v", name, err)
+	}
+}
+
+func TestManagedSplitResumesAfterAccountMembershipFailure(t *testing.T) {
+	for _, platform := range []upstream.Platform{upstream.PlatformSub2API, upstream.PlatformNewAPI} {
+		t.Run(string(platform), func(t *testing.T) {
+			ctx := context.Background()
+			db := securityTestDatabase(t)
+			repo := NewRepository(db)
+			oldCredential := "fixture-current-key-xyz"
+			newCredential := "fixture-successor-key-xyz"
+			keyRecords := map[string]map[string]any{"7": {"id": 7, "name": "source-key-name", "key": oldCredential, "group_id": 3}}
+			if platform == upstream.PlatformNewAPI {
+				keyRecords["7"]["group"] = "3"
+				keyRecords["7"]["unlimited_quota"] = true
+			}
+			accounts := map[string]map[string]any{"1": {
+				"id": 1, "name": "source-account-name", "platform": "openai", "type": "apikey", "schedulable": true,
+				"group_ids":   []any{float64(8), float64(9)},
+				"credentials": map[string]any{"api_key": oldCredential, "base_url": "https://fixture.example", "pool_mode": true},
+			}}
+			keyCreates, accountCreates := 0, 0
+			failSwitch := true
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				path := r.URL.Path
+				send := func(value any) { _ = json.NewEncoder(w).Encode(map[string]any{"success": true, "data": value}) }
+				read := func() map[string]any { var b map[string]any; _ = json.NewDecoder(r.Body).Decode(&b); return b }
+				list := func(source map[string]map[string]any) {
+					items := []any{}
+					for _, value := range source {
+						items = append(items, value)
+					}
+					send(map[string]any{"items": items, "total": len(items)})
+				}
+				switch {
+				case path == "/api/v1/keys" || path == "/api/token/":
+					switch r.Method {
+					case "GET":
+						list(keyRecords)
+					case "POST":
+						record := read()
+						record["id"] = 14
+						record["key"] = newCredential
+						keyRecords["14"] = record
+						keyCreates++
+						send(record)
+					case "PUT":
+						body := read()
+						id := keyString(body["id"])
+						for name, value := range body {
+							keyRecords[id][name] = value
+						}
+						send(keyRecords[id])
+					}
+				case strings.HasPrefix(path, "/api/v1/keys/") || strings.HasPrefix(path, "/api/token/"):
+					id := strings.Split(strings.TrimPrefix(strings.TrimPrefix(path, "/api/v1/keys/"), "/api/token/"), "/")[0]
+					record := keyRecords[id]
+					if r.Method == "PUT" {
+						for k, v := range read() {
+							record[k] = v
+						}
+					}
+					send(record)
+				case path == "/api/v1/admin/accounts/data":
+					id := r.URL.Query().Get("ids")
+					send(map[string]any{"accounts": []any{accounts[id]}})
+				case path == "/api/v1/admin/accounts":
+					if r.Method == "GET" {
+						list(accounts)
+						return
+					}
+					body := read()
+					body["id"] = 2
+					body["schedulable"] = true
+					accounts["2"] = body
+					accountCreates++
+					send(body)
+				case strings.HasPrefix(path, "/api/v1/admin/accounts/"):
+					fields := strings.Split(strings.TrimPrefix(path, "/api/v1/admin/accounts/"), "/")
+					id := fields[0]
+					record := accounts[id]
+					if r.Method == "GET" {
+						send(record)
+						return
+					}
+					body := read()
+					if id == "1" && body["group_ids"] != nil && failSwitch {
+						failSwitch = false
+						http.Error(w, "temporary failure", 503)
+						return
+					}
+					for name, value := range body {
+						record[name] = value
+					}
+					send(record)
+				default:
+					t.Errorf("unexpected route %s %s", r.Method, path)
+					http.NotFound(w, r)
+				}
+			}))
+			defer server.Close()
+			siteSession := upstream.Session{Platform: platform, BaseURL: server.URL, AccessToken: "upstream-fixture"}
+			site := &upstream.Site{ID: "site", UserID: "user", AdminAccountID: "workspace", Platform: platform, Session: &siteSession}
+			svc := NewService(repo, upstream.NewPlatformService(upstream.NewHTTPClient(server.Client())), realConnectLookup{site: site})
+			if err := svc.EnsureSchema(ctx); err != nil {
+				t.Fatal(err)
+			}
+			runner := jobs.New(db)
+			if err := runner.EnsureSchema(ctx); err != nil {
+				t.Fatal(err)
+			}
+			manager, err := NewKeyManagement(ctx, db, svc, runner)
+			if err != nil {
+				t.Fatal(err)
+			}
+			conn := RealConnection{ID: "connection", UserID: "user", WorkspaceAdminAccountID: "workspace", UpstreamSiteID: "site", UpstreamGroupID: "3", UpstreamKeyID: "7", UpstreamKey: oldCredential, AdminAccountID: "1", AdminAccountName: "source-account-name", OwnGroupIDs: []string{"8", "9"}, GroupType: "openai", CreatedAt: time.Now().Format(time.RFC3339Nano)}
+			if err = repo.SaveRealConnection(ctx, conn); err != nil {
+				t.Fatal(err)
+			}
+			_, err = manager.reserveBindingNames(ctx, "user", "workspace", []bindingNameRow{{ConnectionID: conn.ID, GroupID: "8", Slug: "foxrouter"}, {ConnectionID: conn.ID, GroupID: "9", Slug: "foxrouter"}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			task := managedBindingJob{Plan: bindingPlan{ID: conn.ID, Targets: []bindingTarget{
+				{GroupID: "8", Name: "foxrouter-pro-0.15x-001", Number: 1},
+				{GroupID: "9", Name: "foxrouter-ultra-0.15x-002", Number: 2},
+			}}, Selection: bindingSelection{Retain: "8"}, KeyID: "7", AccountID: "1"}
+			admin := upstream.Session{Platform: upstream.PlatformSub2API, BaseURL: server.URL, AccessToken: "admin-fixture"}
+			if _, err = manager.executeBinding(ctx, conn, site, admin, task); err == nil {
+				t.Fatal("fixture did not interrupt split")
+			}
+			if len(accounts["1"]["group_ids"].([]any)) != 2 {
+				t.Fatal("original path was removed before successful cutover")
+			}
+			if _, err = manager.executeBinding(ctx, conn, site, admin, task); err != nil {
+				t.Fatal(err)
+			}
+			if accountCreates != 1 || keyCreates != 1 {
+				t.Fatalf("retry duplicated resources: keys=%d accounts=%d", keyCreates, accountCreates)
+			}
+			all, err := repo.ListRealConnections(ctx, "user", "workspace")
+			if err != nil || len(all) != 2 {
+				t.Fatalf("expected two bindings, count=%d err=%v", len(all), err)
+			}
+			for _, entry := range all {
+				if len(entry.OwnGroupIDs) != 1 || entry.AdminAccountName != keyRecords[entry.UpstreamKeyID]["name"] {
+					t.Fatalf("wrong groups or mismatched remote names for %s", entry.ID)
+				}
+			}
+			if !slices.Equal(accounts["1"]["group_ids"].([]any), []any{float64(8)}) {
+				t.Fatal("retained account has wrong groups")
+			}
+		})
+	}
+}

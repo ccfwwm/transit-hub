@@ -149,7 +149,8 @@ type RealBindRequest struct {
 
 // RealConnectResponse 真实对接成功后返回的绑定记录。
 type RealConnectResponse struct {
-	Connection RealConnection `json:"connection"`
+	Connection  RealConnection   `json:"connection"`
+	Connections []RealConnection `json:"connections,omitempty"`
 }
 
 // RealConnection 一条真实对接的绑定记录，存储于 real_connections 表。

@@ -110,6 +110,7 @@ export default {
     menu: {
       dashboard: '仪表盘',
       upstream: '上游管理',
+      upstreamKeys: '上游 Key 管理',
       groupRates: '分组倍率',
       groupRateCampaigns: '活动调价',
       statusMonitor: '状态监控',

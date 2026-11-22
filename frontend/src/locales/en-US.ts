@@ -110,6 +110,7 @@ export default {
     menu: {
       dashboard: 'Dashboard',
       upstream: 'Upstream',
+      upstreamKeys: 'Upstream Keys',
       groupRates: 'Group Rates',
       groupRateCampaigns: 'Rate Campaigns',
       statusMonitor: 'Status Monitor',

@@ -124,6 +124,11 @@ func New(cfg config.Config, db *pgxpool.Pool, redisClient *redis.Client) *Server
 		panic(err)
 	}
 	keySecurity.Register(server.mux)
+	keyManagement, err := my_sites.NewKeyManagement(context.Background(), db, mySitesService, operationJobs)
+	if err != nil {
+		panic(err)
+	}
+	keyManagement.Register(server.mux)
 	platformHTTPClient.SetKeyObserver(keySecurity.ObserveKeys)
 	modelHealth.AfterRefresh = keySecurity.QueueSiteAudit
 

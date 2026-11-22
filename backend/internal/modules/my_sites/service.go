@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log"
 	"math"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -81,6 +82,7 @@ func (s *Service) applyKeyPolicy(ctx context.Context, uid, aid string, site upst
 type Service struct {
 	bindingMonitor  BindingMonitor
 	keyPolicies     KeyPolicyProvider
+	keyManagement   *KeyManagement
 	repairMu        sync.Mutex
 	repository      StateRepository
 	connRepository  RealConnectionRepository
@@ -366,6 +368,9 @@ func (s *Service) RealConnect(ctx context.Context, userID string, req RealConnec
 		groupName = req.UpstreamGroupID
 	}
 
+	if s.keyManagement != nil && state.Session.Platform == upstream.PlatformSub2API {
+		return s.keyManagement.connectManaged(ctx, userID, state, upstreamSite, req, groupType, groupName)
+	}
 	var conn RealConnection
 	switch upstreamSite.Platform {
 	case upstream.PlatformNewAPI:
@@ -893,6 +898,20 @@ func (s *Service) UpdateRealConnectionGroups(ctx context.Context, userID string,
 		}
 	}
 
+	if s.keyManagement != nil && state.Session.Platform == upstream.PlatformSub2API {
+		unlock, err := s.keyManagement.lockBindingMutation(ctx, *conn)
+		if err != nil {
+			return RealConnection{}, err
+		}
+		defer unlock()
+		fresh, err := s.connRepository.GetRealConnection(ctx, conn.ID, userID, adminAccountID)
+		if err != nil || fresh == nil || fresh.UpstreamKeyID != conn.UpstreamKeyID || !slices.Equal(bindingGroupIDs(fresh.OwnGroupIDs), bindingGroupIDs(oldGroups)) {
+			return RealConnection{}, fmt.Errorf("绑定已变化，请刷新重试")
+		}
+		if !slices.Equal(bindingGroupIDs(oldGroups), bindingGroupIDs(groupIDs)) {
+			return RealConnection{}, fmt.Errorf("请为其他自有分组创建独立对接，并在命名与拆分中处理旧共享绑定")
+		}
+	}
 	if strings.TrimSpace(conn.AdminAccountID) != "" {
 		switch state.Session.Platform {
 		case upstream.PlatformSub2API:
@@ -1048,6 +1067,26 @@ func (s *Service) RealDisconnect(ctx context.Context, userID string, req RealDis
 		return requestError(ErrorRequest)
 	}
 
+	if s.keyManagement != nil && conn.UpstreamKeyID != "" {
+		unlock, err := s.keyManagement.lockBindingMutation(ctx, *conn)
+		if err != nil {
+			return err
+		}
+		defer unlock()
+		current, err := s.connRepository.GetRealConnection(ctx, conn.ID, userID, adminAccountID)
+		if err != nil || current == nil || current.UpstreamKeyID != conn.UpstreamKeyID {
+			return fmt.Errorf("绑定已变化，请刷新重试")
+		}
+		if req.Mode == "full" {
+			var count int
+			if err = s.keyManagement.db.QueryRow(ctx, "SELECT count(*) FROM real_connections WHERE upstream_site_id=$1 AND upstream_key_id=$2", conn.UpstreamSiteID, conn.UpstreamKeyID).Scan(&count); err != nil {
+				return err
+			}
+			if count > 1 {
+				return fmt.Errorf("其他账号仍在使用此 Key，请先处理共享绑定")
+			}
+		}
+	}
 	if req.Mode == "full" {
 		state, err := s.authenticatedState(ctx, userID, adminAccountID)
 		if err != nil {
@@ -1071,8 +1110,21 @@ func (s *Service) RealDisconnect(ctx context.Context, userID string, req RealDis
 	if err := s.connRepository.DeleteRealConnection(ctx, req.ConnectionID, userID, adminAccountID); err != nil {
 		return err
 	}
+	if s.keyManagement != nil {
+		if _, err := s.keyManagement.db.Exec(ctx, "DELETE FROM managed_binding_progress WHERE user_id=$1 AND workspace_id=$2 AND operation_id=$3", userID, adminAccountID, conn.ID); err != nil {
+			return err
+		}
+	}
 
-	s.removeUpstreamMapping(ctx, userID, adminAccountID, conn.UpstreamSiteID, conn.UpstreamGroupName)
+	if s.keyManagement != nil {
+		removed := *conn
+		removed.OwnGroupIDs = nil
+		if err := s.syncConnectionMapping(ctx, userID, adminAccountID, &removed); err != nil {
+			return err
+		}
+	} else {
+		s.removeUpstreamMapping(ctx, userID, adminAccountID, conn.UpstreamSiteID, conn.UpstreamGroupName)
+	}
 	s.membershipChanged(ctx, *conn, conn.OwnGroupIDs)
 
 	log.Printf("[real-disconnect] 取消对接完成 conn_id=%s mode=%s", req.ConnectionID, req.Mode)

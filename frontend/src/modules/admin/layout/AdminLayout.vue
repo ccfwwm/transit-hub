@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, ref, onMounted, onBeforeUnmount } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { LayoutDashboard, Network, Settings, LogOut, Globe, Moon, Sun, Percent, Megaphone, ChevronDown, ArrowRightLeft, Activity } from 'lucide-vue-next'
+import { LayoutDashboard, Network, Settings, LogOut, Globe, Moon, Sun, Percent, Megaphone, ChevronDown, ArrowRightLeft, Activity, KeyRound } from 'lucide-vue-next'
 import { useDark, useToggle } from '@vueuse/core'
 import { useI18n } from 'vue-i18n'
 import { useAdminAccounts } from '../composables/useAdminAccounts'
@@ -72,6 +72,7 @@ const goToAccounts = () => {
 const menuItems = computed(() => [
   { name: t('admin.menu.dashboard'), path: '/admin', icon: LayoutDashboard },
   { name: t('admin.menu.upstream'), path: '/admin/upstream', icon: Network },
+  { name: t('admin.menu.upstreamKeys'), path: '/admin/upstream-keys', icon: KeyRound },
   { name: t('admin.menu.groupRates'), path: '/admin/group-rates', icon: Percent },
   { name: t('admin.menu.groupRateCampaigns'), path: '/admin/group-rate-campaigns', icon: Megaphone },
   { name: t('admin.menu.statusMonitor'), path: '/admin/status-monitor', icon: Activity },
@@ -86,24 +87,26 @@ const handleLogout = () => {
 </script>
 
 <template>
-  <div class="h-screen flex overflow-hidden bg-background text-foreground">
+  <div class="h-dvh w-full flex overflow-hidden bg-background text-foreground">
     <!-- Sidebar: 工作区选择页不显示 -->
-    <aside v-if="!isWorkspaceSelectionPage" class="w-64 border-r border-border/40 bg-surface-elevated flex flex-col">
-      <div class="h-16 flex items-center px-6 border-b border-border/40">
+    <aside v-if="!isWorkspaceSelectionPage" class="w-14 shrink-0 border-r border-border/40 bg-surface-elevated flex flex-col md:w-64">
+      <div class="h-16 flex items-center justify-center px-2 md:justify-start md:px-6 border-b border-border/40">
         <div class="flex items-center gap-2">
           <div class="flex h-8 w-8 items-center justify-center rounded-lg bg-primary/10 border border-primary/20">
             <span class="text-lg font-black text-primary leading-none">T</span>
           </div>
-          <span class="text-xl font-bold tracking-tight text-foreground">TransitHub</span>
+          <span class="hidden text-xl font-bold tracking-tight text-foreground md:inline">TransitHub</span>
         </div>
       </div>
 
-      <nav class="flex-1 py-6 px-4 space-y-2 overflow-y-auto">
+      <nav class="flex-1 py-4 px-1.5 space-y-2 overflow-y-auto md:px-4 md:py-6">
         <router-link
           v-for="item in menuItems"
           :key="item.path"
           :to="item.path"
-          class="flex items-center gap-3 px-3 py-2.5 rounded-xl transition-colors"
+          :title="item.name"
+          :aria-label="item.name"
+          class="flex items-center justify-center gap-3 px-2 py-2.5 rounded-xl transition-colors md:justify-start md:px-3"
           :class="[
             route.path === item.path
               ? 'bg-primary text-primary-foreground font-medium shadow-md shadow-primary/20'
@@ -111,17 +114,19 @@ const handleLogout = () => {
           ]"
         >
           <component :is="item.icon" class="w-5 h-5" />
-          {{ item.name }}
+          <span class="hidden md:inline">{{ item.name }}</span>
         </router-link>
       </nav>
 
-      <div class="p-4 border-t border-border/40">
+      <div class="p-1.5 md:p-4 border-t border-border/40">
         <button
           @click="handleLogout"
-          class="flex items-center gap-3 px-3 py-2.5 w-full rounded-xl text-muted-foreground hover:bg-surface-line hover:text-red-400 transition-colors"
+          :title="t('admin.menu.signOut')"
+          :aria-label="t('admin.menu.signOut')"
+          class="flex items-center justify-center md:justify-start gap-3 px-2 md:px-3 py-2.5 w-full rounded-xl text-muted-foreground hover:bg-surface-line hover:text-red-400 transition-colors"
         >
           <LogOut class="w-5 h-5" />
-          {{ t('admin.menu.signOut') }}
+          <span class="hidden md:inline">{{ t('admin.menu.signOut') }}</span>
         </button>
       </div>
     </aside>
@@ -129,15 +134,15 @@ const handleLogout = () => {
     <!-- Main Content -->
     <div class="flex-1 flex flex-col min-w-0">
       <!-- Header: 工作区选择页不显示业务导航头 -->
-      <header v-if="!isWorkspaceSelectionPage" class="h-16 shrink-0 border-b border-border/40 bg-surface/50 backdrop-blur-md flex items-center justify-between px-6 sticky top-0 z-10">
-        <h1 class="text-lg font-semibold">{{ route.path === '/admin' ? t('admin.menu.dashboard') : menuItems.find(m => m.path === route.path)?.name }}</h1>
+      <header v-if="!isWorkspaceSelectionPage" class="h-16 shrink-0 border-b border-border/40 bg-surface/50 backdrop-blur-md flex items-center justify-between gap-1 px-3 md:px-6 sticky top-0 z-10">
+        <h1 class="min-w-0 truncate text-base font-semibold md:text-lg">{{ route.path === '/admin' ? t('admin.menu.dashboard') : menuItems.find(m => m.path === route.path)?.name }}</h1>
 
-        <div class="flex items-center gap-4">
+        <div class="flex shrink-0 items-center gap-1 md:gap-4">
           <div class="flex items-center gap-2">
             <!-- 版本号展示 -->
             <span
               v-if="versionInfo"
-              class="flex items-center gap-1 h-7 px-2 rounded-md text-xs font-medium text-muted-foreground"
+              class="hidden items-center gap-1 h-7 px-2 rounded-md text-xs font-medium text-muted-foreground sm:flex"
               :title="t('admin.system.version', { version: versionInfo.version })"
             >
               v{{ versionInfo.version }}
@@ -192,7 +197,7 @@ const handleLogout = () => {
       </header>
 
       <!-- Content Area -->
-      <main class="flex-1 overflow-auto" :class="isWorkspaceSelectionPage ? '' : 'p-6'">
+      <main class="flex-1 overflow-auto" :class="isWorkspaceSelectionPage ? '' : 'p-3 md:p-6'">
         <router-view v-slot="{ Component }">
           <transition name="fade" mode="out-in">
             <component :is="Component" />

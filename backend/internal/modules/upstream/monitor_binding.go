@@ -198,7 +198,7 @@ func (s *PlatformService) FetchForwardingAccountDetail(ctx context.Context, sess
 	if groupID2(record) != id {
 		return Sub2APIAdminAccountStatus{}, fmt.Errorf("自有渠道身份不一致")
 	}
-	a := Sub2APIAdminAccountStatus{ID: id, Name: safeString(record, "name"), Type: safeString(record, "type")}
+	a := Sub2APIAdminAccountStatus{ID: id, Name: safeString(record, "name"), Type: safeString(record, "type"), Schedulable: firstBool(record, []string{"schedulable", "is_schedulable", "isSchedulable"})}
 	a.BaseURL, a.APIKey, a.Platform, a.GroupIDs = forwardingFields(record)
 	return a, nil
 }

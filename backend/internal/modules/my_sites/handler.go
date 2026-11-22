@@ -78,6 +78,10 @@ func (h *Handler) realConnect(w http.ResponseWriter, r *http.Request) {
 	}
 	response, err := h.service.RealConnect(r.Context(), userID, req)
 	if err != nil {
+		if h.service.keyManagement != nil && len(response.Connections) > 0 {
+			httpjson.Write(w, http.StatusConflict, map[string]any{"message": err.Error(), "connections": response.Connections})
+			return
+		}
 		writeError(w, err)
 		return
 	}

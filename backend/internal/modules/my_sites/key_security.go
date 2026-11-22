@@ -245,6 +245,15 @@ func (k *KeySecurity) runTarget(ctx context.Context, uid, aid, id string, raw js
 	if e != nil {
 		return out, e
 	}
+	if k.sites.keyManagement != nil {
+		pending, err := k.sites.keyManagement.pendingKeySplit(ctx, uid, aid, t.SiteID, t.KeyID)
+		if err != nil {
+			return out, err
+		}
+		if pending {
+			return out, fmt.Errorf("此 Key 有未完成的拆分，请先恢复拆分任务")
+		}
+	}
 	// A retry after cutover must finish the persisted rotation, even though local
 	// bindings now reference its replacement key.
 	r, e := k.loadRotation(ctx, uid, aid, t)
@@ -446,6 +455,11 @@ func (k *KeySecurity) rotate(ctx context.Context, uid, aid string, site upstream
 		if e != nil {
 			return out, e
 		}
+		if k.sites.keyManagement != nil {
+			if e = k.sites.keyManagement.alias(ctx, uid, aid, site.ID, t.KeyID, keyString(record["name"])); e != nil {
+				return out, e
+			}
+		}
 		config, e := upstream.SecurityCloneConfig(site.Platform, record, "THrotate-"+rid, ips)
 		if e != nil {
 			return out, e
@@ -645,6 +659,11 @@ func (k *KeySecurity) rotate(ctx context.Context, uid, aid string, site upstream
 		}
 		if e = k.sites.platformService.DeleteSecurityKey(ctx, *site.Session, r.OldID); e != nil {
 			return out, e
+		}
+		if k.sites.keyManagement != nil {
+			if e = k.sites.keyManagement.finishManagedRotation(ctx, uid, aid, &site, r); e != nil {
+				return out, e
+			}
 		}
 		if e = k.phase(ctx, r, "done"); e != nil {
 			return out, e

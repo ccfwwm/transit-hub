@@ -41,6 +41,12 @@ const routes = [
         component: () => import('./modules/admin/views/UpstreamView.vue')
       },
       {
+        path: 'upstream-keys',
+        name: 'AdminUpstreamKeys',
+        meta: { requiresWorkspace: true },
+        component: () => import('./modules/admin/views/UpstreamKeysView.vue')
+      },
+      {
         path: 'group-rates',
         name: 'AdminGroupRates',
         meta: { requiresWorkspace: true },
