@@ -1,0 +1,71 @@
+name: Deploy TransitHub to codemeaixyz
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'backend/**'
+      - 'frontend/**'
+  workflow_dispatch:
+    inputs:
+      verify_only:
+        description: Verify production SSH and health
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: transithub-production
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    if: github.repository == 'ccfwwm/transit-hub' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    environment: production
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        if: github.event_name != 'workflow_dispatch' || !inputs.verify_only
+        with:
+          persist-credentials: false
+      - name: Build the application image
+        if: github.event_name != 'workflow_dispatch' || !inputs.verify_only
+        run: |
+          set -euo pipefail
+          version=$(node -p "require('./frontend/package.json').version")
+          [[ "$version" =~ ^[0-9]{1,8}\.[0-9]{1,8}\.[0-9]{1,8}$ ]]
+          image="transithub:gha-$GITHUB_SHA"
+          docker build --platform linux/amd64 -f deploy/Dockerfile \
+            --build-arg APP_VERSION="$version" \
+            --label "org.opencontainers.image.revision=$GITHUB_SHA" \
+            --label "org.opencontainers.image.version=$version" -t "$image" .
+          docker image save "$image" | gzip > "$RUNNER_TEMP/transithub-image.tar.gz"
+          printf 'TRANSITHUB_VERSION=%s\n' "$version" >> "$GITHUB_ENV"
+      - name: Connect to production
+        env:
+          SSH_KEY: ${{ secrets.TRANSITHUB_PRODUCTION_SSH_KEY }}
+          KNOWN_HOSTS: ${{ vars.TRANSITHUB_PRODUCTION_KNOWN_HOSTS }}
+          VERIFY_ONLY: ${{ github.event_name == 'workflow_dispatch' && inputs.verify_only }}
+        run: |
+          set -euo pipefail
+          umask 077
+          test -n "$SSH_KEY" && test -n "$KNOWN_HOSTS"
+          ssh_dir=$(mktemp -d)
+          trap 'rm -rf "$ssh_dir"' EXIT
+          printf '%s\n' "$SSH_KEY" > "$ssh_dir/key"
+          printf '%s\n' "$KNOWN_HOSTS" > "$ssh_dir/known_hosts"
+          ssh=(ssh -T -p 19565 -i "$ssh_dir/key" -o IdentitiesOnly=yes -o BatchMode=yes
+               -o StrictHostKeyChecking=yes -o "UserKnownHostsFile=$ssh_dir/known_hosts"
+               -o ConnectTimeout=20 -o ServerAliveInterval=15 root@206.82.2.46)
+          if [[ "$VERIFY_ONLY" == true ]]; then
+            "${ssh[@]}" verify </dev/null
+          else
+            archive="$RUNNER_TEMP/transithub-image.tar.gz"
+            digest=$(sha256sum "$archive" | cut -d' ' -f1)
+            "${ssh[@]}" "deploy $GITHUB_SHA $TRANSITHUB_VERSION $digest" < "$archive"
+          fi
+      - name: Verify public health
+        run: curl --fail --silent --show-error --max-time 15 https://subcheck.aicodeme.xyz/api/health
