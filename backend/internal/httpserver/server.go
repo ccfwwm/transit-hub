@@ -302,7 +302,7 @@ func (s *Server) Handler() http.Handler {
 }
 
 func (s *Server) protectedPath(path string) bool {
-	return strings.HasPrefix(path, "/api/upstream-monitor-templates") || strings.HasPrefix(path, "/api/upstream-previews") || strings.HasPrefix(path, "/api/admin-accounts") || strings.HasPrefix(path, "/api/upstream-sites") || strings.HasPrefix(path, "/api/group-rates") || strings.HasPrefix(path, "/api/group-rate-campaigns") || strings.HasPrefix(path, "/api/channel-monitor") || strings.HasPrefix(path, "/api/my-sites") || strings.HasPrefix(path, "/api/settings") || strings.HasPrefix(path, "/api/dashboard") || strings.HasPrefix(path, "/api/system")
+	return path == "/api/upstream-keys" || strings.HasPrefix(path, "/api/upstream-keys/") || strings.HasPrefix(path, "/api/upstream-key-bindings/") || strings.HasPrefix(path, "/api/upstream-monitor-templates") || strings.HasPrefix(path, "/api/upstream-previews") || strings.HasPrefix(path, "/api/admin-accounts") || strings.HasPrefix(path, "/api/upstream-sites") || strings.HasPrefix(path, "/api/group-rates") || strings.HasPrefix(path, "/api/group-rate-campaigns") || strings.HasPrefix(path, "/api/channel-monitor") || strings.HasPrefix(path, "/api/my-sites") || strings.HasPrefix(path, "/api/settings") || strings.HasPrefix(path, "/api/dashboard") || strings.HasPrefix(path, "/api/system")
 }
 
 func bearerToken(header string) string {
