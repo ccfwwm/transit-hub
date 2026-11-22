@@ -108,11 +108,15 @@ func (p *KeyPolicies) VerifyExact(ctx context.Context, uid, aid string, site Sit
 	if site.UserID != uid || site.AdminAccountID != aid || site.Session == nil {
 		return false, fmt.Errorf("上游凭据不可用")
 	}
-	want, e := p.DesiredIPs(ctx, uid, aid, site, key, group)
+	_, ips, e := p.platform.ReadSecurityKey(ctx, *site.Session, key)
 	if e != nil {
 		return false, e
 	}
-	_, ips, e := p.platform.ReadSecurityKey(ctx, *site.Session, key)
+	return p.VerifyObservedIPs(ctx, uid, aid, site, key, group, ips)
+}
+
+func (p *KeyPolicies) VerifyObservedIPs(ctx context.Context, uid, aid string, site Site, key, group string, ips []string) (bool, error) {
+	want, e := p.DesiredIPs(ctx, uid, aid, site, key, group)
 	if e != nil {
 		return false, e
 	}
@@ -344,7 +348,7 @@ func (s *PlatformService) DeleteSecurityKey(ctx context.Context, session Session
 }
 
 func (s *PlatformService) ReplaceForwardingKey(ctx context.Context, session Session, id, oldKey, newKey string) error {
-	a, e := s.FetchForwardingAccount(ctx, session, id)
+	a, record, e := s.fetchForwardingAccount(ctx, session, id)
 	if e != nil {
 		return e
 	}
@@ -354,17 +358,11 @@ func (s *PlatformService) ReplaceForwardingKey(ctx context.Context, session Sess
 	if !SameMonitorKey(PlatformNewAPI, a.APIKey, oldKey) {
 		return fmt.Errorf("自有渠道 Key 已变化，未覆盖人工修改")
 	}
-	exported, e := s.httpClient.requestJSON(session.BaseURL+"/api/v1/admin/accounts/data?ids="+url.QueryEscape(id)+"&include_proxies=false", requestOptions{Context: ctx, AccessToken: session.AccessToken, TokenType: session.TokenType, InsecureSkipTLS: session.InsecureSkipTLS})
-	if e != nil {
-		return fmt.Errorf("无法读取完整渠道配置，旧 Key 尚未撤销")
-	}
-	items, _ := dataRecord(exported.Payload)["accounts"].([]any)
-	if len(items) != 1 {
-		return fmt.Errorf("渠道导出结果不唯一")
-	}
-	record, ok := items[0].(map[string]any)
-	if !ok {
-		return fmt.Errorf("渠道配置无效")
+	if record == nil {
+		record, e = s.exportForwardingAccount(ctx, session, id)
+		if e != nil {
+			return fmt.Errorf("无法读取完整渠道配置，旧 Key 尚未撤销: %w", e)
+		}
 	}
 	base, key, platform, _ := forwardingFields(record)
 	if MonitorAPIBase(base) != MonitorAPIBase(a.BaseURL) || platform != a.Platform || !SameMonitorKey(PlatformNewAPI, key, oldKey) {

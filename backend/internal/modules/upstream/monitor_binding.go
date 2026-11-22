@@ -187,7 +187,9 @@ func forwardingFields(record map[string]any) (base, key, platform string, groups
 	}
 	return
 }
-func (s *PlatformService) FetchForwardingAccount(ctx context.Context, session Session, id string) (Sub2APIAdminAccountStatus, error) {
+
+// FetchForwardingAccountDetail reads account metadata without exporting credentials.
+func (s *PlatformService) FetchForwardingAccountDetail(ctx context.Context, session Session, id string) (Sub2APIAdminAccountStatus, error) {
 	r, e := s.httpClient.requestJSON(session.BaseURL+"/api/v1/admin/accounts/"+url.PathEscape(id), requestOptions{Context: ctx, AccessToken: session.AccessToken, TokenType: session.TokenType, InsecureSkipTLS: session.InsecureSkipTLS})
 	if e != nil {
 		return Sub2APIAdminAccountStatus{}, fmt.Errorf("无法读取自有渠道凭据: %w", e)
@@ -198,22 +200,44 @@ func (s *PlatformService) FetchForwardingAccount(ctx context.Context, session Se
 	}
 	a := Sub2APIAdminAccountStatus{ID: id, Name: safeString(record, "name"), Type: safeString(record, "type")}
 	a.BaseURL, a.APIKey, a.Platform, a.GroupIDs = forwardingFields(record)
-	if a.APIKey == "" || strings.Contains(a.APIKey, "*") {
-		exported, err := s.httpClient.requestJSON(session.BaseURL+"/api/v1/admin/accounts/data?ids="+url.QueryEscape(id)+"&include_proxies=false", requestOptions{Context: ctx, AccessToken: session.AccessToken, TokenType: session.TokenType, InsecureSkipTLS: session.InsecureSkipTLS})
-		if err != nil {
-			return a, fmt.Errorf("自有站隐藏渠道 Key，当前会话无权读取；可通过 API 和 Key 手动接入")
-		}
-		items, _ := dataRecord(exported.Payload)["accounts"].([]any)
-		if len(items) != 1 {
-			return a, fmt.Errorf("无法确认自有渠道导出的唯一凭据")
-		}
-		if raw, ok := items[0].(map[string]any); ok {
-			base, key, platform, _ := forwardingFields(raw)
-			if MonitorAPIBase(base) != MonitorAPIBase(a.BaseURL) || platform != a.Platform {
-				return a, fmt.Errorf("自有渠道导出信息不一致")
-			}
-			a.APIKey = key
-		}
-	}
 	return a, nil
+}
+
+func (s *PlatformService) FetchForwardingAccount(ctx context.Context, session Session, id string) (Sub2APIAdminAccountStatus, error) {
+	account, _, err := s.fetchForwardingAccount(ctx, session, id)
+	return account, err
+}
+
+func (s *PlatformService) fetchForwardingAccount(ctx context.Context, session Session, id string) (Sub2APIAdminAccountStatus, map[string]any, error) {
+	account, err := s.FetchForwardingAccountDetail(ctx, session, id)
+	if err != nil || account.APIKey != "" && !strings.Contains(account.APIKey, "*") {
+		return account, nil, err
+	}
+	record, err := s.exportForwardingAccount(ctx, session, id)
+	if err != nil {
+		return account, nil, err
+	}
+	base, key, platform, _ := forwardingFields(record)
+	if MonitorAPIBase(base) != MonitorAPIBase(account.BaseURL) || platform != account.Platform {
+		return account, nil, fmt.Errorf("自有渠道导出信息不一致")
+	}
+	account.APIKey = key
+	return account, record, nil
+}
+
+func (s *PlatformService) exportForwardingAccount(ctx context.Context, session Session, id string) (map[string]any, error) {
+	response, err := s.httpClient.requestJSON(session.BaseURL+"/api/v1/admin/accounts/data?ids="+url.QueryEscape(id)+"&include_proxies=false", requestOptions{Context: ctx, AccessToken: session.AccessToken, TokenType: session.TokenType, InsecureSkipTLS: session.InsecureSkipTLS})
+	if err != nil {
+		return nil, fmt.Errorf("无法读取渠道完整凭据: %w", err)
+	}
+	items, _ := dataRecord(response.Payload)["accounts"].([]any)
+	if len(items) != 1 {
+		return nil, fmt.Errorf("无法确认自有渠道导出的唯一凭据")
+	}
+	account, ok := items[0].(map[string]any)
+	// Portable exports omit the database ID. Some forks include it.
+	if !ok || groupID2(account) != "" && groupID2(account) != id {
+		return nil, fmt.Errorf("自有渠道导出身份不一致")
+	}
+	return account, nil
 }

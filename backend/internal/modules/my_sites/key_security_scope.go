@@ -11,25 +11,33 @@ import (
 // Require a current binding and the full Key actually used by our Sub2API account.
 // During recovery an account may already use the replacement before the local
 // binding transaction commits, so only that persisted rotation permits both Keys.
-func (k *KeySecurity) validateBoundConsumers(ctx context.Context, uid, aid string, site upstream.Site, keyIDs, rotationSecrets []string) (bool, error) {
+func (k *KeySecurity) boundConsumers(ctx context.Context, uid, aid, siteID string, keyIDs []string) ([]RealConnection, error) {
 	conns, err := k.sites.connRepository.ListRealConnections(ctx, uid, aid)
 	if err != nil {
-		return false, err
+		return nil, err
 	}
 	selected := []RealConnection{}
 	for _, c := range conns {
-		if c.UpstreamSiteID != site.ID {
+		if c.UpstreamSiteID != siteID {
 			continue
 		}
 		for _, id := range keyIDs {
 			if id != "" && c.UpstreamKeyID == id {
+				if c.AdminAccountID == "" || c.UpstreamKey == "" {
+					return nil, nil
+				}
 				selected = append(selected, c)
 				break
 			}
 		}
 	}
-	if len(selected) == 0 {
-		return false, nil
+	return selected, nil
+}
+
+func (k *KeySecurity) validateBoundConsumers(ctx context.Context, uid, aid string, site upstream.Site, keyIDs, rotationSecrets []string) (bool, error) {
+	selected, err := k.boundConsumers(ctx, uid, aid, site.ID, keyIDs)
+	if err != nil || len(selected) == 0 {
+		return false, err
 	}
 	upstreamSecrets := map[string]string{}
 	if len(rotationSecrets) == 0 {
@@ -56,9 +64,6 @@ func (k *KeySecurity) validateBoundConsumers(ctx context.Context, uid, aid strin
 		return false, fmt.Errorf("无法核对自有 Sub2API，未修改上游 Key")
 	}
 	for _, c := range selected {
-		if c.AdminAccountID == "" || c.UpstreamKey == "" {
-			return false, nil
-		}
 		account, err := k.sites.platformService.FetchForwardingAccount(ctx, session, c.AdminAccountID)
 		if err != nil {
 			return false, fmt.Errorf("无法核对自有转发账号，未修改上游 Key")

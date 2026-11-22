@@ -75,6 +75,7 @@ func New(cfg config.Config, db *pgxpool.Pool, redisClient *redis.Client) *Server
 	group_rates.RegisterRoutes(server.mux, groupRatesService, adminAccountsService)
 	upstreamHTTPClient := &http.Client{Timeout: upstreamRequestTimeout}
 	platformHTTPClient := upstream.NewHTTPClient(upstreamHTTPClient)
+	platformHTTPClient.SetAccountExportInterval(cfg.Sub2APIAccountExportInterval)
 	platformService := upstream.NewPlatformService(platformHTTPClient)
 	upstreamCache := upstream.NewRedisSiteCache(redisClient)
 	upstreamService := upstream.NewService(platformService, upstreamRepository, groupRateSnapshotWriter{service: groupRatesService}, upstreamCache)

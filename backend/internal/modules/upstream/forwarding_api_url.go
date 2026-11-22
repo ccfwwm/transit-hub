@@ -17,7 +17,7 @@ func (s *PlatformService) UpdateForwardingAPIURL(ctx context.Context, session Se
 	if e != nil || apiURL == "" {
 		return fmt.Errorf("API 地址无效")
 	}
-	account, e := s.FetchForwardingAccount(ctx, session, id)
+	account, a, e := s.fetchForwardingAccount(ctx, session, id)
 	if e != nil {
 		return fmt.Errorf("无法核对渠道身份")
 	}
@@ -29,19 +29,11 @@ func (s *PlatformService) UpdateForwardingAPIURL(ctx context.Context, session Se
 		return nil
 	}
 	opts := requestOptions{Context: ctx, AccessToken: session.AccessToken, TokenType: session.TokenType, InsecureSkipTLS: session.InsecureSkipTLS}
-	r, e := s.httpClient.requestJSON(session.BaseURL+"/api/v1/admin/accounts/data?ids="+url.QueryEscape(id)+"&include_proxies=false", opts)
-	if e != nil {
-		return fmt.Errorf("无法读取渠道完整配置")
-	}
-	items, _ := dataRecord(r.Payload)["accounts"].([]any)
-	if len(items) != 1 {
-		return fmt.Errorf("渠道导出结果不唯一")
-	}
-	a, ok := items[0].(map[string]any)
-	// Portable account exports deliberately omit the local database ID.
-	// Identity comes from the ID-addressed detail and its exact full Key.
-	if !ok || groupID2(a) != "" && groupID2(a) != id {
-		return fmt.Errorf("渠道身份不一致")
+	if a == nil {
+		a, e = s.exportForwardingAccount(ctx, session, id)
+		if e != nil {
+			return e
+		}
 	}
 	base, key, platform, _ := forwardingFields(a)
 	exportURL, _ := NormalizeRoutingURL(base)

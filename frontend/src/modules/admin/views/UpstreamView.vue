@@ -39,16 +39,14 @@ const deleteErrorKey = ref<string | null>(null)
 const editingSiteId = ref<string | null>(null)
 const initialAPIURL = ref('')
 const initialWhitelistEnabled=ref(true)
-const refreshIntervalSeconds = ref<number | null>(null)
-const remainingSeconds = ref(0)
 const refreshSettings = ref<StrategySettings | null>(null)
 const isRefreshSettingsOpen = ref(false)
 const refreshSettingsEnabled = ref(false)
 const refreshSettingsInterval = ref('60')
 const isSavingRefreshSettings = ref(false)
 const refreshSettingsError = ref('')
-let countdownTimer: ReturnType<typeof window.setInterval> | null = null
-const nextRefreshAtStorageKey = 'transit-hub:upstream-next-refresh-at'
+let snapshotTimer: ReturnType<typeof window.setInterval> | null = null
+let snapshotLoading = false
 const minimumRefreshInterval = 60
 
 const viewMode = ref<'card' | 'list'>('card')
@@ -106,76 +104,42 @@ const compatibleOwnGroups = computed(() => {
 })
 watch(groupActionType, () => { if (!actionConnection.value) groupActionOwnGroupIds.value = [] })
 
-const countdownDisplay = computed(() => {
-  if (!refreshIntervalSeconds.value) return t('admin.upstream.refresh.disabled')
-  return t('admin.upstream.refresh.countdown', { seconds: remainingSeconds.value })
-})
+const refreshStatus = computed(() => refreshSettings.value?.enableRefreshInterval
+  ? t('admin.upstream.refresh.scheduled', { seconds: Math.max(refreshSettings.value.refreshInterval, minimumRefreshInterval) })
+  : t('admin.upstream.refresh.disabled'))
 
-const readNextRefreshAt = (): number | null => {
-  const value = Number.parseInt(window.localStorage.getItem(nextRefreshAtStorageKey) ?? '', 10)
-  if (!Number.isFinite(value) || value <= Date.now()) return null
-  return value
-}
-
-const writeNextRefreshAt = (timestamp: number) => {
-  window.localStorage.setItem(nextRefreshAtStorageKey, String(timestamp))
-}
-
-const updateRemainingSeconds = () => {
-  const nextRefreshAt = readNextRefreshAt()
-  remainingSeconds.value = nextRefreshAt ? Math.max(Math.ceil((nextRefreshAt - Date.now()) / 1000), 0) : 0
-}
-
-const scheduleNextRefresh = () => {
-  if (!refreshIntervalSeconds.value) return
-  writeNextRefreshAt(Date.now() + refreshIntervalSeconds.value * 1000)
-  updateRemainingSeconds()
-}
-
-const runRefresh = async () => {
-  if (isRefreshing.value) return
-  await streamRefreshSites()
-  scheduleNextRefresh()
-}
-
-const startCountdown = (seconds: number) => {
-  stopCountdown()
-  refreshIntervalSeconds.value = seconds
-  const nextRefreshAt = readNextRefreshAt()
-  if (!nextRefreshAt || nextRefreshAt > Date.now() + seconds * 1000) scheduleNextRefresh()
-  updateRemainingSeconds()
-  countdownTimer = window.setInterval(() => {
-    if (!refreshIntervalSeconds.value || isRefreshing.value) return
-    updateRemainingSeconds()
-    if (remainingSeconds.value <= 0) void runRefresh()
-  }, 1000)
-}
-
-const stopCountdown = () => {
-  if (countdownTimer) window.clearInterval(countdownTimer)
-  countdownTimer = null
+const stopSnapshotPolling = () => {
+  if (snapshotTimer !== null) window.clearInterval(snapshotTimer)
+  snapshotTimer = null
 }
 
 const applyRefreshSettings = (settings: StrategySettings) => {
   refreshSettings.value = settings
   refreshSettingsEnabled.value = settings.enableRefreshInterval
   refreshSettingsInterval.value = String(Math.max(settings.refreshInterval, minimumRefreshInterval))
-  stopCountdown()
+  stopSnapshotPolling()
   if (settings.enableRefreshInterval) {
-    startCountdown(Math.max(settings.refreshInterval, minimumRefreshInterval))
-    return
+    // The backend schedules upstream requests. The page only reads saved results.
+    snapshotTimer = window.setInterval(async () => {
+      if (document.hidden || snapshotLoading || isRefreshing.value || isAdding.value || syncingSiteIds.value.size || reloggingSiteIds.value.size || deletingSiteId.value) return
+      snapshotLoading = true
+      try {
+        await loadSites()
+      } catch {
+        // Keep the current results when a snapshot request fails.
+      } finally {
+        snapshotLoading = false
+      }
+    }, Math.max(settings.refreshInterval, minimumRefreshInterval) * 1000)
   }
-  refreshIntervalSeconds.value = null
-  remainingSeconds.value = 0
-  window.localStorage.removeItem(nextRefreshAtStorageKey)
 }
 
 const loadRefreshSettings = async () => {
   try {
     const settings = await getStrategySettings()
     applyRefreshSettings(settings)
-  } catch (error) {
-    refreshIntervalSeconds.value = null
+  } catch {
+    stopSnapshotPolling()
   }
 }
 
@@ -522,7 +486,7 @@ onMounted(() => {
 })
 
 onBeforeUnmount(() => {
-  stopCountdown()
+  stopSnapshotPolling()
 })
 </script>
 
@@ -566,7 +530,7 @@ onBeforeUnmount(() => {
           </button>
         </div>
         <div class="hidden md:flex h-10 items-center rounded-xl border border-border/50 bg-surface px-3 text-xs text-muted-foreground whitespace-nowrap">
-          {{ countdownDisplay }}
+          {{ refreshStatus }}
         </div>
         <Tooltip :text="t('admin.upstream.refresh.settings')">
           <button
@@ -577,7 +541,7 @@ onBeforeUnmount(() => {
             <Settings2 class="h-4 w-4" />
           </button>
         </Tooltip>
-        <Button :disabled="isRefreshing" @click="runRefresh" variant="secondary" class="w-full sm:w-auto h-10 rounded-xl px-4 gap-2">
+        <Button :disabled="isRefreshing" @click="streamRefreshSites" variant="secondary" class="w-full sm:w-auto h-10 rounded-xl px-4 gap-2">
           <Loader2 v-if="isRefreshing" class="w-4 h-4 animate-spin" />
           <RefreshCw v-else class="w-4 h-4" />
           {{ isRefreshing ? t('admin.upstream.refresh.refreshing') : t('admin.upstream.refresh.action') }}

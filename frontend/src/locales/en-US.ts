@@ -698,7 +698,7 @@ export default {
         refresh: {
           action: 'Refresh Data',
           refreshing: 'Refreshing...',
-          countdown: 'Refresh in {seconds}s',
+          scheduled: 'Background refresh every {seconds}s',
           disabled: 'Auto refresh disabled',
           settings: 'Refresh settings',
           auto: 'Auto refresh',

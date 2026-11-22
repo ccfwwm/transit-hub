@@ -15,19 +15,23 @@ import (
 )
 
 const (
-	jsonGetMaxAttempts = 2
-	jsonGetRetryDelay  = 300 * time.Millisecond
-	maxRetryAfter      = 5 * time.Second
+	jsonGetMaxAttempts           = 2
+	jsonGetRetryDelay            = 300 * time.Millisecond
+	maxRetryAfter                = 5 * time.Second
+	defaultAccountExportInterval = 250 * time.Millisecond
 )
 
 // BrowserUserAgent 是所有上游 HTTP 请求统一使用的浏览器 User-Agent。
 const BrowserUserAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/136.0.0.0 Safari/537.36"
 
 type HTTPClient struct {
-	keyObserver    func([]KeySecurityObservation)
-	client         *http.Client
-	mu             sync.Mutex
-	insecureClient *http.Client
+	keyObserver           func([]KeySecurityObservation)
+	client                *http.Client
+	mu                    sync.Mutex
+	insecureClient        *http.Client
+	accountExportMu       sync.Mutex
+	accountExportInterval time.Duration
+	nextAccountExport     map[string]time.Time
 }
 
 type requestOptions struct {
@@ -53,7 +57,39 @@ type textResponse struct {
 }
 
 func NewHTTPClient(client *http.Client) *HTTPClient {
-	return &HTTPClient{client: client}
+	return &HTTPClient{client: client, accountExportInterval: defaultAccountExportInterval, nextAccountExport: make(map[string]time.Time)}
+}
+
+func (c *HTTPClient) SetAccountExportInterval(interval time.Duration) {
+	if interval >= 100*time.Millisecond {
+		c.accountExportMu.Lock()
+		c.accountExportInterval = interval
+		c.accountExportMu.Unlock()
+	}
+}
+
+func (c *HTTPClient) waitAccountExport(ctx context.Context, origin string) error {
+	for {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		c.accountExportMu.Lock()
+		now := time.Now()
+		delay := c.nextAccountExport[origin].Sub(now)
+		if delay <= 0 {
+			c.nextAccountExport[origin] = now.Add(c.accountExportInterval)
+			c.accountExportMu.Unlock()
+			return nil
+		}
+		c.accountExportMu.Unlock()
+		timer := time.NewTimer(delay)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return ctx.Err()
+		case <-timer.C:
+		}
+	}
 }
 
 func (c *HTTPClient) requestClient(skipTLS bool) *http.Client {
@@ -162,7 +198,13 @@ func (c *HTTPClient) requestJSONOnce(reqURL string, options requestOptions) (jso
 		req.Header.Set("New-Api-User", options.UserID)
 	}
 
-	response, err := c.requestClient(options.InsecureSkipTLS).Do(req)
+	client := c.requestClient(options.InsecureSkipTLS)
+	if method == http.MethodGet && strings.HasSuffix(req.URL.Path, "/api/v1/admin/accounts/data") {
+		if err := c.waitAccountExport(ctx, req.URL.Scheme+"://"+strings.ToLower(req.URL.Host)); err != nil {
+			return jsonResponse{}, err
+		}
+	}
+	response, err := client.Do(req)
 	if err != nil {
 		log.Printf("[http-client] 请求失败 url=%s err=%v", reqURL, err)
 		return jsonResponse{}, newRequestError(ErrorNetwork, "")

@@ -33,8 +33,14 @@ func TestKeySecurityCleanupOnlyConfirmedDeletedAccounts(t *testing.T) {
 			http.Error(w, "limited", 429)
 		case "/api/v1/admin/accounts/3":
 			http.Error(w, "forbidden", 403)
+		case "/api/v1/admin/accounts/4":
+			json.NewEncoder(w).Encode(map[string]any{"data": map[string]any{"id": 4, "platform": "openai", "credentials": map[string]any{"api_key": "***", "base_url": "https://api.example.test"}}})
+		case "/api/v1/admin/accounts/data":
+			t.Error("existence checks must not export account credentials")
+			http.Error(w, "gone", 404)
 		default:
-			json.NewEncoder(w).Encode(map[string]any{"data": map[string]any{"id": 4, "platform": "openai", "credentials": map[string]any{"api_key": "fixture-existing-key-012345", "base_url": "https://api.example.test"}}})
+			t.Errorf("unexpected request %s", r.URL.Path)
+			http.NotFound(w, r)
 		}
 	}))
 	defer server.Close()

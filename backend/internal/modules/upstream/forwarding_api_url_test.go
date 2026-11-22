@@ -6,16 +6,19 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"reflect"
+	"sync/atomic"
 	"testing"
 )
 
 func TestForwardingAPIURLPreservesCredentialOptionsAndBoundKey(t *testing.T) {
 	credentials := map[string]any{"api_key": "bound-key", "base_url": "https://old.example/v1", "model_mapping": map[string]any{"a": "b"}, "enable_responses": true}
 	writes := 0
+	var exports atomic.Int32
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		switch {
 		case r.Method == "GET" && r.URL.Path == "/api/v1/admin/accounts/data":
+			exports.Add(1)
 			json.NewEncoder(w).Encode(map[string]any{"data": map[string]any{"accounts": []any{map[string]any{"platform": "openai", "type": "apikey", "credentials": credentials}}}})
 		case r.Method == "PUT" && r.URL.Path == "/api/v1/admin/accounts/9":
 			var body map[string]any
@@ -31,7 +34,7 @@ func TestForwardingAPIURLPreservesCredentialOptionsAndBoundKey(t *testing.T) {
 			writes++
 			w.Write([]byte(`{"data":{}}`))
 		case r.Method == "GET" && r.URL.Path == "/api/v1/admin/accounts/9":
-			json.NewEncoder(w).Encode(map[string]any{"data": map[string]any{"id": 9, "platform": "openai", "type": "apikey", "credentials": credentials}})
+			json.NewEncoder(w).Encode(map[string]any{"data": map[string]any{"id": 9, "platform": "openai", "type": "apikey", "credentials": map[string]any{"api_key": "***", "base_url": credentials["base_url"]}}})
 		default:
 			t.Errorf("unexpected request %s %s", r.Method, r.URL.Path)
 		}
@@ -41,6 +44,9 @@ func TestForwardingAPIURLPreservesCredentialOptionsAndBoundKey(t *testing.T) {
 	session := Session{Platform: PlatformSub2API, BaseURL: server.URL, AccessToken: "admin"}
 	if e := s.UpdateForwardingAPIURL(context.Background(), session, "9", "bound-key", "https://new.example/prefix"); e != nil {
 		t.Fatal(e)
+	}
+	if n := exports.Load(); n != 2 {
+		t.Fatalf("expected one export before the write and one fresh readback, got %d", n)
 	}
 	if e := s.UpdateForwardingAPIURL(context.Background(), session, "9", "bound-key", "https://new.example/prefix"); e != nil || writes != 1 {
 		t.Fatalf("retry not idempotent: writes=%d err=%v", writes, e)

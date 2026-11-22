@@ -11,7 +11,7 @@ const (
 	defaultPort       = "10621"
 	defaultRedisURL   = "redis://127.0.0.1:6379/0"
 	defaultPublicDir  = "/app/public"
-	defaultAppVersion = "2.2.17"
+	defaultAppVersion = "2.2.18"
 )
 
 type Config struct {
@@ -30,6 +30,7 @@ type Config struct {
 	// UpstreamCredentialEncryptionKey encrypts saved upstream login passwords.
 	// It must be a base64-encoded 32-byte key and is never returned by APIs.
 	UpstreamCredentialEncryptionKey string
+	Sub2APIAccountExportInterval    time.Duration
 
 	// 公开注册开关，false 时禁用 /api/auth/register 和 /api/auth/email-code
 	AllowPublicRegister bool
@@ -65,6 +66,7 @@ func Load() Config {
 		AdminEmail:                      os.Getenv("ADMIN_EMAIL"),
 		AdminPassword:                   os.Getenv("ADMIN_PASSWORD"),
 		UpstreamCredentialEncryptionKey: os.Getenv("UPSTREAM_CREDENTIAL_ENCRYPTION_KEY"),
+		Sub2APIAccountExportInterval:    envDuration("SUB2API_ACCOUNT_EXPORT_INTERVAL", 250*time.Millisecond),
 
 		AllowPublicRegister: envOrDefault("ALLOW_PUBLIC_REGISTER", "true") == "true",
 

@@ -698,7 +698,7 @@ export default {
         refresh: {
           action: '刷新数据',
           refreshing: '刷新中...',
-          countdown: '{seconds} 秒后刷新',
+          scheduled: '每 {seconds} 秒后台刷新',
           disabled: '未开启自动刷新',
           settings: '刷新设置',
           auto: '自动刷新',

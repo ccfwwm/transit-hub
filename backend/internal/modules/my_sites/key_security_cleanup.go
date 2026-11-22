@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 	"transithub/backend/internal/modules/jobs"
@@ -51,7 +52,7 @@ func (k *KeySecurity) pruneDeletedBindings(ctx context.Context, uid, aid string,
 		if c.AdminAccountID == "" {
 			continue
 		}
-		_, e = k.sites.platformService.FetchForwardingAccount(ctx, session, c.AdminAccountID)
+		_, e = k.sites.platformService.FetchForwardingAccountDetail(ctx, session, c.AdminAccountID)
 		var req *upstream.RequestError
 		if !errors.As(e, &req) || req.HTTPStatus != 404 {
 			continue
@@ -230,23 +231,26 @@ func (k *KeySecurity) pruneMissingUpstreamBindings(ctx context.Context, uid, aid
 	return nil
 }
 
-// Dispatch refresh-triggered scans at most once per minute per site. GET page
-// rendering stays read-only and uses the latest local security observation.
+// Share the workspace audit interval with the scheduled scan. Only sites that
+// have a managed binding can queue work from a data refresh.
 func (k *KeySecurity) QueueSiteAudit(ctx context.Context, uid, aid, site string) {
 	if k.cipher == nil {
 		return
 	}
-	var enabled bool
-	if e := k.db.QueryRow(ctx, `SELECT audit_enabled FROM key_security_policies WHERE user_id=$1 AND admin_account_id=$2`, uid, aid).Scan(&enabled); e != nil || !enabled {
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	conn, unlock := k.lockAuditSchedule(ctx, uid, aid)
+	if conn == nil {
 		return
 	}
-	tag, e := k.db.Exec(ctx, `INSERT INTO key_security_site_refresh(user_id,admin_account_id,site_id,queued_at) VALUES($1,$2,$3,now()) ON CONFLICT(user_id,admin_account_id,site_id) DO UPDATE SET queued_at=now() WHERE key_security_site_refresh.queued_at<now()-interval '1 minute'`, uid, aid, site)
-	if e != nil || tag.RowsAffected() == 0 {
-		return
-	}
-	var active bool
-	e = k.db.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM operation_jobs j JOIN operation_items i ON i.job_id=j.id WHERE j.user_id=$1 AND j.admin_account_id=$2 AND ((j.kind='key_security_scan' AND i.id=$3) OR (j.kind='key_security' AND split_part(i.id,'/',1)=$3)) AND i.status IN('queued','running','waiting'))`, uid, aid, site).Scan(&active)
-	if e != nil || active {
+	defer unlock()
+	var due bool
+	err := conn.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM key_security_policies p WHERE p.user_id=$1 AND p.admin_account_id=$2 AND p.audit_enabled
+		AND EXISTS(SELECT 1 FROM real_connections WHERE user_id=$1 AND workspace_admin_account_id=$2 AND upstream_site_id=$3 AND upstream_key_id<>'' AND admin_account_id<>'' AND upstream_key<>'')
+		AND NOT EXISTS(SELECT 1 FROM key_security_site_refresh f WHERE f.user_id=$1 AND f.admin_account_id=$2 AND f.site_id=$3 AND f.queued_at>now()-make_interval(mins => p.audit_interval_minutes))
+		AND NOT EXISTS(SELECT 1 FROM operation_jobs j JOIN operation_items i ON i.job_id=j.id
+			WHERE j.user_id=$1 AND j.admin_account_id=$2 AND ((j.kind='key_security_scan' AND i.id=$3) OR (j.kind='key_security' AND split_part(i.id,'/',1)=$3)) AND i.status IN('queued','running','waiting')))`, uid, aid, site).Scan(&due)
+	if err != nil || !due {
 		return
 	}
 	_, _ = k.jobs.Submit(ctx, uid, aid, "key_security_scan", []jobs.Item{{ID: site}})

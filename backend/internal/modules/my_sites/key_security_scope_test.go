@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -26,6 +27,7 @@ func TestSecurityScopeRejectsUnboundStaleAndForeignKeys(t *testing.T) {
 			currentKey := "fixture-bound-key-0123456789"
 			boundKey := currentKey
 			writes := 0
+			var exports atomic.Int32
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				w.Header().Set("Content-Type", "application/json")
 				if r.Method != "GET" {
@@ -41,6 +43,7 @@ func TestSecurityScopeRejectsUnboundStaleAndForeignKeys(t *testing.T) {
 				case "/api/v1/admin/accounts/2211":
 					reply(map[string]any{"id": 2211, "type": "apikey", "platform": "openai", "credentials": map[string]any{"api_key": "***", "base_url": "https://api.example.test"}})
 				case "/api/v1/admin/accounts/data":
+					exports.Add(1)
 					reply(map[string]any{"accounts": []any{map[string]any{"platform": "openai", "credentials": map[string]any{"api_key": currentKey, "base_url": "https://api.example.test"}}}})
 				case "/api/v1/keys", "/api/token/":
 					if r.Method == "GET" {
@@ -114,6 +117,10 @@ func TestSecurityScopeRejectsUnboundStaleAndForeignKeys(t *testing.T) {
 			if err != nil || child.Total != 1 || child.Items[0].ID != "s/7" {
 				t.Fatal("inventory admitted unrelated Key", child, err)
 			}
+			out, err = k.runTarget(ctx, "u", "w", child.Items[0].ID, items[0].Payload)
+			if err != nil || out.Value.(map[string]any)["message"] != "白名单一致" || exports.Load() != 0 || writes != 0 {
+				t.Fatalf("healthy scan fetched credentials or attempted writes: outcome=%+v exports=%d writes=%d err=%v", out, exports.Load(), writes, err)
+			}
 			// Historical policy records and a site-wide disable must not grant scope.
 			if err := p.Record(ctx, "u", "w", "s", "8", []string{upstream.DefaultMonitorIP}); err != nil {
 				t.Fatal(err)
@@ -165,5 +172,53 @@ func TestSecurityScopeRejectsUnboundStaleAndForeignKeys(t *testing.T) {
 				t.Fatal("queued task after unbind mutated Key", err, writes)
 			}
 		})
+	}
+}
+
+func TestAutomaticKeyAuditUsesWorkspaceInterval(t *testing.T) {
+	ctx := context.Background()
+	db := securityTestDatabase(t)
+	repo := NewRepository(db)
+	sites := NewService(repo, nil, nil)
+	if err := sites.EnsureSchema(ctx); err != nil {
+		t.Fatal(err)
+	}
+	j := jobs.New(db)
+	if err := j.EnsureSchema(ctx); err != nil {
+		t.Fatal(err)
+	}
+	k, err := NewKeySecurity(db, sites, nil, j, base64.StdEncoding.EncodeToString(make([]byte, 32)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := defaultSecurityPolicy()
+	p.AuditIntervalMinutes = 20
+	p, err = k.savePolicy(ctx, "u", "w", p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = db.Exec(ctx, `CREATE TABLE upstream_sites(id text,user_id text,admin_account_id text,platform text);
+		INSERT INTO upstream_sites VALUES('s','u','w','sub2api');
+		INSERT INTO key_security_site_refresh VALUES('u','w','s',now()-interval '6 minutes')`); err != nil {
+		t.Fatal(err)
+	}
+	conn := RealConnection{ID: "c", UserID: "u", WorkspaceAdminAccountID: "w", UpstreamSiteID: "s", UpstreamKeyID: "7", UpstreamKey: "fixture-key", AdminAccountID: "42", CreatedAt: time.Now().Format(time.RFC3339)}
+	if err := repo.SaveRealConnection(ctx, conn); err != nil {
+		t.Fatal(err)
+	}
+	k.QueueSiteAudit(ctx, "u", "w", "s")
+	if got, err := j.List(ctx, "u", "w"); err != nil || len(got) != 0 {
+		t.Fatalf("refresh queued a scan before the interval elapsed: %+v %v", got, err)
+	}
+	if _, err := k.submitScan(ctx, "u", "w", p.AuditIntervalMinutes); err == nil {
+		t.Fatal("scheduled scan ignored the interval")
+	}
+	if _, err := db.Exec(ctx, `UPDATE key_security_site_refresh SET queued_at=now()-interval '21 minutes'`); err != nil {
+		t.Fatal(err)
+	}
+	k.QueueSiteAudit(ctx, "u", "w", "s")
+	k.QueueSiteAudit(ctx, "u", "w", "s")
+	if got, err := j.List(ctx, "u", "w"); err != nil || len(got) != 1 || got[0].Kind != "key_security_scan" {
+		t.Fatalf("expected exactly one scan when the interval elapsed: %+v %v", got, err)
 	}
 }

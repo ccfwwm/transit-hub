@@ -1,10 +1,10 @@
 <script setup lang="ts">
 import { onMounted, ref } from 'vue'
 import { operationJSON, followJob, type OperationJob } from '../api/operations'
-interface Policy { enabled: boolean; auditEnabled: boolean; time: string; timezone: string; intervalHours: number; version: number; nextRotation: string }
+interface Policy { enabled: boolean; auditEnabled: boolean; auditIntervalMinutes: number; time: string; timezone: string; intervalHours: number; version: number; nextRotation: string }
 interface SecurityEvent { siteId: string; keyId: string; status: string; message: string; createdAt: string }
 const open = ref(false), busy = ref(false), error = ref(''), message = ref('')
-const policy = ref<Policy>({ enabled: true, auditEnabled: true, time: '04:00', timezone: 'Asia/Shanghai', intervalHours: 24, version: 0, nextRotation: '' })
+const policy = ref<Policy>({ enabled: true, auditEnabled: true, auditIntervalMinutes: 5, time: '04:00', timezone: 'Asia/Shanghai', intervalHours: 24, version: 0, nextRotation: '' })
 const events = ref<SecurityEvent[]>([])
 async function load() {
   try { const v = await operationJSON<{policy: Policy; events: SecurityEvent[]}>('/my-sites/key-security'); policy.value = v.policy; events.value = v.events }
@@ -13,6 +13,11 @@ async function load() {
 onMounted(load)
 async function show() { open.value = true; error.value = ''; await load() }
 async function save() {
+  const minutes = policy.value.auditIntervalMinutes
+  if (!Number.isInteger(minutes) || minutes < 1 || minutes > 1440) {
+    error.value = '巡检间隔应为 1 至 1440 分钟'
+    return
+  }
   busy.value = true; error.value = ''; message.value = ''
   try { policy.value = await operationJSON<Policy>('/my-sites/key-security', { method: 'PUT', body: JSON.stringify(policy.value) }); message.value = '安全策略已保存' }
   catch (e: any) { error.value = e.message } finally { busy.value = false }
@@ -55,7 +60,11 @@ function date(s: string) { return new Date(s).toLocaleString('zh-CN', { timeZone
         </div>
         <p class="text-sm text-muted-foreground">仅管理自有 Sub2API 当前绑定使用的 Key；其他用途的 Key 不修改。</p>
         <div class="space-y-4 rounded-lg border border-border/50 p-4 text-sm">
-          <label class="flex items-center gap-2"><input v-model="policy.auditEnabled" type="checkbox" :disabled="busy" />刷新时校对白名单，每 5 分钟兜底检查</label>
+          <label class="flex items-center gap-2"><input v-model="policy.auditEnabled" type="checkbox" :disabled="busy" />启用白名单自动巡检</label>
+          <label class="block max-w-56 space-y-1">
+            <span class="block">巡检间隔（分钟）</span>
+            <input v-model.number="policy.auditIntervalMinutes" type="number" min="1" max="1440" :disabled="busy || !policy.auditEnabled" class="w-full rounded border border-border/50 bg-background p-2" />
+          </label>
           <label class="flex items-center gap-2"><input v-model="policy.enabled" type="checkbox" :disabled="busy" />启用定时轮换</label>
           <div class="grid grid-cols-2 gap-4 sm:grid-cols-3">
             <label class="space-y-1"><span class="block">更新时间</span><input v-model="policy.time" type="time" :disabled="busy" class="w-full rounded border border-border/50 bg-background p-2" /></label>

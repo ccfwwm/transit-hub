@@ -1,11 +1,61 @@
 package upstream
 
 import (
+	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"sync/atomic"
 	"testing"
+	"time"
 )
+
+func TestAccountExportsArePacedAcrossConcurrentRequests(t *testing.T) {
+	const interval = 100 * time.Millisecond
+	starts := make(chan time.Time, 4)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		starts <- time.Now()
+		_, _ = w.Write([]byte(`{"ok":true}`))
+	}))
+	defer server.Close()
+	client := NewHTTPClient(server.Client())
+	client.SetAccountExportInterval(interval)
+	path := server.URL + "/prefix/api/v1/admin/accounts/data?ids="
+	results := make(chan error, 3)
+	for _, id := range []string{"1", "2", "3"} {
+		go func() {
+			_, err := client.requestJSON(path+id, requestOptions{})
+			results <- err
+		}()
+	}
+	for range 3 {
+		if err := <-results; err != nil {
+			t.Fatal(err)
+		}
+	}
+	previous := <-starts
+	for range 2 {
+		next := <-starts
+		if gap := next.Sub(previous); gap < interval-20*time.Millisecond {
+			t.Fatalf("concurrent exports reached the server %v apart", gap)
+		}
+		previous = next
+	}
+	client.SetAccountExportInterval(time.Second)
+	// Establish a full interval before testing cancellation of the next request.
+	if _, err := client.requestJSON(path+"4", requestOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	<-starts
+	ctx, cancel := context.WithTimeout(context.Background(), 25*time.Millisecond)
+	defer cancel()
+	if _, err := client.requestJSON(path+"5", requestOptions{Context: ctx}); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("queued export ignored cancellation: %v", err)
+	}
+	if len(starts) != 0 {
+		t.Fatal("cancelled export reached the server")
+	}
+}
 
 func TestRequestJSONRetriesTransientGETFailure(t *testing.T) {
 	var calls atomic.Int32

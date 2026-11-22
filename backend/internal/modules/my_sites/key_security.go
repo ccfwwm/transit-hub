@@ -21,14 +21,15 @@ import (
 )
 
 type KeySecurityPolicy struct {
-	Enabled       bool       `json:"enabled"`
-	AuditEnabled  bool       `json:"auditEnabled"`
-	Time          string     `json:"time"`
-	Timezone      string     `json:"timezone"`
-	IntervalHours int        `json:"intervalHours"`
-	Version       int64      `json:"version"`
-	NextRotation  time.Time  `json:"nextRotation"`
-	LastAudit     *time.Time `json:"lastAudit,omitempty"`
+	Enabled              bool       `json:"enabled"`
+	AuditEnabled         bool       `json:"auditEnabled"`
+	AuditIntervalMinutes int        `json:"auditIntervalMinutes"`
+	Time                 string     `json:"time"`
+	Timezone             string     `json:"timezone"`
+	IntervalHours        int        `json:"intervalHours"`
+	Version              int64      `json:"version"`
+	NextRotation         time.Time  `json:"nextRotation"`
+	LastAudit            *time.Time `json:"lastAudit,omitempty"`
 }
 type KeySecurity struct {
 	db       *pgxpool.Pool
@@ -80,6 +81,7 @@ func NewKeySecurity(db *pgxpool.Pool, s *Service, p *upstream.KeyPolicies, j *jo
 		return nil, e
 	}
 	if _, e = db.Exec(context.Background(), `ALTER TABLE key_security_policies ADD COLUMN IF NOT EXISTS last_discovery timestamptz;
+	 ALTER TABLE key_security_policies ADD COLUMN IF NOT EXISTS audit_interval_minutes int NOT NULL DEFAULT 5;
 	 ALTER TABLE key_security_rotations ADD COLUMN IF NOT EXISTS group_id text NOT NULL DEFAULT '';
 	 UPDATE key_security_rotations r SET group_id=coalesce((SELECT c.upstream_group_id FROM real_connections c WHERE c.user_id=r.user_id AND c.workspace_admin_account_id=r.admin_account_id AND c.upstream_site_id=r.site_id AND c.upstream_key_id IN(r.old_key_id,r.new_key_id) LIMIT 1),'') WHERE r.group_id='';`); e != nil {
 		return nil, e
@@ -101,7 +103,7 @@ func NewKeySecurity(db *pgxpool.Pool, s *Service, p *upstream.KeyPolicies, j *jo
 }
 
 func defaultSecurityPolicy() KeySecurityPolicy {
-	return KeySecurityPolicy{Enabled: true, AuditEnabled: true, Time: "04:00", Timezone: "Asia/Shanghai", IntervalHours: 24}
+	return KeySecurityPolicy{Enabled: true, AuditEnabled: true, AuditIntervalMinutes: 5, Time: "04:00", Timezone: "Asia/Shanghai", IntervalHours: 24}
 }
 func validateSecurityPolicy(p KeySecurityPolicy) error {
 	if len(p.Time) != 5 {
@@ -115,6 +117,9 @@ func validateSecurityPolicy(p KeySecurityPolicy) error {
 	}
 	if p.IntervalHours < 1 || p.IntervalHours > 24*90 {
 		return fmt.Errorf("更新间隔应为 1 至 2160 小时")
+	}
+	if p.AuditIntervalMinutes < 1 || p.AuditIntervalMinutes > 1440 {
+		return fmt.Errorf("巡检间隔应为 1 至 1440 分钟")
 	}
 	return nil
 }
@@ -131,7 +136,7 @@ func nextSecurityRotation(now time.Time, p KeySecurityPolicy) time.Time {
 func (k *KeySecurity) policy(ctx context.Context, uid, aid string) (KeySecurityPolicy, error) {
 	p := defaultSecurityPolicy()
 	p.NextRotation = nextSecurityRotation(time.Now(), p)
-	e := k.db.QueryRow(ctx, `SELECT enabled,audit_enabled,local_time,timezone,interval_hours,version,next_rotation,last_audit FROM key_security_policies WHERE user_id=$1 AND admin_account_id=$2`, uid, aid).Scan(&p.Enabled, &p.AuditEnabled, &p.Time, &p.Timezone, &p.IntervalHours, &p.Version, &p.NextRotation, &p.LastAudit)
+	e := k.db.QueryRow(ctx, `SELECT enabled,audit_enabled,local_time,timezone,interval_hours,version,next_rotation,last_audit,audit_interval_minutes FROM key_security_policies WHERE user_id=$1 AND admin_account_id=$2`, uid, aid).Scan(&p.Enabled, &p.AuditEnabled, &p.Time, &p.Timezone, &p.IntervalHours, &p.Version, &p.NextRotation, &p.LastAudit, &p.AuditIntervalMinutes)
 	if errors.Is(e, pgx.ErrNoRows) {
 		e = nil
 	}
@@ -142,7 +147,15 @@ func (k *KeySecurity) savePolicy(ctx context.Context, uid, aid string, p KeySecu
 		return p, e
 	}
 	p.NextRotation = nextSecurityRotation(time.Now(), p)
-	e := k.db.QueryRow(ctx, `INSERT INTO key_security_policies(user_id,admin_account_id,enabled,audit_enabled,local_time,timezone,interval_hours,next_rotation) VALUES($1,$2,$3,$4,$5,$6,$7,$8) ON CONFLICT(user_id,admin_account_id) DO UPDATE SET enabled=EXCLUDED.enabled,audit_enabled=EXCLUDED.audit_enabled,local_time=EXCLUDED.local_time,timezone=EXCLUDED.timezone,interval_hours=EXCLUDED.interval_hours,next_rotation=EXCLUDED.next_rotation,version=key_security_policies.version+1 WHERE key_security_policies.version=$9 RETURNING version`, uid, aid, p.Enabled, p.AuditEnabled, p.Time, p.Timezone, p.IntervalHours, p.NextRotation, p.Version).Scan(&p.Version)
+	e := k.db.QueryRow(ctx, `INSERT INTO key_security_policies(user_id,admin_account_id,enabled,audit_enabled,local_time,timezone,interval_hours,next_rotation,audit_interval_minutes)
+		VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9) ON CONFLICT(user_id,admin_account_id) DO UPDATE SET
+		enabled=EXCLUDED.enabled,audit_enabled=EXCLUDED.audit_enabled,local_time=EXCLUDED.local_time,timezone=EXCLUDED.timezone,
+		next_rotation=CASE WHEN (key_security_policies.enabled,key_security_policies.local_time,key_security_policies.timezone,key_security_policies.interval_hours)
+			IS DISTINCT FROM (EXCLUDED.enabled,EXCLUDED.local_time,EXCLUDED.timezone,EXCLUDED.interval_hours)
+			THEN EXCLUDED.next_rotation ELSE key_security_policies.next_rotation END,
+		interval_hours=EXCLUDED.interval_hours,audit_interval_minutes=EXCLUDED.audit_interval_minutes,
+		version=key_security_policies.version+1 WHERE key_security_policies.version=$10 RETURNING version,next_rotation,last_audit`,
+		uid, aid, p.Enabled, p.AuditEnabled, p.Time, p.Timezone, p.IntervalHours, p.NextRotation, p.AuditIntervalMinutes, p.Version).Scan(&p.Version, &p.NextRotation, &p.LastAudit)
 	if e != nil {
 		return p, fmt.Errorf("安全策略已变化，请刷新后重试")
 	}
@@ -247,13 +260,35 @@ func (k *KeySecurity) runTarget(ctx context.Context, uid, aid, id string, raw js
 	if existing {
 		keyIDs = append(keyIDs, r.NewID)
 		secrets = []string{r.OldSecret, r.NewSecret}
+	} else if t.Action == "audit" {
+		consumers, err := k.boundConsumers(ctx, uid, aid, site.ID, keyIDs)
+		if err != nil {
+			return out, err
+		}
+		if len(consumers) == 0 {
+			return skippedUnboundKey(), nil
+		}
+		record, ips, err := k.sites.platformService.ReadSecurityKey(ctx, *site.Session, t.KeyID)
+		if err != nil {
+			return out, err
+		}
+		if !upstream.SecurityKeyGroupMatches(site.Platform, record, t.GroupID) {
+			return out, fmt.Errorf("上游 Key 分组已变化，请重新同步绑定")
+		}
+		exact, err := k.policies.VerifyObservedIPs(ctx, uid, aid, *site, t.KeyID, t.GroupID, ips)
+		if err != nil {
+			return out, err
+		}
+		if exact {
+			return k.whitelistMatch(ctx, uid, aid, t), nil
+		}
 	}
 	bound, e := k.validateBoundConsumers(ctx, uid, aid, *site, keyIDs, secrets)
 	if e != nil {
 		return out, e
 	}
 	if !bound {
-		return jobs.Outcome{Value: map[string]any{"skipped": true, "message": "Key 未被当前自有 Sub2API 绑定使用，已跳过"}}, nil
+		return skippedUnboundKey(), nil
 	}
 	if existing {
 		_, _ = k.db.Exec(ctx, `UPDATE key_security_rotations SET updated_at=now() WHERE user_id=$1 AND admin_account_id=$2 AND site_id=$3 AND old_key_id=$4 AND phase<>'done'`, uid, aid, t.SiteID, t.KeyID)
@@ -282,9 +317,12 @@ func (k *KeySecurity) runTarget(ctx context.Context, uid, aid, id string, raw js
 		k.event(ctx, uid, aid, t, "done", message)
 		return jobs.Outcome{Value: map[string]any{"enabled": enabled, "allowedIPs": ips, "message": message}}, nil
 	}
-	exact, e := k.policies.VerifyExact(ctx, uid, aid, *site, t.KeyID, t.GroupID)
-	if e != nil {
-		return out, e
+	exact := false
+	if t.Action != "audit" {
+		exact, e = k.policies.VerifyExact(ctx, uid, aid, *site, t.KeyID, t.GroupID)
+		if e != nil {
+			return out, e
+		}
 	}
 	// Exact replacement is intentional: an injected IP must never be merged back.
 	if !exact {
@@ -301,9 +339,17 @@ func (k *KeySecurity) runTarget(ctx context.Context, uid, aid, id string, raw js
 	if t.Action == "rotate" {
 		return k.rotate(ctx, uid, aid, *site, t)
 	}
-	message := "白名单一致"
+	return k.whitelistMatch(ctx, uid, aid, t), nil
+}
+
+func skippedUnboundKey() jobs.Outcome {
+	return jobs.Outcome{Value: map[string]any{"skipped": true, "message": "Key 未被当前自有 Sub2API 绑定使用，已跳过"}}
+}
+
+func (k *KeySecurity) whitelistMatch(ctx context.Context, uid, aid string, t securityTarget) jobs.Outcome {
+	const message = "白名单一致"
 	k.event(ctx, uid, aid, t, "done", message)
-	return jobs.Outcome{Value: map[string]any{"message": message, "keyId": t.KeyID, "siteId": t.SiteID}}, nil
+	return jobs.Outcome{Value: map[string]any{"message": message, "keyId": t.KeyID, "siteId": t.SiteID}}
 }
 
 func randomSecuritySecret() (string, error) {
@@ -617,6 +663,9 @@ func (k *KeySecurity) rotate(ctx context.Context, uid, aid string, site upstream
 // Inventory is read only to reconcile bindings. Only current bound consumers
 // become security targets; unrelated upstream Keys must never be modified.
 func (k *KeySecurity) scanSite(ctx context.Context, uid, aid, id string, raw json.RawMessage) (jobs.Outcome, error) {
+	if _, e := k.db.Exec(ctx, `INSERT INTO key_security_site_refresh(user_id,admin_account_id,site_id,queued_at) VALUES($1,$2,$3,now()) ON CONFLICT(user_id,admin_account_id,site_id) DO UPDATE SET queued_at=now()`, uid, aid, id); e != nil {
+		return jobs.Outcome{}, e
+	}
 	site, e := k.ownedSite(ctx, uid, aid, id)
 	if e != nil {
 		return jobs.Outcome{}, e
@@ -641,7 +690,6 @@ func (k *KeySecurity) scanSite(ctx context.Context, uid, aid, id string, raw jso
 	if e = k.pruneMissingUpstreamBindings(ctx, uid, aid, *site, records); e != nil {
 		return jobs.Outcome{}, e
 	}
-	_, _ = k.db.Exec(ctx, `INSERT INTO key_security_site_refresh(user_id,admin_account_id,site_id,queued_at) VALUES($1,$2,$3,now()) ON CONFLICT(user_id,admin_account_id,site_id) DO UPDATE SET queued_at=now()`, uid, aid, site.ID)
 	boundItems, e := k.targets(ctx, uid, aid, "audit")
 	if e != nil {
 		return jobs.Outcome{}, e
@@ -662,9 +710,10 @@ func (k *KeySecurity) scanSite(ctx context.Context, uid, aid, id string, raw jso
 	}
 	return jobs.Outcome{Value: map[string]any{"message": fmt.Sprintf("已选择 %d 个自有站绑定 Key", len(items)), "childJobId": j.ID}}, nil
 }
-func (k *KeySecurity) submitScan(ctx context.Context, uid, aid string, staleOnly ...bool) (jobs.Job, error) {
-	stale := len(staleOnly) > 0 && staleOnly[0]
-	rows, e := k.db.Query(ctx, `SELECT s.id FROM upstream_sites s WHERE s.user_id=$1 AND s.admin_account_id=$2 AND s.platform IN('sub2api','newapi') AND EXISTS(SELECT 1 FROM real_connections c WHERE c.user_id=s.user_id AND c.workspace_admin_account_id=s.admin_account_id AND c.upstream_site_id=s.id AND c.upstream_key_id<>'' AND c.admin_account_id<>'' AND c.upstream_key<>'') AND (NOT $3::bool OR NOT EXISTS(SELECT 1 FROM key_security_site_refresh f WHERE f.user_id=s.user_id AND f.admin_account_id=s.admin_account_id AND f.site_id=s.id AND f.queued_at>now()-interval '5 minutes'))`, uid, aid, stale)
+func (k *KeySecurity) submitScan(ctx context.Context, uid, aid string, intervalMinutes int) (jobs.Job, error) {
+	rows, e := k.db.Query(ctx, `SELECT s.id FROM upstream_sites s WHERE s.user_id=$1 AND s.admin_account_id=$2 AND s.platform IN('sub2api','newapi')
+		AND EXISTS(SELECT 1 FROM real_connections c WHERE c.user_id=s.user_id AND c.workspace_admin_account_id=s.admin_account_id AND c.upstream_site_id=s.id AND c.upstream_key_id<>'' AND c.admin_account_id<>'' AND c.upstream_key<>'')
+		AND ($3::int=0 OR NOT EXISTS(SELECT 1 FROM key_security_site_refresh f WHERE f.user_id=s.user_id AND f.admin_account_id=s.admin_account_id AND f.site_id=s.id AND f.queued_at>now()-make_interval(mins => $3)))`, uid, aid, intervalMinutes)
 	if e != nil {
 		return jobs.Job{}, e
 	}
@@ -752,6 +801,14 @@ func (k *KeySecurity) Register(mux *http.ServeMux) {
 			httpjson.WriteError(w, 400, "无效策略")
 			return
 		}
+		if p.AuditIntervalMinutes == 0 {
+			current, err := k.policy(r.Context(), uid, aid)
+			if err != nil {
+				httpjson.WriteError(w, 500, "无法读取安全策略")
+				return
+			}
+			p.AuditIntervalMinutes = current.AuditIntervalMinutes
+		}
 		p, e = k.savePolicy(r.Context(), uid, aid, p)
 		if e != nil {
 			httpjson.WriteError(w, 400, e.Error())
@@ -820,7 +877,7 @@ func (k *KeySecurity) Register(mux *http.ServeMux) {
 		case "discover":
 			job, e = k.jobs.Submit(r.Context(), uid, aid, "key_security_bindings", []jobs.Item{{ID: "workspace"}})
 		case "sync-all":
-			job, e = k.submitScan(r.Context(), uid, aid)
+			job, e = k.submitScan(r.Context(), uid, aid, 0)
 		case "sync":
 			if len(req.ConnectionIDs) > 0 {
 				var items []jobs.Item
@@ -904,17 +961,11 @@ func (k *KeySecurity) tickScope(ctx context.Context, uid, aid string) {
 	}
 	// Lock submission together with its schedule update. This also handles two
 	// application replicas and avoids duplicate schedules after restarts.
-	c, e := k.db.Acquire(ctx)
-	if e != nil {
+	conn, unlock := k.lockAuditSchedule(ctx, uid, aid)
+	if conn == nil {
 		return
 	}
-	defer c.Release()
-	var locked bool
-	e = c.QueryRow(ctx, `SELECT pg_try_advisory_lock(hashtextextended($1,0))`, "security-schedule|"+uid+"|"+aid).Scan(&locked)
-	if e != nil || !locked {
-		return
-	}
-	defer c.Exec(context.Background(), `SELECT pg_advisory_unlock(hashtextextended($1,0))`, "security-schedule|"+uid+"|"+aid)
+	defer unlock()
 	p, e = k.policy(ctx, uid, aid)
 	if e != nil {
 		return
@@ -974,9 +1025,26 @@ func (k *KeySecurity) tickScope(ctx context.Context, uid, aid string) {
 		}
 		return
 	}
-	if p.AuditEnabled && (p.LastAudit == nil || now.Sub(*p.LastAudit) >= 5*time.Minute) {
-		if _, e = k.submitScan(ctx, uid, aid, true); e == nil {
+	if p.AuditEnabled && (p.LastAudit == nil || now.Sub(*p.LastAudit) >= time.Duration(p.AuditIntervalMinutes)*time.Minute) {
+		if _, e = k.submitScan(ctx, uid, aid, p.AuditIntervalMinutes); e == nil {
 			_, _ = k.db.Exec(ctx, `UPDATE key_security_policies SET last_audit=now() WHERE user_id=$1 AND admin_account_id=$2`, uid, aid)
 		}
+	}
+}
+
+func (k *KeySecurity) lockAuditSchedule(ctx context.Context, uid, aid string) (*pgxpool.Conn, func()) {
+	conn, err := k.db.Acquire(ctx)
+	if err != nil {
+		return nil, nil
+	}
+	key := "security-schedule|" + uid + "|" + aid
+	var locked bool
+	if err := conn.QueryRow(ctx, `SELECT pg_try_advisory_lock(hashtextextended($1,0))`, key).Scan(&locked); err != nil || !locked {
+		conn.Release()
+		return nil, nil
+	}
+	return conn, func() {
+		defer conn.Release()
+		_, _ = conn.Exec(context.Background(), `SELECT pg_advisory_unlock(hashtextextended($1,0))`, key)
 	}
 }
