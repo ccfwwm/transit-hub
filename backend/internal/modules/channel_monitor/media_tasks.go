@@ -165,18 +165,14 @@ func (s *Service) executeMedia(store DurableMediaStore, task MediaTask, conn my_
 		o.Recover = true
 	}
 	defer cancel()
-	// A task may have waited in the submission queue while the user switched
-	// back to upstream reports. Existing accepted tasks may still be polled.
-	if !poll && !o.OneShot {
-		config, e := s.store.GetTestModelConfig(ctx, task.UserID, task.AdminAccountID)
-		if e != nil || config == nil || normalizeStatusSource(config.StatusSource) != "active" {
-			task.Status = "blocked"
-			task.Message = "主动检测已关闭，未提交生成"
-			task.UpdatedAt = time.Now()
-			_ = store.SaveMediaTask(ctx, task)
-			s.completeMediaTask(task)
-			return
-		}
+	// Old monitor jobs may have accepted a media task before active checks
+	// were disabled. Only poll a recorded task ID and never submit new work.
+	if !poll || task.TaskID == "" {
+		task.Status = "blocked"
+		task.Message = "主动检测已关闭"
+		task.UpdatedAt = time.Now()
+		_ = store.SaveMediaTask(ctx, task)
+		return
 	}
 	if poll {
 		o.TaskID = task.TaskID

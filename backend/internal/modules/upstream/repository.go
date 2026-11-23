@@ -10,12 +10,13 @@ import (
 )
 
 type Repository struct {
-	db *pgxpool.Pool
+	db     *pgxpool.Pool
+	cipher *SiteCredentialCipher
 }
 
-func NewRepository(db *pgxpool.Pool) *Repository {
-	return &Repository{db: db}
-}
+func NewRepository(db *pgxpool.Pool) *Repository { return &Repository{db: db} }
+
+func (r *Repository) SetCredentialCipher(c *SiteCredentialCipher) { r.cipher = c }
 
 func (r *Repository) EnsureSchema(ctx context.Context) error {
 	// upstream_sites is intentionally independent from group_rate_snapshots: site
@@ -89,6 +90,19 @@ func (r *Repository) EnsureSchema(ctx context.Context) error {
 	return err
 }
 
+func (r *Repository) MigrateCredentials(ctx context.Context) error {
+	if r.cipher == nil {
+		return nil
+	}
+	return MigrateCredentialJSON(ctx, r.db, "upstream_sites", "session", "jsonb_typeof(session)='object' AND NOT (session ? 'encrypted')", func(raw []byte) ([]byte, error) {
+		session, err := DecodeStoredSiteSession(r.cipher, raw)
+		if err != nil {
+			return nil, err
+		}
+		return encodeStoredSiteSession(r.cipher, session)
+	})
+}
+
 func (r *Repository) ListSites(ctx context.Context) ([]Site, error) {
 	rows, err := r.db.Query(ctx, `
 		SELECT id, user_id, admin_account_id, name, base_url, platform, requested_platform, account, remark,
@@ -100,7 +114,7 @@ func (r *Repository) ListSites(ctx context.Context) ([]Site, error) {
 	if err != nil {
 		return nil, err
 	}
-	return scanSites(rows)
+	return r.scanSites(rows)
 }
 
 func (r *Repository) ListSitesForUser(ctx context.Context, userID string) ([]Site, error) {
@@ -114,7 +128,7 @@ func (r *Repository) ListSitesForUser(ctx context.Context, userID string) ([]Sit
 	if err != nil {
 		return nil, err
 	}
-	return scanSites(rows)
+	return r.scanSites(rows)
 }
 
 func (r *Repository) SaveSite(ctx context.Context, site Site) error {
@@ -125,7 +139,7 @@ func (r *Repository) SaveSite(ctx context.Context, site Site) error {
 
 	var sessionJSON []byte
 	if site.Session != nil {
-		sessionJSON, err = json.Marshal(site.Session)
+		sessionJSON, err = encodeStoredSiteSession(r.cipher, *site.Session)
 		if err != nil {
 			return err
 		}
@@ -187,7 +201,7 @@ func (r *Repository) DeleteSite(ctx context.Context, userID string, id string) e
 	return tx.Commit(ctx)
 }
 
-func scanSites(rows pgx.Rows) ([]Site, error) {
+func (r *Repository) scanSites(rows pgx.Rows) ([]Site, error) {
 	defer rows.Close()
 
 	sites := make([]Site, 0)
@@ -223,8 +237,8 @@ func scanSites(rows pgx.Rows) ([]Site, error) {
 			return nil, err
 		}
 		if len(sessionJSON) > 0 {
-			var session Session
-			if err := json.Unmarshal(sessionJSON, &session); err != nil {
+			session, err := DecodeStoredSiteSession(r.cipher, sessionJSON)
+			if err != nil {
 				return nil, err
 			}
 			site.Session = &session
@@ -246,4 +260,40 @@ func nullableJSONString(value []byte) any {
 		return nil
 	}
 	return string(value)
+}
+
+const siteSessionScope = "upstream_sites.session"
+
+type storedSiteSession struct {
+	Encrypted string `json:"encrypted"`
+	BaseURL   string
+}
+
+func encodeStoredSiteSession(cipher *SiteCredentialCipher, session Session) ([]byte, error) {
+	raw, err := json.Marshal(session)
+	if err != nil || cipher == nil {
+		return raw, err
+	}
+	ciphertext, err := cipher.ProtectField(siteSessionScope, string(raw))
+	if err != nil {
+		return nil, err
+	}
+	return json.Marshal(storedSiteSession{Encrypted: ciphertext, BaseURL: session.BaseURL})
+}
+
+func DecodeStoredSiteSession(cipher *SiteCredentialCipher, raw []byte) (Session, error) {
+	var session Session
+	var envelope storedSiteSession
+	if err := json.Unmarshal(raw, &envelope); err != nil {
+		return session, err
+	}
+	if envelope.Encrypted != "" {
+		plaintext, err := cipher.OpenField(siteSessionScope, envelope.Encrypted)
+		if err != nil {
+			return session, err
+		}
+		raw = []byte(plaintext)
+	}
+	err := json.Unmarshal(raw, &session)
+	return session, err
 }

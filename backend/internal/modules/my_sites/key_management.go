@@ -23,13 +23,14 @@ import (
 )
 
 type KeyManagement struct {
-	db       *pgxpool.Pool
-	sites    *Service
-	jobs     *jobs.Service
-	platform *upstream.PlatformService
-	mu       sync.Mutex
-	reads    singleflight.Group
-	cache    map[string]keyCacheEntry
+	db         *pgxpool.Pool
+	sites      *Service
+	jobs       *jobs.Service
+	platform   *upstream.PlatformService
+	mu         sync.Mutex
+	reads      singleflight.Group
+	cache      map[string]keyCacheEntry
+	usageSlots chan struct{}
 }
 
 type keyCacheEntry struct {
@@ -38,7 +39,7 @@ type keyCacheEntry struct {
 }
 
 func NewKeyManagement(ctx context.Context, db *pgxpool.Pool, sites *Service, runner *jobs.Service) (*KeyManagement, error) {
-	m := &KeyManagement{db: db, sites: sites, jobs: runner, platform: sites.platformService, cache: make(map[string]keyCacheEntry)}
+	m := &KeyManagement{db: db, sites: sites, jobs: runner, platform: sites.platformService, cache: make(map[string]keyCacheEntry), usageSlots: make(chan struct{}, 4)}
 	_, err := db.Exec(ctx, `
 	CREATE TABLE IF NOT EXISTS managed_binding_names (
 		user_id text NOT NULL, workspace_id text NOT NULL, connection_id text NOT NULL, own_group_id text NOT NULL,
@@ -71,11 +72,14 @@ func NewKeyManagement(ctx context.Context, db *pgxpool.Pool, sites *Service, run
 	}
 	sites.keyManagement = m
 	runner.Register("managed_key_binding", m.runBinding)
+	runner.Register("upstream_key_cleanup", m.runKeyCleanup)
 	return m, nil
 }
 
 func (m *KeyManagement) Register(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/upstream-keys", m.listKeys)
+	mux.HandleFunc("POST /api/upstream-keys/cleanup", m.cleanupKeys)
+	mux.HandleFunc("POST /api/upstream-keys/usage-summary", m.keyUsageSummary)
 	mux.HandleFunc("POST /api/upstream-keys/{site}", m.createKey)
 	mux.HandleFunc("GET /api/upstream-keys/{site}/{key}", m.detailKey)
 	mux.HandleFunc("PATCH /api/upstream-keys/{site}/{key}", m.editKey)

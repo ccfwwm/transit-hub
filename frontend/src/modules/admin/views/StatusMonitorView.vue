@@ -2,12 +2,12 @@
 import PrimaryModelPicker from '../components/PrimaryModelPicker.vue'
 import GroupModelStatus from '../components/GroupModelStatus.vue'
 import MonitorBindingSync from '../components/MonitorBindingSync.vue'
+import OperationProgress from '../components/OperationProgress.vue'
 import StatusSourceControl from '../components/StatusSourceControl.vue'
-import {monitorStatusSource} from '../api/statusSource'
+import { keyJobMessage, previewKeyRotation, rotateKeys } from '../api/keyRotation'
 import GroupKeyPolicy from '../components/GroupKeyPolicy.vue'
 import KeyPolicyEditor from '../components/KeyPolicyEditor.vue'
 import ChannelKeyActions from '../components/ChannelKeyActions.vue'
-import MultiModelEditor from '../components/MultiModelEditor.vue'
 import { submitOperation, checkedOperation, operationJSON, followJob, type OperationJob } from '../api/operations'
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
@@ -37,7 +37,6 @@ import {
   applyChannelMonitorRateRule,
   previewChannelMonitorRateRule,
   bulkSyncAndTakeOverChannelMonitorRules,
-  bulkRunChannelMonitorRules,
   bulkSetChannelMonitorRulesSchedulable,
   bulkUpdateChannelMonitorRules,
   getChannelMonitorSummary,
@@ -48,7 +47,6 @@ import {
   getMonitorMediaPresets,
   resetMonitorMediaTask,
   getMonitorTargetHistory,
-  runChannelMonitorRule,
   setChannelMonitorRuleSchedulable,
   setChannelMonitorRulePriority,
   syncAndTakeOverChannelMonitorRule,
@@ -160,7 +158,7 @@ const debouncedSearch = ref('')
 const channelsLoading = ref(true)
 const channelsReading = ref(false)
 const lastPageVersion = ref(0)
-let lastPageQuery = ''
+const lastPageQuery = ref('')
 let summaryReading = false
 const channelTotal = ref(0)
 const filteredRuleIds = ref<string[]>([])
@@ -179,8 +177,8 @@ const loadChannels = async (poll=false) => {
   try {
     const result = await getChannelMonitorPage(query, controller.signal)
     if (requestID !== pageRequestID) return
-    if(lastPageVersion.value===result.snapshotVersion&&lastPageQuery===queryKey)return
-    lastPageVersion.value=result.snapshotVersion||0;lastPageQuery=queryKey
+    if(lastPageVersion.value===result.snapshotVersion&&lastPageQuery.value===queryKey)return
+    lastPageVersion.value=result.snapshotVersion||0;lastPageQuery.value=queryKey
     channelTotal.value = result.total
     filteredRuleIds.value = result.ruleIds
     selectedRuleIds.value = selectedRuleIds.value.filter(id => result.ruleIds.includes(id))
@@ -606,10 +604,38 @@ const setSelectedMonitoring = (enabled: boolean) =>
 const setSelectedSchedulable = (schedulable: boolean) =>
   runAction(() => bulkSetChannelMonitorRulesSchedulable(selectedRuleIds.value, schedulable), { actionKey: `bulk:dispatch:${schedulable}`, clearSelection: true })
 
-const runSelected = () =>
-  runAction(() => bulkRunChannelMonitorRules(selectedRuleIds.value, selectedGroupID.value || undefined), { actionKey: 'bulk:run' })
+const rotationFilterReady = computed(() =>
+  searchQuery.value === debouncedSearch.value && lastPageQuery.value === JSON.stringify(pageQuery()))
+const rotatingKeys = computed(() => isActionActive('bulk:rotate-keys'))
+const rotationMessage = ref('')
+async function rotateMonitorKeys(scope: 'filtered' | 'selected') {
+  if (!rotationFilterReady.value || rotatingKeys.value) return
+  const ruleIds = [...new Set(scope === 'selected' ? selectedRuleIds.value : filteredRuleIds.value)]
+  if (!ruleIds.length) return
+  const filterAtStart = lastPageQuery.value
+  await runAction(async () => {
+    const targets = { ruleIds }
+    rotationMessage.value = ''
+    const preview = await previewKeyRotation(targets)
+    if (!preview.keys) throw new Error('所选记录没有可轮换的绑定 Key')
+    if (lastPageQuery.value !== filterAtStart || !rotationFilterReady.value) return
+    const skipped = preview.skipped ? `\n将跳过 ${preview.skipped} 条缺少绑定凭据的记录。` : ''
+    if (!window.confirm(`轮换 ${preview.keys} 个上游 Key？${skipped}\n共用同一 Key 的全部转发账号会一起切换，回读验证后撤销旧 Key。`)) return
+    rotationMessage.value = '轮换任务进行中…'
+    try {
+      const job = await rotateKeys(targets, preview.version)
+      const taskSkipped = job.items.filter(item => item.result?.skipped).length
+      rotationMessage.value = `已轮换 ${job.total - job.failed - taskSkipped} 个 Key，${job.failed} 个失败${preview.skipped + taskSkipped ? `，${preview.skipped + taskSkipped} 条跳过` : ''}`
+      await Promise.allSettled([loadSummary('silent'), loadChannels()])
+      const problems = keyJobMessage(job)
+      if (problems) throw new Error(problems)
+    } catch (err) {
+      if (rotationMessage.value === '轮换任务进行中…') rotationMessage.value = ''
+      throw err
+    }
+  }, { actionKey: 'bulk:rotate-keys', refresh: false })
+}
 
-const oneClickRuleIds = () => selectedRuleIds.value.length > 0 ? selectedRuleIds.value : allRuleIds.value
 const syncableRuleIds = computed(() => summary.value.channels
   .filter(channel => channel.supported && channel.adminAccountId.trim() !== '')
   .map(channel => channel.ruleId))
@@ -620,12 +646,6 @@ const oneClickSyncRuleIds = () => {
   if (selectedRuleIds.value.length === 0) return syncableRuleIds.value
   const syncable = new Set(syncableRuleIds.value)
   return selectedRuleIds.value.filter(ruleId => syncable.has(ruleId) || !summary.value.channels.some(channel => channel.ruleId === ruleId))
-}
-
-const runOneClickCheck = () => {
-  const ruleIds = oneClickRuleIds()
-  if (ruleIds.length === 0) return
-  runAction(() => bulkRunChannelMonitorRules(ruleIds, selectedGroupID.value || undefined), { actionKey: 'bulk:one-click-check' })
 }
 
 const runOneClickSync = () => {
@@ -807,7 +827,7 @@ const dispatchButtonClass = (channel: ChannelMonitorChannel): string => (
 )
 function channelPreview(channel:ChannelMonitorChannel){
  if(channel.modelSummary)return channel.modelSummary
- return {id:channel.effectiveTestModelId,model:channel.effectiveTestModelId,status:channel.status==='auto_paused'?'failed':channel.status,source:monitorStatusSource.value,checkedAt:channel.lastCheckedAt,message:channel.lastMessage,timeline:[...(channel.recentResults||[])].filter(v=>v.model===channel.effectiveTestModelId).reverse().map(v=>({status:v.status==='auto_paused'?'failed':v.status,checkedAt:v.createdAt,latencyMs:v.latencyMs}))}
+ return {id:channel.effectiveTestModelId,model:channel.effectiveTestModelId,status:channel.status==='auto_paused'?'failed':channel.status,source:'upstream',checkedAt:channel.lastCheckedAt,message:channel.lastMessage,timeline:[...(channel.recentResults||[])].filter(v=>v.model===channel.effectiveTestModelId).reverse().map(v=>({status:v.status==='auto_paused'?'failed':v.status,checkedAt:v.createdAt,latencyMs:v.latencyMs}))}
 }
 const channelRowClass=(channel:ChannelMonitorChannel)=>{
  if(!channel.enabled)return 'bg-slate-100/80 hover:bg-slate-200/70 dark:bg-slate-800/50 dark:hover:bg-slate-700/60'
@@ -897,15 +917,13 @@ const dispatchBadge = (channel:ChannelMonitorChannel) => {
 
     <div class="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-border/40 bg-surface px-3 py-2">
       <div class="flex flex-wrap items-center gap-3"><StatusSourceControl /><select v-model="dispatchFilter" aria-label="调度状态筛选" class="h-8 rounded-md border border-border/50 bg-surface px-2 text-xs"><option value="all">全部调度状态</option><option value="enabled">可调度</option><option value="paused">全部已停用</option><option value="manual">人工停用</option><option value="balance">余额停用</option><option value="rate">倍率限制</option><option value="auto">检测停用</option><option value="disabled">其他停用</option><option value="unknown">调度未知</option><option value="monitor">监控暂停</option></select></div>
+      <Button type="button" variant="secondary" size="sm" :disabled="!rotationFilterReady || !filteredRuleIds.length || isBulkActionLoading" @click="rotateMonitorKeys('filtered')">轮换当前筛选 Key（{{ filteredRuleIds.length }} 条）</Button>
       <KeyPolicyEditor :ids="selectedRuleIds.length ? selectedRuleIds : filteredRuleIds" />
     </div>
 
     <div v-if="selectedCount > 0" class="flex flex-wrap items-center gap-2 rounded-lg border border-border/50 bg-surface px-4 py-3">
       <span class="mr-2 text-sm font-medium text-foreground">{{ t('admin.channelMonitor.bulk.selected', { count: selectedCount }) }}</span>
-      <Button type="button" variant="secondary" size="sm" class="gap-1.5 !border-blue-500/30 !bg-blue-500/10 !text-blue-700 hover:!bg-blue-500/15 dark:!text-blue-300" :disabled="isBulkActionLoading" @click="runSelected">
-        <RefreshCw :class="['h-3.5 w-3.5', isActionActive('bulk:run') ? 'animate-spin' : '']" />
-        {{ t('admin.channelMonitor.bulk.run') }}
-      </Button>
+      <Button type="button" variant="secondary" size="sm" :disabled="!rotationFilterReady || isBulkActionLoading" @click="rotateMonitorKeys('selected')">轮换已选 Key（{{ selectedCount }} 条）</Button>
       <Button type="button" variant="secondary" size="sm" class="gap-1.5 !border-emerald-500/30 !bg-emerald-500/10 !text-emerald-700 hover:!bg-emerald-500/15 dark:!text-emerald-300" :disabled="isBulkActionLoading" @click="setSelectedMonitoring(true)">
         <Play class="h-3.5 w-3.5" />
         {{ t('admin.channelMonitor.bulk.enableMonitor') }}
@@ -928,7 +946,9 @@ const dispatchBadge = (channel:ChannelMonitorChannel) => {
       </Button>
     </div>
 
-    <div v-if="errorKey" class="rounded-xl border border-warning/20 bg-warning/10 p-3 text-sm text-warning">
+    <OperationProgress :kinds="['key_security']" @completed="loadChannels()" />
+    <p v-if="rotationMessage" role="status" class="text-sm text-muted-foreground">{{ rotationMessage }}</p>
+    <div v-if="errorKey" class="whitespace-pre-line rounded-xl border border-warning/20 bg-warning/10 p-3 text-sm text-warning">
       {{ t(errorKey) }}
     </div>
 
@@ -976,10 +996,6 @@ const dispatchBadge = (channel:ChannelMonitorChannel) => {
           </div>
         </div>
         <div class="flex flex-wrap justify-end gap-2">
-          <Button type="button" variant="secondary" size="sm" class="gap-1.5 !border-blue-500/30 !bg-blue-500/10 !text-blue-700 hover:!bg-blue-500/15 dark:!text-blue-300" :disabled="isBulkActionLoading || allRuleIds.length === 0" @click="runOneClickCheck">
-            <RefreshCw :class="['h-3.5 w-3.5', isActionActive('bulk:one-click-check') ? 'animate-spin' : '']" />
-            {{ t('admin.channelMonitor.bulk.oneClickCheck') }}
-          </Button>
           <Button type="button" variant="secondary" size="sm" class="gap-1.5 !border-violet-500/30 !bg-violet-500/10 !text-violet-700 hover:!bg-violet-500/15 dark:!text-violet-300" :disabled="isBulkActionLoading || syncableRuleIds.length === 0" @click="runOneClickSync">
             <Power :class="['h-3.5 w-3.5', isActionActive('bulk:one-click-sync') ? 'animate-pulse' : '']" />
             {{ t('admin.channelMonitor.bulk.oneClickSync') }}
@@ -1166,7 +1182,7 @@ const dispatchBadge = (channel:ChannelMonitorChannel) => {
                 <td class="px-2 py-2 align-top">
                   <div class="flex flex-wrap justify-end gap-1">
                     <ChannelKeyActions :whitelist-enabled="channel.keyWhitelistEnabled" :connection-id="channel.connectionId" :disabled="isChannelBusy(channel)" />
-                    <Button variant="secondary" size="sm" class="!h-7 !rounded-md !px-2 !text-xs !font-medium whitespace-nowrap !bg-blue-500/10 !text-blue-600" :disabled="isChannelBusy(channel)||(monitorStatusSource==='active'&&!channel.checkSupported)" @click="runAction(()=>monitorStatusSource==='upstream'?syncChannelStatus(channel):runChannelMonitorRule(channel.ruleId,selectedGroupID||undefined),{actionKey:channelActionKey(channel,'run')})">{{monitorStatusSource==='upstream'?'同步状态':'检测模型'}}</Button>
+                    <Button variant="secondary" size="sm" class="!h-7 !rounded-md !px-2 !text-xs !font-medium whitespace-nowrap !bg-blue-500/10 !text-blue-600" :disabled="isChannelBusy(channel)" @click="runAction(()=>syncChannelStatus(channel),{actionKey:channelActionKey(channel,'sync-status')})">同步状态</Button>
                     <Button variant="secondary" size="sm" class="!h-7 !rounded-md !px-2 !text-xs !font-medium whitespace-nowrap !bg-indigo-500/10 !text-indigo-600" :disabled="isChannelBusy(channel)" @click="openGroupEditor(channel)">修改分组</Button>
                     <Button variant="secondary" size="sm" class="!h-7 !rounded-md !px-2 !text-xs !font-medium whitespace-nowrap !bg-amber-500/10 !text-amber-700" :disabled="isChannelBusy(channel)||(!channel.supported&&!channel.repairAvailable)" @click="syncAndTakeOverChannel(channel)">同步接管</Button>
                     <Button variant="secondary" size="sm" class="!h-7 !rounded-md !px-2 !text-xs !font-medium whitespace-nowrap" :class="channel.enabled?'!bg-emerald-500/10 !text-emerald-700 dark:!text-emerald-300':'!bg-slate-500/10 !text-slate-500'" :title="channel.enabled?'点击暂停监控':'尚未开启监控，点击开启；调度状态单独控制'" :aria-label="channel.enabled?'暂停监控':'开启监控'" :disabled="isChannelBusy(channel)" @click="toggleChannelMonitoring(channel)">{{channel.enabled?'监控中':'未监控'}}</Button>
@@ -1326,7 +1342,6 @@ const dispatchBadge = (channel:ChannelMonitorChannel) => {
             {{ t('admin.channelMonitor.testModel.current', { openai: summary.testModelConfig.openaiModelId, anthropic: summary.testModelConfig.anthropicModelId, grok: summary.testModelConfig.grokModelId, minutes: summary.testModelConfig.balanceRefreshIntervalMinutes }) }}
           </div>
         </div>
-        <MultiModelEditor v-model="testModelForm.groupModels" :groups="configurableGroups" />
         <div class="mt-6 flex justify-end gap-2">
           <Button variant="secondary" :disabled="isActionActive('test-model:save')" @click="closeTestModelEditor">{{ t('admin.channelMonitor.actions.cancel') }}</Button>
           <Button class="gap-2" :disabled="isActionActive('test-model:save')" @click="saveTestModelConfig">

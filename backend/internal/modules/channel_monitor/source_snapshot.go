@@ -11,7 +11,7 @@ import (
 // The read snapshot uses the selected display source. This never modifies the
 // rule's dispatch evidence or promotes a reference report into automation.
 func (s *Service) applyStatusSource(ctx context.Context, uid, aid string, base *SummaryResponse) error {
-	if normalizeStatusSource(base.TestModelConfig.StatusSource) != "upstream" || s.health == nil {
+	if s.health == nil {
 		return nil
 	}
 	cache := map[string][]upstream.ModelHealth{}

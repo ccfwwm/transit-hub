@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, ref, onMounted, onBeforeUnmount } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
+import { navigationError } from '@/router'
 import { LayoutDashboard, Network, Settings, LogOut, Globe, Moon, Sun, Percent, Megaphone, ChevronDown, ArrowRightLeft, Activity, KeyRound } from 'lucide-vue-next'
 import { useDark, useToggle } from '@vueuse/core'
 import { useI18n } from 'vue-i18n'
@@ -11,6 +12,9 @@ import type { SystemVersionResponse } from '../api/system'
 
 const route = useRoute()
 const router = useRouter()
+const retryNavigation = () => {
+  if (navigationError.value) void router.push(navigationError.value.path).catch(() => {})
+}
 
 const isDark = useDark({
   selector: 'html',
@@ -198,9 +202,13 @@ const handleLogout = () => {
 
       <!-- Content Area -->
       <main class="flex-1 overflow-auto" :class="isWorkspaceSelectionPage ? '' : 'p-3 md:p-6'">
+        <div v-if="navigationError" role="alert" class="mb-3 flex items-center gap-3 rounded-lg border border-warning/40 bg-warning/10 p-3 text-sm">
+          <span>{{ t(navigationError.message) }}</span>
+          <button type="button" class="font-medium text-primary" @click="retryNavigation">{{ t('admin.navigation.retry') }}</button>
+        </div>
         <router-view v-slot="{ Component }">
           <transition name="fade" mode="out-in">
-            <component :is="Component" />
+            <component :is="Component" :key="route.name" />
           </transition>
         </router-view>
       </main>

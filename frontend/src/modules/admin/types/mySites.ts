@@ -132,7 +132,6 @@ export interface RealConnection {
   upstreamGroupId: string
   upstreamGroupName: string
   upstreamKeyId: string
-  upstreamKey: string
   adminAccountId: string
   adminAccountName: string
   ownGroupIds: string[]
@@ -147,14 +146,12 @@ export interface RealBindRequest {
   upstreamGroupId: string
   upstreamGroupName: string
   upstreamKeyId: string
-  upstreamKey: string
   ownGroupIds: string[]
   groupType: string
 }
 
 export interface UpstreamKeyItem {
   id: string
-  key: string
   name: string
   groupId: string
   groupName: string

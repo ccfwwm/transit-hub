@@ -492,7 +492,6 @@ const submitBind = async () => {
       upstreamGroupId: connectingRate.value.groupId ?? '',
       upstreamGroupName: connectingRate.value.groupName,
       upstreamKeyId: selectedKey.id,
-      upstreamKey: selectedKey.key,
       testModelId: connectTestModel.value, allowWhenUpstreamRateGteOwn: connectAllowHigherRate.value, ownGroupIds: connectOwnGroups.value,
       groupType: selectedGroupType.value,
     })
@@ -1020,7 +1019,6 @@ const historyRowKey = (row: GroupRateHistoryRow, index: number): string => (
                 />
                 <div class="flex-1 min-w-0">
                   <div class="text-sm font-medium text-foreground truncate">{{ keyItem.name }}</div>
-                  <div class="text-xs text-muted-foreground font-mono truncate">{{ keyItem.key.slice(0, 8) }}...{{ keyItem.key.slice(-6) }}</div>
                 </div>
                 <span v-if="keyItem.groupName" class="inline-flex rounded-md border border-border/50 bg-surface-elevated px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground shrink-0">
                   {{ keyItem.groupName }}

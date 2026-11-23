@@ -1,6 +1,7 @@
 package my_sites
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
 	"encoding/json"
@@ -13,6 +14,7 @@ import (
 
 	"transithub/backend/internal/modules/jobs"
 	"transithub/backend/internal/modules/upstream"
+	"transithub/backend/internal/shared/authctx"
 )
 
 func TestSecurityScopeRejectsUnboundStaleAndForeignKeys(t *testing.T) {
@@ -107,6 +109,50 @@ func TestSecurityScopeRejectsUnboundStaleAndForeignKeys(t *testing.T) {
 			items, err := k.targets(ctx, "u", "w", "audit")
 			if err != nil || len(items) != 1 || items[0].ID != "s/7" {
 				t.Fatal("wrong bound targets", items, err)
+			}
+			// The exact filtered rule IDs can include several rows using one Key
+			// and a rule without an eligible binding.
+			shared := c
+			shared.ID = "shared"
+			shared.AdminAccountID = "2212"
+			if err := repo.SaveRealConnection(ctx, shared); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := db.Exec(ctx, `CREATE TABLE channel_monitor_rules(id text primary key,user_id text,admin_account_id text,connection_id text);
+				INSERT INTO channel_monitor_rules VALUES('r1','u','w','c'),('r2','u','w','shared'),('missing','u','w','absent'),('wrong','u','other','foreign');`); err != nil {
+				t.Fatal(err)
+			}
+			svc.SetAdminAccountResolver(realConnectAccounts{id: "w"})
+			mux := http.NewServeMux()
+			k.Register(mux)
+			rotationRequest := func(body string) *httptest.ResponseRecorder {
+				r := httptest.NewRequest("POST", "/api/my-sites/key-security/rotate", bytes.NewBufferString(body))
+				w := httptest.NewRecorder()
+				mux.ServeHTTP(w, r.WithContext(authctx.WithUserID(ctx, "u")))
+				return w
+			}
+			preview := rotationRequest(`{"ruleIds":["r1","r2","missing","wrong"],"preview":true}`)
+			var plan struct {
+				Keys, Skipped int
+				Version       string
+			}
+			if preview.Code != 200 || json.Unmarshal(preview.Body.Bytes(), &plan) != nil || plan.Keys != 1 || plan.Skipped != 2 || plan.Version == "" {
+				t.Fatalf("incorrect deduplicated rotation preview: %d %s", preview.Code, preview.Body.String())
+			}
+			for _, input := range []string{`{"ruleIds":[]}`, `{"connectionIds":[]}`, `{"ruleIds":["r1"],"version":"old"}`} {
+				if response := rotationRequest(input); response.Code != 400 {
+					t.Fatalf("unexpected rotation submission for %s: %d", input, response.Code)
+				}
+			}
+			manager, err := NewKeyManagement(ctx, db, svc, j)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err = manager.removeIndependentKey(ctx, "u", "w", site, "7"); err != errBoundKeyCleanup {
+				t.Fatalf("cleanup failed to protect bound Key: %v", err)
+			}
+			if err = repo.DeleteRealConnection(ctx, shared.ID, "u", "w"); err != nil {
+				t.Fatal(err)
 			}
 			out, err := k.scanSite(ctx, "u", "w", "s", nil)
 			if err != nil {

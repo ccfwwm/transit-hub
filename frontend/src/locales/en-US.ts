@@ -101,6 +101,7 @@ export default {
     }
   },
   admin: {
+    navigation: { updateFailed: 'Page assets are temporarily unavailable.', loadFailed: 'This page could not be opened.', retry: 'Retry' },
     layout: {
       toggleLanguage: 'Toggle language',
       toggleTheme: 'Toggle theme',

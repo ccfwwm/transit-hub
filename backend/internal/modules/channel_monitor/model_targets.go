@@ -6,19 +6,13 @@ import (
 	"fmt"
 	"time"
 
-	media "transithub/backend/internal/modules/monitor_media"
 	"transithub/backend/internal/modules/my_sites"
 	"transithub/backend/internal/modules/upstream"
 )
 
-func normalizeStatusSource(v string) string {
-	if v == "active" {
-		return "active"
-	}
-	return "upstream"
-}
+const upstreamStatusSource = "upstream"
 
-func (s *Service) SetModelHealth(h *upstream.HealthService) { s.health = h }
+func (s *Service) SetModelHealth(h modelHealthReader) { s.health = h }
 func (r *Repository) ensureModelTargets(ctx context.Context) error {
 	_, e := r.db.Exec(ctx, `CREATE TABLE IF NOT EXISTS channel_monitor_model_states(rule_id text NOT NULL,group_id text NOT NULL,fingerprint text NOT NULL,state_json jsonb NOT NULL,updated_at timestamptz NOT NULL DEFAULT now(),PRIMARY KEY(rule_id,group_id,fingerprint));
  INSERT INTO channel_monitor_model_states SELECT rule_id,group_id,state_json->>'fingerprint',state_json,updated_at FROM channel_monitor_group_states WHERE coalesce(state_json->>'fingerprint','')<>'' AND coalesce(jsonb_typeof(state_json->'models'),'null')<>'array' ON CONFLICT DO NOTHING;`)
@@ -61,8 +55,7 @@ func selectedModelConfigs(rule Rule, conn my_sites.RealConnection, state *my_sit
 			}
 		}
 		if len(out) > 0 {
-			// Active monitoring deliberately probes one configured model per group.
-			// Passive collection still imports every status reported upstream.
+			// Dispatch follows the first configured model for the group.
 			return out[:1]
 		}
 	}
@@ -167,10 +160,8 @@ func (s *Service) runRule(ctx context.Context, rule Rule, reason string) (Result
 	if site == nil {
 		return Result{}, fmt.Errorf("上游不存在")
 	}
-	var balanceErr error
 	if rule.Enabled && !rule.ManualPaused {
-		fresh, err := s.refreshSiteBalanceIfStale(ctx, site, config.BalanceRefreshIntervalMinutes)
-		balanceErr = err
+		fresh, _ := s.refreshSiteBalanceIfStale(ctx, site, config.BalanceRefreshIntervalMinutes)
 		if fresh != nil {
 			site = fresh
 		}
@@ -197,7 +188,6 @@ func (s *Service) runRule(ctx context.Context, rule Rule, reason string) (Result
 		groups = []string{rule.MonitorGroupID}
 	}
 	results := []Result{}
-	dedup := map[string]AccountTestResult{}
 	next := time.Now().Add(time.Duration(rule.CheckIntervalMinutes) * time.Minute)
 	for _, gid := range groups {
 		models := []TargetState{}
@@ -207,16 +197,6 @@ func (s *Service) runRule(ctx context.Context, rule Rule, reason string) (Result
 			target, exists := stored[gid+"|"+fp]
 			if !exists {
 				target = TargetState{RuleID: rule.ID, GroupID: gid, Fingerprint: fp, Model: o.ModelID, Mode: o.Mode, Status: StatusUnknown}
-			}
-			// A waiting operation observes only tasks it started. It may finish a
-			// manual check on a disabled rule, without repeating other paid probes.
-			if reason == "operation_poll" && target.Status != StatusGenerating {
-				models = append(models, target)
-				continue
-			}
-			if completion, ok := ctx.Value(completedMediaTaskContextKey{}).(string); ok && completion != "" && target.MediaTaskKey != completion {
-				models = append(models, target)
-				continue
 			}
 			interval := selected.IntervalMinutes
 			if interval <= 0 {
@@ -232,26 +212,26 @@ func (s *Service) runRule(ctx context.Context, rule Rule, reason string) (Result
 					interval = 2
 				}
 			}
-			sameSource := normalizeStatusSource(config.StatusSource) == "active" && target.Source == "active" || normalizeStatusSource(config.StatusSource) == "upstream" && target.Source != "active"
-			if !sameSource && reason != "media_complete" && reason != "operation_poll" {
+			sameSource := target.Source != "active"
+			if !sameSource {
+				target.SourceCheckedAt, target.LatencyMS = nil, nil
 				target.ConsecutiveFailures = 0
 			}
-			if sameSource && target.NextCheckAt != nil && time.Now().Before(*target.NextCheckAt) && reason != "manual" && reason != "media_complete" {
+			if sameSource && target.NextCheckAt != nil && time.Now().Before(*target.NextCheckAt) && reason != "manual" {
 				models = append(models, target)
 				continue
 			}
 			started := time.Now()
 			check := AccountTestResult{}
-			var checkErr error
 			observation := (*time.Time)(nil)
-			source := "active"
+			source := upstreamStatusSource
 			skipSample := false
 			switch {
 			case rule.ManualPaused:
 				target.Status = StatusManualPaused
 				target.Message = "手动停止中，自动恢复已暂停"
 				skipSample = true
-			case !rule.Enabled && reason != "manual" && reason != "media_complete" && reason != "operation_poll":
+			case !rule.Enabled && reason != "manual":
 				models = append(models, target)
 				continue
 			case o.ModelID == "":
@@ -265,7 +245,7 @@ func (s *Service) runRule(ctx context.Context, rule Rule, reason string) (Result
 				target.ConsecutiveFailures = 0
 			default:
 				passive, found := upstream.ModelHealth{}, false
-				if s.health != nil && normalizeStatusSource(config.StatusSource) != "active" && reason != "media_complete" && reason != "operation_poll" {
+				if s.health != nil {
 					passive, found = s.health.MatchConfigured(ctx, site.ID, conn.UpstreamGroupID, conn.UpstreamGroupName, o.ModelID)
 				}
 				if found {
@@ -285,51 +265,15 @@ func (s *Service) runRule(ctx context.Context, rule Rule, reason string) (Result
 					}
 				}
 				if !found {
-					if normalizeStatusSource(config.StatusSource) == "upstream" && reason != "media_complete" && reason != "operation_poll" {
-						source = "upstream"
-						check.Inconclusive = true
-						check.Message = "上游未提供该模型的有效状态"
-					} else if balanceErr != nil {
-						check.Inconclusive = true
-						check.Message = "余额读取暂不可用；保持现有调度"
-					} else if o.Mode == "image" || o.Mode == "video" || o.Mode == "audio" {
-						if _, _, err := media.Resolve(media.Options{Model: o.ModelID, Mode: o.Mode, Prompt: o.Prompt, Size: o.Size, Seconds: o.Seconds, Adapter: o.Adapter, PresetModel: o.PresetModel}); err != nil {
-							target.Status = StatusConfigError
-							target.Message = err.Error()
-							target.ConsecutiveFailures = 0
-							skipSample = true
-						} else {
-							check, checkErr = s.mediaCheck(ctx, rule, *conn, *site, target, o)
-							target.MediaTaskKey = check.MediaTaskKey
-						}
-					} else if cached, ok := dedup[fp]; ok {
-						check = cached
-					} else {
-						check, checkErr = s.platform.ProbeUpstreamConnection(ctx, *site, *conn, o)
-						if checkErr == nil {
-							dedup[fp] = check
-						}
-					}
+					check.Inconclusive = true
+					check.Message = "上游未提供该模型的有效状态"
+					target.LatencyMS = nil
 				}
 				if !skipSample {
 					switch {
-					case check.Reused:
-						skipSample = true
-					case check.Uncertain:
-						target.Status = StatusUnknown
-						target.Message = check.Message
-						target.ConsecutiveFailures = 0
-					case check.Pending:
-						target.Status = StatusGenerating
-						target.Message = check.Message
-						target.ConsecutiveFailures = 0
 					case check.Inconclusive:
 						target.Status = StatusUnknown
 						target.Message = check.Message
-						target.ConsecutiveFailures = 0
-					case checkErr != nil:
-						target.Status = StatusUnknown
-						target.Message = "检测请求暂不可用，保持调度"
 						target.ConsecutiveFailures = 0
 					case check.Success:
 						target.Status = StatusHealthy
@@ -346,13 +290,6 @@ func (s *Service) runRule(ctx context.Context, rule Rule, reason string) (Result
 			}
 			now := time.Now()
 			due := now.Add(time.Duration(interval) * time.Minute)
-			if target.Status == StatusGenerating {
-				delay := 10 * time.Second
-				if taskTime := target.CheckedAt; taskTime != nil && time.Since(*taskTime) > time.Minute {
-					delay = 30 * time.Second
-				}
-				due = now.Add(delay)
-			}
 			target.NextCheckAt = &due
 			if due.Before(next) {
 				next = due

@@ -79,38 +79,7 @@ func (s *Service) SetOperations(j *jobs.Service, p *upstream.KeyPolicies) {
 		switch req.Kind {
 		case "run":
 			rule.MonitorGroupID = req.GroupID
-			reason := "manual"
-			if req.Waiting {
-				reason = "operation_poll"
-			}
-			value, e = s.runRule(ctx, rule, reason)
-			if e == nil {
-				if repo, ok := s.store.(*Repository); ok {
-					states, err := repo.ListTargetStates(ctx, uid, aid)
-					if err != nil {
-						return jobs.Outcome{}, err
-					}
-					pending := false
-					for _, state := range states[rule.ID] {
-						if req.GroupID != "" && req.GroupID != state.GroupID {
-							continue
-						}
-						if state.Status == StatusGenerating {
-							pending = true
-						}
-						for _, model := range state.Models {
-							if model.Status == StatusGenerating {
-								pending = true
-							}
-						}
-					}
-					if pending {
-						req.Waiting = true
-						raw, _ := json.Marshal(req)
-						return jobs.Outcome{Value: value, Pending: true, Delay: 10 * time.Second, NextPayload: raw}, nil
-					}
-				}
-			}
+			value, e = s.runRule(ctx, rule, "manual")
 		case "takeover":
 			value, e = s.SyncAndTakeOverRule(ctx, uid, id)
 		case "schedulable":

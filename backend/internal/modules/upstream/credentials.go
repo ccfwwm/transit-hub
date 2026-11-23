@@ -3,8 +3,12 @@ package upstream
 import (
 	"crypto/aes"
 	"crypto/cipher"
+	"crypto/hmac"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"io"
 	"strings"
@@ -15,7 +19,8 @@ const siteCredentialCipherVersion = "v1"
 // SiteCredentialCipher protects persisted upstream login passwords. The key is
 // supplied only by the server environment and is never exposed through APIs.
 type SiteCredentialCipher struct {
-	aead cipher.AEAD
+	aead     cipher.AEAD
+	indexKey []byte
 }
 
 func NewSiteCredentialCipher(encodedKey string) (*SiteCredentialCipher, error) {
@@ -34,10 +39,16 @@ func NewSiteCredentialCipher(encodedKey string) (*SiteCredentialCipher, error) {
 	if err != nil {
 		return nil, fmt.Errorf("create upstream credential gcm: %w", err)
 	}
-	return &SiteCredentialCipher{aead: aead}, nil
+	index := hmac.New(sha256.New, key)
+	index.Write([]byte("transithub:credential-index:v1"))
+	return &SiteCredentialCipher{aead: aead, indexKey: index.Sum(nil)}, nil
 }
 
 func (c *SiteCredentialCipher) Encrypt(plaintext string) (string, error) {
+	return c.encrypt(plaintext, nil)
+}
+
+func (c *SiteCredentialCipher) encrypt(plaintext string, scope []byte) (string, error) {
 	if c == nil || c.aead == nil {
 		return "", fmt.Errorf("upstream credential cipher unavailable")
 	}
@@ -45,12 +56,16 @@ func (c *SiteCredentialCipher) Encrypt(plaintext string) (string, error) {
 	if _, err := io.ReadFull(rand.Reader, nonce); err != nil {
 		return "", fmt.Errorf("generate upstream credential nonce: %w", err)
 	}
-	sealed := c.aead.Seal(nil, nonce, []byte(plaintext), nil)
+	sealed := c.aead.Seal(nil, nonce, []byte(plaintext), scope)
 	payload := append(nonce, sealed...)
 	return siteCredentialCipherVersion + ":" + base64.RawStdEncoding.EncodeToString(payload), nil
 }
 
 func (c *SiteCredentialCipher) Decrypt(ciphertext string) (string, error) {
+	return c.decrypt(ciphertext, nil)
+}
+
+func (c *SiteCredentialCipher) decrypt(ciphertext string, scope []byte) (string, error) {
 	if c == nil || c.aead == nil {
 		return "", fmt.Errorf("upstream credential cipher unavailable")
 	}
@@ -63,9 +78,63 @@ func (c *SiteCredentialCipher) Decrypt(ciphertext string) (string, error) {
 		return "", fmt.Errorf("invalid upstream credential ciphertext")
 	}
 	nonce := payload[:c.aead.NonceSize()]
-	plaintext, err := c.aead.Open(nil, nonce, payload[c.aead.NonceSize():], nil)
+	plaintext, err := c.aead.Open(nil, nonce, payload[c.aead.NonceSize():], scope)
 	if err != nil {
 		return "", fmt.Errorf("decrypt upstream credential: %w", err)
 	}
 	return string(plaintext), nil
+}
+
+const protectedFieldPrefix = "enc:"
+
+func (c *SiteCredentialCipher) ProtectField(scope, value string) (string, error) {
+	if c == nil || value == "" {
+		return value, nil
+	}
+	sealed, err := c.encrypt(value, []byte(scope))
+	if err != nil {
+		return "", err
+	}
+	return protectedFieldPrefix + sealed, nil
+}
+
+func (c *SiteCredentialCipher) OpenField(scope, value string) (string, error) {
+	if !strings.HasPrefix(value, protectedFieldPrefix) {
+		return value, nil
+	}
+	return c.decrypt(strings.TrimPrefix(value, protectedFieldPrefix), []byte(scope))
+}
+
+func (c *SiteCredentialCipher) ProtectJSON(scope string, value []byte) ([]byte, error) {
+	if c == nil || len(value) == 0 {
+		return value, nil
+	}
+	sealed, err := c.ProtectField(scope, string(value))
+	if err != nil {
+		return nil, err
+	}
+	return json.Marshal(sealed)
+}
+
+func (c *SiteCredentialCipher) OpenJSON(scope string, value []byte) ([]byte, error) {
+	if len(value) == 0 || value[0] != '"' {
+		return value, nil
+	}
+	var sealed string
+	if err := json.Unmarshal(value, &sealed); err != nil {
+		return nil, err
+	}
+	opened, err := c.OpenField(scope, sealed)
+	return []byte(opened), err
+}
+
+func (c *SiteCredentialCipher) SecretIndex(scope, value string) string {
+	if c == nil || value == "" {
+		return ""
+	}
+	h := hmac.New(sha256.New, c.indexKey)
+	h.Write([]byte(scope))
+	h.Write([]byte{0})
+	h.Write([]byte(value))
+	return hex.EncodeToString(h.Sum(nil))
 }

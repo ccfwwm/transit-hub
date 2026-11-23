@@ -72,6 +72,9 @@ const (
 type MetricValue struct {
 	Value   *float64 `json:"value"`
 	Display string   `json:"display"`
+	State   string   `json:"state,omitempty"`
+	Source  string   `json:"source,omitempty"`
+	Date    string   `json:"date,omitempty"`
 }
 
 type GroupInfo struct {

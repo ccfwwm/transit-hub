@@ -86,6 +86,7 @@ type Service struct {
 	repairMu        sync.Mutex
 	repository      StateRepository
 	connRepository  RealConnectionRepository
+	storageCipher   *upstream.SiteCredentialCipher
 	platformService *upstream.PlatformService
 	upstreamLookup  UpstreamSiteLookup
 	botNotifier     BotNotifier
@@ -108,6 +109,7 @@ func NewService(repository StateRepository, platformService *upstream.PlatformSe
 func (s *Service) EnsureSchema(ctx context.Context) error {
 	if repo, ok := s.repository.(*Repository); ok {
 		s.connRepository = repo
+		s.storageCipher = repo.cipher
 		return repo.EnsureSchema(ctx)
 	}
 	return nil
@@ -757,6 +759,9 @@ func (s *Service) ListUpstreamKeys(ctx context.Context, userID string, siteID st
 		log.Printf("[list-upstream-keys] 获取上游 key 列表失败 site=%s platform=%s err=%v", upstreamSite.Name, session.Platform, err)
 		return nil, err
 	}
+	for i := range keys {
+		keys[i].Key = ""
+	}
 	return keys, nil
 }
 
@@ -792,15 +797,22 @@ func (s *Service) RealBind(ctx context.Context, userID string, req RealBindReque
 		groupName = req.UpstreamGroupID
 	}
 
-	// new-api 场景：token 列表中的 key 是脱敏的，需要获取完整 key
 	upstreamKey := strings.TrimSpace(req.UpstreamKey)
-	if upstreamSite.Session != nil && upstreamSite.Session.Platform == upstream.PlatformNewAPI {
-		fullKey, fErr := s.platformService.FetchNewAPITokenKey(*upstreamSite.Session, strings.TrimSpace(req.UpstreamKeyID))
-		if fErr != nil {
-			log.Printf("[real-bind] new-api 获取完整 token key 失败 token_id=%s err=%v", req.UpstreamKeyID, fErr)
-			return RealConnectResponse{}, fErr
+	if upstreamSite.Session == nil {
+		return RealConnectResponse{}, requestError(ErrorRequest)
+	}
+	if isNewAPI || upstreamKey == "" {
+		record, _, err := s.platformService.ReadSecurityKey(ctx, *upstreamSite.Session, strings.TrimSpace(req.UpstreamKeyID))
+		if err != nil {
+			return RealConnectResponse{}, err
 		}
-		upstreamKey = fullKey
+		if !upstream.SecurityKeyGroupMatches(upstreamSite.Platform, record, req.UpstreamGroupID) {
+			return RealConnectResponse{}, fmt.Errorf("上游 Key 不属于所选分组")
+		}
+		upstreamKey, err = s.platformService.KeySecret(ctx, *upstreamSite.Session, req.UpstreamKeyID, record)
+		if err != nil {
+			return RealConnectResponse{}, err
+		}
 	}
 
 	connID, err := randomConnID()

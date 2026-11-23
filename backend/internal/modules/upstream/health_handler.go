@@ -7,7 +7,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"strconv"
 	"time"
 
 	"transithub/backend/internal/modules/jobs"
@@ -350,52 +349,11 @@ func (s *HealthService) Register(mux *http.ServeMux, j *jobs.Service, policies *
 		httpjson.Write(w, 201, v)
 	})
 	mux.HandleFunc("POST /api/upstream-previews/{id}/probes", func(w http.ResponseWriter, r *http.Request) {
-		uid, aid, e := s.scope(r)
-		if e != nil {
-			httpjson.WriteError(w, 401, "未登录")
+		if _, _, err := s.scope(r); err != nil {
+			httpjson.WriteError(w, http.StatusUnauthorized, "未登录")
 			return
 		}
-		data, _, e := s.preview(r.Context(), uid, aid, r.PathValue("id"))
-		if e != nil || data.Login == nil {
-			httpjson.WriteError(w, 400, "请先连接上游")
-			return
-		}
-		var selections []probeSelection
-		if httpjson.Decode(r, &selections) != nil || len(selections) == 0 || len(selections) > 30 {
-			httpjson.WriteError(w, 400, "选择 1 至 30 个检测模型")
-			return
-		}
-		items := []jobs.Item{}
-		for _, sel := range selections {
-			valid := false
-			for _, g := range data.Login.Metrics.Groups {
-				if g.ID == sel.GroupID {
-					valid = true
-				}
-			}
-			if !valid || sel.Model == "" {
-				httpjson.WriteError(w, 400, "模型或分组无效")
-				return
-			}
-			id, _ := randomID()
-			id = "probe_" + id
-			encrypted, e := s.seal(previewProbe{Selection: sel, Phase: "new", StartedAt: time.Now()})
-			if e != nil {
-				httpjson.WriteError(w, 500, "无法保存检测任务")
-				return
-			}
-			if _, e = s.db.Exec(r.Context(), `INSERT INTO upstream_preview_probes VALUES($1,$2,$3,$4,$5,now())`, id, r.PathValue("id"), uid, aid, encrypted); e != nil {
-				httpjson.WriteError(w, 500, "无法保存检测任务")
-				return
-			}
-			items = append(items, jobs.Item{ID: id})
-		}
-		job, e := j.Submit(r.Context(), uid, aid, "health_probe", items)
-		if e != nil {
-			httpjson.WriteError(w, 400, e.Error())
-			return
-		}
-		httpjson.Write(w, 202, job)
+		httpjson.WriteError(w, http.StatusGone, "主动检测已关闭，请在上游 Key 详情中手动测试")
 	})
 }
 func (s *HealthService) runPreviewProbe(ctx context.Context, uid, aid, id string, p *KeyPolicies) (jobs.Outcome, error) {
@@ -408,7 +366,7 @@ func (s *HealthService) runPreviewProbe(ctx context.Context, uid, aid, id string
 	if e = s.open(encrypted, &task); e != nil {
 		return jobs.Outcome{}, e
 	}
-	data, view, e := s.preview(ctx, uid, aid, previewID)
+	data, _, e := s.preview(ctx, uid, aid, previewID)
 	if e != nil {
 		return jobs.Outcome{}, e
 	}
@@ -425,39 +383,7 @@ func (s *HealthService) runPreviewProbe(ctx context.Context, uid, aid, id string
 		return e
 	}
 	if task.Phase == "new" {
-		if health, ok := s.Match(ctx, previewID, task.Selection.GroupID, "", task.Selection.Model); ok {
-			return jobs.Outcome{Value: health}, nil
-		}
-		if !s.previewActiveEnabled(ctx, uid, aid) {
-			return jobs.Outcome{}, fmt.Errorf("请先开启主动检测；上游模式不会发起真实模型调用")
-		}
-		ips, e := p.AllowedIPsForGroup(ctx, uid, aid, view.CommittedSiteID, task.Selection.GroupID)
-		if e != nil {
-			return jobs.Outcome{}, e
-		}
-		task.Phase = "creating_key"
-		task.KeyName = previewKeyName(id)
-		if e = save(); e != nil {
-			return jobs.Outcome{}, e
-		}
-		if session.Platform == PlatformSub2API {
-			gid, e := strconv.Atoi(task.Selection.GroupID)
-			if e != nil {
-				return jobs.Outcome{}, e
-			}
-			task.KeyID, task.Key, e = s.platform.CreateSub2APIKey(session, task.KeyName, gid, ips)
-		} else {
-			task.KeyID, task.Key, e = s.platform.CreateNewAPIToken(session, task.KeyName, task.Selection.GroupID, ips)
-		}
-		if e != nil {
-			task.Phase = "creating_key"
-			_ = save()
-			return jobs.Outcome{Pending: true, Delay: 20 * time.Second, Value: map[string]any{"status": "reconciling_key", "message": "正在查询预检 Key 创建结果"}}, nil
-		}
-		task.Phase = "ready"
-		if e = save(); e != nil {
-			return jobs.Outcome{}, e
-		}
+		return jobs.Outcome{}, fmt.Errorf("主动检测已关闭")
 	}
 	if task.Phase == "creating_key" {
 		var keys []Sub2APIKeyItem
@@ -502,7 +428,7 @@ func (s *HealthService) runPreviewProbe(ctx context.Context, uid, aid, id string
 	if task.Phase == "key_error" {
 		return jobs.Outcome{}, fmt.Errorf("预检 Key 创建失败，请重新发起预检")
 	}
-	if task.Phase == "ready" && !s.previewActiveEnabled(ctx, uid, aid) {
+	if task.Phase == "ready" {
 		task.Phase = "cleanup"
 		task.Result.Inconclusive = true
 		task.Result.Message = "主动检测已关闭，未提交生成"
@@ -510,7 +436,7 @@ func (s *HealthService) runPreviewProbe(ctx context.Context, uid, aid, id string
 			return jobs.Outcome{}, e
 		}
 	}
-	if task.Phase == "ready" || task.Phase == "polling" {
+	if task.Phase == "polling" && task.TaskID != "" {
 		sel := task.Selection
 		o := APIKeyProbeOptions{BaseURL: session.BaseURL, APIKey: task.Key, Platform: "openai", ModelID: sel.Model, Mode: sel.Mode, Adapter: sel.Adapter, PresetModel: sel.PresetModel, Size: sel.Size, Seconds: sel.Seconds, Prompt: sel.Prompt, TaskID: task.TaskID, IdempotencyKey: id, InsecureSkipTLS: session.InsecureSkipTLS}
 		if o.Mode == "" {
@@ -579,10 +505,4 @@ func (s *HealthService) runPreviewProbe(ctx context.Context, uid, aid, id string
 		}
 	}
 	return jobs.Outcome{Value: map[string]any{"success": task.Result.Success, "message": task.Result.Message, "inconclusive": task.Result.Inconclusive, "model": task.Selection.Model, "groupId": task.Selection.GroupID, "latencyMs": task.Result.LatencyMS}}, nil
-}
-
-func (s *HealthService) previewActiveEnabled(ctx context.Context, uid, aid string) bool {
-	var source string
-	err := s.db.QueryRow(ctx, `SELECT status_source FROM channel_monitor_test_model_configs WHERE user_id=$1 AND admin_account_id=$2`, uid, aid).Scan(&source)
-	return err == nil && source == "active"
 }

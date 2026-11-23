@@ -22,7 +22,7 @@ func (k *KeySecurity) ObserveKeys(values []upstream.KeySecurityObservation) {
 		if v.AuthFingerprint == "" {
 			continue
 		}
-		rows, e := k.db.Query(ctx, `SELECT s.id,s.user_id,s.admin_account_id FROM upstream_sites s JOIN key_security_policies p ON p.user_id=s.user_id AND p.admin_account_id=s.admin_account_id WHERE p.audit_enabled AND (rtrim(s.base_url,'/')=$1 OR rtrim(s.session->>'BaseURL','/')=$1) AND md5(coalesce(s.session->>'AccessToken','')||'|'||coalesce(s.session->>'Cookie','')||'|'||coalesce(s.session->>'UserID',''))=$2 AND EXISTS(SELECT 1 FROM real_connections c WHERE c.user_id=s.user_id AND c.workspace_admin_account_id=s.admin_account_id AND c.upstream_site_id=s.id AND c.upstream_key_id=$3 AND c.admin_account_id<>'' AND c.upstream_key<>'')`, v.BaseURL, v.AuthFingerprint, v.KeyID)
+		rows, e := k.db.Query(ctx, `SELECT s.id,s.user_id,s.admin_account_id,s.session FROM upstream_sites s JOIN key_security_policies p ON p.user_id=s.user_id AND p.admin_account_id=s.admin_account_id WHERE p.audit_enabled AND (rtrim(s.base_url,'/')=$1 OR rtrim(s.session->>'BaseURL','/')=$1) AND EXISTS(SELECT 1 FROM real_connections c WHERE c.user_id=s.user_id AND c.workspace_admin_account_id=s.admin_account_id AND c.upstream_site_id=s.id AND c.upstream_key_id=$2 AND c.admin_account_id<>'' AND c.upstream_key<>'')`, v.BaseURL, v.KeyID)
 		if e != nil {
 			return
 		}
@@ -30,7 +30,12 @@ func (k *KeySecurity) ObserveKeys(values []upstream.KeySecurityObservation) {
 		scopes := []scope{}
 		for rows.Next() {
 			var s scope
-			if rows.Scan(&s.site, &s.uid, &s.aid) == nil {
+			var raw []byte
+			if rows.Scan(&s.site, &s.uid, &s.aid, &raw) != nil || len(raw) == 0 {
+				continue
+			}
+			session, err := upstream.DecodeStoredSiteSession(k.sites.storageCipher, raw)
+			if err == nil && upstream.KeyObservationAuth(session.AccessToken, session.Cookie, session.UserID) == v.AuthFingerprint {
 				scopes = append(scopes, s)
 			}
 		}

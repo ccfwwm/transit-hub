@@ -7,14 +7,29 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"transithub/backend/internal/modules/upstream"
 )
 
 type Repository struct {
-	db *pgxpool.Pool
+	db     *pgxpool.Pool
+	cipher *upstream.SiteCredentialCipher
 }
 
 func NewRepository(db *pgxpool.Pool) *Repository {
 	return &Repository{db: db}
+}
+
+const notificationSettingsScope = "notification_channel_settings.settings"
+
+func (r *Repository) SetCredentialCipher(cipher *upstream.SiteCredentialCipher) { r.cipher = cipher }
+
+func (r *Repository) MigrateCredentials(ctx context.Context) error {
+	if r.cipher == nil {
+		return nil
+	}
+	return upstream.MigrateCredentialJSON(ctx, r.db, "notification_channel_settings", "settings", "jsonb_typeof(settings)='object'", func(raw []byte) ([]byte, error) {
+		return r.cipher.ProtectJSON(notificationSettingsScope, raw)
+	})
 }
 
 func (r *Repository) EnsureSchema(ctx context.Context) error {
@@ -113,6 +128,10 @@ func (r *Repository) GetNotificationChannels(ctx context.Context, userID string,
 		}
 		return settings, err
 	}
+	settingsJSON, err := r.cipher.OpenJSON(notificationSettingsScope, settingsJSON)
+	if err != nil {
+		return settings, err
+	}
 	if err := unmarshalNotificationChannelSettings(settingsJSON, &settings); err != nil {
 		return settings, err
 	}
@@ -146,6 +165,10 @@ func unmarshalNotificationChannelSettings(data []byte, settings *NotificationCha
 
 func (r *Repository) SaveNotificationChannels(ctx context.Context, userID string, adminAccountID string, settings NotificationChannelSettings) error {
 	settingsJSON, err := json.Marshal(settings)
+	if err != nil {
+		return err
+	}
+	settingsJSON, err = r.cipher.ProtectJSON(notificationSettingsScope, settingsJSON)
 	if err != nil {
 		return err
 	}

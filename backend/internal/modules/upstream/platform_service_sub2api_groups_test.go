@@ -347,7 +347,7 @@ func TestLoginAutoFallsBackToSub2APIWhenDashboardStatsUnavailable(t *testing.T) 
 				"balance":         12.5,
 				"total_recharged": 30.0,
 			}})
-		case "/api/v1/usage/dashboard/stats":
+		case "/api/v1/usage/dashboard/stats", "/api/v1/usage/dashboard/snapshot-v2":
 			w.Header().Set("Content-Type", "text/html")
 			w.WriteHeader(http.StatusNotFound)
 			_, _ = w.Write([]byte("<html><body>not found</body></html>"))
@@ -441,4 +441,4 @@ func TestSub2APIGroupRateOverrides(t *testing.T) {
 			t.Errorf("unexpected overrides: %v", got)
 		}
 	})
-}
+}

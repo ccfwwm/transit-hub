@@ -7,14 +7,82 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"transithub/backend/internal/modules/upstream"
 )
 
 type Repository struct {
-	db *pgxpool.Pool
+	db     *pgxpool.Pool
+	cipher *upstream.SiteCredentialCipher
 }
 
 func NewRepository(db *pgxpool.Pool) *Repository {
 	return &Repository{db: db}
+}
+
+func (r *Repository) SetCredentialCipher(cipher *upstream.SiteCredentialCipher) { r.cipher = cipher }
+
+const stateSessionScope = "my_site_states.session"
+const connectionKeyScope = "real_connections.upstream_key"
+
+func (r *Repository) MigrateCredentials(ctx context.Context) error {
+	if r.cipher == nil {
+		return nil
+	}
+	if err := upstream.MigrateCredentialJSON(ctx, r.db, "my_site_states", "session", "jsonb_typeof(session)='object'", func(raw []byte) ([]byte, error) {
+		return r.cipher.ProtectJSON(stateSessionScope, raw)
+	}); err != nil {
+		return err
+	}
+	tx, err := r.db.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	rows, err := tx.Query(ctx, `SELECT id, upstream_key FROM real_connections WHERE upstream_key<>'' AND upstream_key_fingerprint='' FOR UPDATE`)
+	if err != nil {
+		return err
+	}
+	type row struct{ id, key string }
+	var values []row
+	for rows.Next() {
+		var value row
+		if err = rows.Scan(&value.id, &value.key); err != nil {
+			rows.Close()
+			return err
+		}
+		values = append(values, value)
+	}
+	err = rows.Err()
+	rows.Close()
+	if err != nil {
+		return err
+	}
+	for _, value := range values {
+		secret, err := r.cipher.OpenField(connectionKeyScope, value.key)
+		if err != nil {
+			return err
+		}
+		protected, fingerprint, err := protectConnectionKey(r.cipher, secret)
+		if err != nil {
+			return err
+		}
+		if _, err = tx.Exec(ctx, `UPDATE real_connections SET upstream_key=$2,upstream_key_fingerprint=$3 WHERE id=$1`, value.id, protected, fingerprint); err != nil {
+			return err
+		}
+	}
+	return tx.Commit(ctx)
+}
+
+func protectConnectionKey(cipher *upstream.SiteCredentialCipher, value string) (string, string, error) {
+	protected, err := cipher.ProtectField(connectionKeyScope, value)
+	return protected, cipher.SecretIndex(connectionKeyScope, value), err
+}
+
+func connectionKeyMatch(cipher *upstream.SiteCredentialCipher, value string) string {
+	if cipher == nil {
+		return value
+	}
+	return cipher.SecretIndex(connectionKeyScope, value)
 }
 
 func (r *Repository) EnsureSchema(ctx context.Context) error {
@@ -77,7 +145,8 @@ func (r *Repository) EnsureSchema(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	_, err = r.db.Exec(ctx, `ALTER TABLE real_connections ADD COLUMN IF NOT EXISTS upstream_api_url text NOT NULL DEFAULT ''`)
+	_, err = r.db.Exec(ctx, `ALTER TABLE real_connections ADD COLUMN IF NOT EXISTS upstream_api_url text NOT NULL DEFAULT '',
+		ADD COLUMN IF NOT EXISTS upstream_key_fingerprint text NOT NULL DEFAULT ''`)
 	return err
 }
 
@@ -91,6 +160,10 @@ func (r *Repository) Get(ctx context.Context, userID string, adminAccountID stri
 		if err == pgx.ErrNoRows {
 			return nil, nil
 		}
+		return nil, err
+	}
+	sessionJSON, err := r.cipher.OpenJSON(stateSessionScope, sessionJSON)
+	if err != nil {
 		return nil, err
 	}
 	if err := json.Unmarshal(sessionJSON, &state.Session); err != nil {
@@ -107,6 +180,10 @@ func (r *Repository) Get(ctx context.Context, userID string, adminAccountID stri
 
 func (r *Repository) Save(ctx context.Context, state State) error {
 	sessionJSON, err := json.Marshal(state.Session)
+	if err != nil {
+		return err
+	}
+	sessionJSON, err = r.cipher.ProtectJSON(stateSessionScope, sessionJSON)
 	if err != nil {
 		return err
 	}
@@ -138,12 +215,16 @@ func (r *Repository) SaveRealConnection(ctx context.Context, conn RealConnection
 	if err != nil {
 		return err
 	}
+	key, fingerprint, err := protectConnectionKey(r.cipher, conn.UpstreamKey)
+	if err != nil {
+		return err
+	}
 	_, err = r.db.Exec(ctx, `
-		INSERT INTO real_connections (id, user_id, workspace_admin_account_id, upstream_site_id, upstream_group_id, upstream_group_name, upstream_key_id, upstream_key, admin_account_id, admin_account_name, own_group_ids, group_type, created_at, upstream_api_url)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::jsonb, $12, $13, $14)
+		INSERT INTO real_connections (id, user_id, workspace_admin_account_id, upstream_site_id, upstream_group_id, upstream_group_name, upstream_key_id, upstream_key, admin_account_id, admin_account_name, own_group_ids, group_type, created_at, upstream_api_url, upstream_key_fingerprint)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::jsonb, $12, $13, $14, $15)
 	`, conn.ID, conn.UserID, conn.WorkspaceAdminAccountID, conn.UpstreamSiteID, conn.UpstreamGroupID, conn.UpstreamGroupName,
-		conn.UpstreamKeyID, conn.UpstreamKey, conn.AdminAccountID, conn.AdminAccountName,
-		string(ownGroupIDsJSON), conn.GroupType, conn.CreatedAt, conn.UpstreamAPIURL)
+		conn.UpstreamKeyID, key, conn.AdminAccountID, conn.AdminAccountName,
+		string(ownGroupIDsJSON), conn.GroupType, conn.CreatedAt, conn.UpstreamAPIURL, fingerprint)
 	return err
 }
 
@@ -186,6 +267,11 @@ func (r *Repository) ListRealConnections(ctx context.Context, userID string, adm
 		if err := json.Unmarshal(ownGroupIDsJSON, &conn.OwnGroupIDs); err != nil {
 			return nil, err
 		}
+		key, err := r.cipher.OpenField(connectionKeyScope, conn.UpstreamKey)
+		if err != nil {
+			return nil, err
+		}
+		conn.UpstreamKey = key
 		conn.CreatedAt = createdAt.Format(time.RFC3339)
 		connections = append(connections, conn)
 	}
@@ -214,6 +300,11 @@ func (r *Repository) GetRealConnection(ctx context.Context, id string, userID st
 	if err := json.Unmarshal(ownGroupIDsJSON, &conn.OwnGroupIDs); err != nil {
 		return nil, err
 	}
+	key, err := r.cipher.OpenField(connectionKeyScope, conn.UpstreamKey)
+	if err != nil {
+		return nil, err
+	}
+	conn.UpstreamKey = key
 	conn.CreatedAt = createdAt.Format(time.RFC3339)
 	return &conn, nil
 }

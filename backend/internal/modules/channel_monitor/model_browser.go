@@ -36,19 +36,10 @@ func (h *Handler) registerModelBrowser(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/channel-monitor/rules/{id}/models/check", h.checkModel)
 }
 func (h *Handler) statusSource(w http.ResponseWriter, r *http.Request) {
-	uid, aid, e := h.scope(r)
+	uid, _, e := h.scope(r)
 	if e != nil {
 		writeMonitorError(w, e)
 		return
-	}
-	config, e := h.service.store.GetTestModelConfig(r.Context(), uid, aid)
-	if e != nil {
-		writeMonitorError(w, e)
-		return
-	}
-	source := "upstream"
-	if config != nil {
-		source = normalizeStatusSource(config.StatusSource)
 	}
 	if r.Method == http.MethodPatch {
 		var req struct {
@@ -62,9 +53,8 @@ func (h *Handler) statusSource(w http.ResponseWriter, r *http.Request) {
 			writeMonitorError(w, e)
 			return
 		}
-		source = req.Source
 	}
-	httpjson.Write(w, 200, map[string]any{"source": source})
+	httpjson.Write(w, 200, map[string]any{"source": upstreamStatusSource})
 }
 func (s *Service) registerCatalogJob(j *jobs.Service) {
 	j.Register("model_catalog", func(ctx context.Context, uid, aid, id string, _ json.RawMessage) (jobs.Outcome, error) {
@@ -144,11 +134,7 @@ func (h *Handler) browseModels(w http.ResponseWriter, r *http.Request) {
 		writeMonitorError(w, e)
 		return
 	}
-	source := "upstream"
-	if config != nil {
-		source = normalizeStatusSource(config.StatusSource)
-	}
-	out := modelBrowser{Items: []upstream.ModelHealth{}, References: []upstream.ModelHealth{}, Source: source}
+	out := modelBrowser{Items: []upstream.ModelHealth{}, References: []upstream.ModelHealth{}, Source: upstreamStatusSource}
 	if rule, err := h.service.requireRule(r.Context(), id, uid, aid); err == nil {
 		if state, err := h.service.states.Get(r.Context(), uid, aid); err == nil && config != nil {
 			gid := r.URL.Query().Get("monitorGroupId")
@@ -177,7 +163,7 @@ func (h *Handler) browseModels(w http.ResponseWriter, r *http.Request) {
 			byModel[model] = upstream.ModelHealth{ID: model, Model: model, GroupID: conn.UpstreamGroupID, GroupName: conn.UpstreamGroupName, Status: StatusUnknown, Source: "catalog", Timeline: []upstream.HealthPoint{}}
 		}
 	}
-	if (source == "upstream" || r.URL.Query().Get("includeReported") == "1") && h.service.health != nil {
+	if h.service.health != nil {
 		q := r.URL.Query()
 		q.Set("pageSize", "100")
 		q.Set("groupId", conn.UpstreamGroupID)
@@ -191,9 +177,6 @@ func (h *Handler) browseModels(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			for _, m := range v.Items {
-				if source == "active" && m.Model == out.MonitoredModel {
-					continue
-				}
 				if m.Scope == "infrastructure" || m.Scope == "channel_reference" || m.Source == "newapi_kuma" && m.GroupID != conn.UpstreamGroupID {
 					out.References = append(out.References, m)
 					continue
@@ -206,53 +189,6 @@ func (h *Handler) browseModels(w http.ResponseWriter, r *http.Request) {
 			if page*100 >= v.Total {
 				break
 			}
-		}
-	}
-	if source == "active" {
-		states, err := repo.modelStates(r.Context(), id)
-		if err != nil {
-			writeMonitorError(w, err)
-			return
-		}
-		current, err := repo.ListTargetStates(r.Context(), uid, aid)
-		if err != nil {
-			writeMonitorError(w, err)
-			return
-		}
-		valid := map[string]bool{}
-		for _, group := range current[id] {
-			for _, m := range group.Models {
-				valid[m.Fingerprint] = true
-			}
-		}
-		for _, m := range states {
-			if !valid[m.Fingerprint] || m.Source != "active" {
-				continue
-			}
-			previous, exists := byModel[m.Model]
-			if exists && previous.Source == "active" && previous.CheckedAt != nil && (m.CheckedAt == nil || !m.CheckedAt.After(*previous.CheckedAt)) {
-				continue
-			}
-			health := upstream.ModelHealth{ID: m.Model, Model: m.Model, GroupID: conn.UpstreamGroupID, GroupName: conn.UpstreamGroupName, Status: m.Status, Source: "active", CheckedAt: m.CheckedAt, LatencyMS: m.LatencyMS, Message: m.Message, Timeline: []upstream.HealthPoint{}}
-			rows, err := repo.db.Query(r.Context(), `SELECT status,created_at,latency_ms FROM channel_monitor_results WHERE rule_id=$1 AND group_id=$2 AND model=$3 AND message NOT LIKE '上游已报告%' ORDER BY created_at DESC LIMIT 60`, id, m.GroupID, m.Model)
-			if err != nil {
-				writeMonitorError(w, err)
-				return
-			}
-			for rows.Next() {
-				var p upstream.HealthPoint
-				if err = rows.Scan(&p.Status, &p.CheckedAt, &p.LatencyMS); err != nil {
-					rows.Close()
-					writeMonitorError(w, err)
-					return
-				}
-				health.Timeline = append(health.Timeline, p)
-			}
-			rows.Close()
-			for i, j := 0, len(health.Timeline)-1; i < j; i, j = i+1, j-1 {
-				health.Timeline[i], health.Timeline[j] = health.Timeline[j], health.Timeline[i]
-			}
-			byModel[m.Model] = health
 		}
 	}
 	out.ManualChecks, e = repo.manualChecks(r.Context(), uid, aid, id)

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log"
 	"math"
+	"net/url"
 	"sort"
 	"strings"
 	"sync"
@@ -87,10 +88,15 @@ type AdminAccountResolver interface {
 	RequireCurrentID(ctx context.Context, userID string) (string, error)
 }
 
+type modelHealthReader interface {
+	MatchConfigured(context.Context, string, string, string, string) (upstream.ModelHealth, bool)
+	Page(context.Context, string, string, string, url.Values) (upstream.HealthPage, error)
+}
+
 type Service struct {
 	bindingSync      monitorBindingSync
 	shadowAutomation bool
-	health           *upstream.HealthService
+	health           modelHealthReader
 	jobs             *jobs.Service
 	keyPolicies      *upstream.KeyPolicies
 	store            Store
@@ -1125,7 +1131,7 @@ func (s *Service) UpdateTestModelConfig(ctx context.Context, userID string, req 
 		if *req.StatusSource != "upstream" && *req.StatusSource != "active" {
 			return TestModelConfig{}, fmt.Errorf("无效状态来源")
 		}
-		config.StatusSource = *req.StatusSource
+		config.StatusSource = upstreamStatusSource
 	}
 	if req.OpenAIModelID != nil {
 		config.OpenAIModelID = defaultIfBlank(*req.OpenAIModelID, DefaultOpenAITestModel)
@@ -1781,21 +1787,24 @@ func (s *Service) runRuleLegacy(ctx context.Context, rule Rule, reason string) (
 		return finish(StatusBalancePaused, false, fmt.Sprintf("余额 %.2f 低于阈值 %.2f，已自动停止", *balance, rule.BalanceThreshold), nil, "")
 	}
 
-	testModel, testOptions := effectiveTestOptions(rule, *conn, nil, testModelConfig)
-	if strings.TrimSpace(testModel) == "" {
-		return finish(StatusUnsupported, false, "当前分组未配置主动检测模型，已跳过检测和自动停启", nil, "")
+	testModel, _ := effectiveTestOptions(rule, *conn, nil, testModelConfig)
+	if testModel == "" {
+		return finish(StatusUnsupported, false, "当前分组未配置状态参考模型", nil, "")
 	}
-	testResult, testErr := s.platform.ProbeUpstreamConnection(ctx, *site, *conn, testOptions)
-	if strings.TrimSpace(testResult.Model) == "" {
-		testResult.Model = testModel
+	passive, found := upstream.ModelHealth{}, false
+	if s.health != nil {
+		passive, found = s.health.MatchConfigured(ctx, site.ID, conn.UpstreamGroupID, conn.UpstreamGroupName, testModel)
 	}
-	if testErr != nil || !testResult.Success {
-		message := "上游 Key 直连检测失败"
-		if testErr != nil {
-			message = testErr.Error()
-		} else if strings.TrimSpace(testResult.Message) != "" {
-			message = testResult.Message
-		}
+	if !found {
+		rule.ConsecutiveFailures = 0
+		return finish(StatusUnknown, false, "上游未提供该模型的有效状态", nil, testModel)
+	}
+	testResult := AccountTestResult{Success: passive.Status == StatusHealthy, Model: testModel, Message: "上游已报告模型状态"}
+	if passive.LatencyMS != nil {
+		testResult.LatencyMS = *passive.LatencyMS
+	}
+	if !testResult.Success {
+		message := testResult.Message
 		if isMonitorDispatchPaused(previousStatus) {
 			rule.ConsecutiveFailures = 0
 			return finish(previousStatus, false, message+"；保持自动停止", nil, testResult.Model)
@@ -2153,6 +2162,7 @@ func (s *Service) ensureTestModelConfig(ctx context.Context, userID, adminAccoun
 		return TestModelConfig{}, err
 	}
 	if config != nil {
+		config.StatusSource = upstreamStatusSource
 		config.OpenAIModelID = defaultIfBlank(config.OpenAIModelID, DefaultOpenAITestModel)
 		config.AnthropicModelID = defaultIfBlank(config.AnthropicModelID, DefaultAnthropicTestModel)
 		config.GrokModelID = defaultIfBlank(config.GrokModelID, DefaultGrokTestModel)

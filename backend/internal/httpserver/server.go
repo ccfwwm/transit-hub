@@ -64,7 +64,16 @@ func New(cfg config.Config, db *pgxpool.Pool, redisClient *redis.Client) *Server
 	auth.RegisterRoutes(server.mux, authService, cfg.AllowPublicRegister)
 	users.RegisterRoutes(server.mux, users.NewService(users.NewRepository(db)))
 	adminAccountsService := admin_accounts.NewService(admin_accounts.NewRepository(db))
+	var storageCipher *upstream.SiteCredentialCipher
+	if cfg.UpstreamCredentialEncryptionKey != "" {
+		var err error
+		storageCipher, err = upstream.NewSiteCredentialCipher(cfg.UpstreamCredentialEncryptionKey)
+		if err != nil {
+			panic(err)
+		}
+	}
 	upstreamRepository := upstream.NewRepository(db)
+	upstreamRepository.SetCredentialCipher(storageCipher)
 	if err := upstreamRepository.EnsureSchema(context.Background()); err != nil {
 		panic(err)
 	}
@@ -78,6 +87,7 @@ func New(cfg config.Config, db *pgxpool.Pool, redisClient *redis.Client) *Server
 	platformHTTPClient.SetAccountExportInterval(cfg.Sub2APIAccountExportInterval)
 	platformService := upstream.NewPlatformService(platformHTTPClient)
 	upstreamCache := upstream.NewRedisSiteCache(redisClient)
+	upstreamCache.SetCredentialCipher(storageCipher)
 	upstreamService := upstream.NewService(platformService, upstreamRepository, groupRateSnapshotWriter{service: groupRatesService}, upstreamCache)
 	credentialRepository, err := upstream.NewCredentialRepository(db, cfg.UpstreamCredentialEncryptionKey)
 	if err != nil {
@@ -107,7 +117,9 @@ func New(cfg config.Config, db *pgxpool.Pool, redisClient *redis.Client) *Server
 	}
 	modelHealth.Register(server.mux, operationJobs, keyPolicies)
 	upstream.RegisterRoutes(server.mux, upstreamService, adminAccountsService)
-	mySitesService := my_sites.NewService(my_sites.NewRepository(db), platformService, upstreamService)
+	mySitesRepository := my_sites.NewRepository(db)
+	mySitesRepository.SetCredentialCipher(storageCipher)
+	mySitesService := my_sites.NewService(mySitesRepository, platformService, upstreamService)
 	if err := mySitesService.EnsureSchema(context.Background()); err != nil {
 		panic(err)
 	}
@@ -134,8 +146,8 @@ func New(cfg config.Config, db *pgxpool.Pool, redisClient *redis.Client) *Server
 
 	channelMonitorService := channel_monitor.NewService(
 		channel_monitor.NewRepository(db),
-		my_sites.NewRepository(db),
-		my_sites.NewRepository(db),
+		mySitesRepository,
+		mySitesRepository,
 		upstreamService,
 		channel_monitor.NewPlatformAdapter(platformService),
 		adminAccountsService,
@@ -150,11 +162,10 @@ func New(cfg config.Config, db *pgxpool.Pool, redisClient *redis.Client) *Server
 	channelMonitorService.SetOperations(operationJobs, keyPolicies)
 	mySitesService.SetBindingMonitor(channelMonitorService)
 	channel_monitor.RegisterRoutes(server.mux, channelMonitorService)
-	if !cfg.DisableMonitor {
-		channelMonitorService.StartScheduler(context.Background())
-	}
 
-	settingsService := settings.NewService(http.DefaultClient, settings.NewRepository(db))
+	settingsRepository := settings.NewRepository(db)
+	settingsRepository.SetCredentialCipher(storageCipher)
+	settingsService := settings.NewService(http.DefaultClient, settingsRepository)
 	settingsService.SetAdminAccountResolver(adminAccountsService)
 	if err := settingsService.EnsureSchema(context.Background()); err != nil {
 		panic(err)
@@ -173,10 +184,18 @@ func New(cfg config.Config, db *pgxpool.Pool, redisClient *redis.Client) *Server
 		panic(err)
 	}
 	admin_accounts.RegisterRoutes(server.mux, adminAccountsService)
+	for _, migrate := range []func(context.Context) error{upstreamRepository.MigrateCredentials, mySitesRepository.MigrateCredentials, settingsRepository.MigrateCredentials} {
+		if err := migrate(context.Background()); err != nil {
+			panic(err)
+		}
+	}
 	if err := upstreamService.RestoreSavedSites(context.Background()); err != nil {
 		panic(err)
 	}
 
+	if !cfg.DisableMonitor {
+		channelMonitorService.StartScheduler(context.Background())
+	}
 	channelMonitorService.StartReadModels(context.Background())
 	modelHealth.Start(context.Background())
 	operationJobs.Start(context.Background())

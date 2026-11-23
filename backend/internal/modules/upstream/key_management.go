@@ -163,7 +163,9 @@ func (s *PlatformService) ManagedKeyUsagePage(ctx context.Context, session Sessi
 		params.Set("type", "2")
 		params.Set("start_timestamp", strconv.FormatInt(start, 10))
 		params.Set("end_timestamp", strconv.FormatInt(end-1, 10))
-		params.Set("token_name", name)
+		if name != "" {
+			params.Set("token_name", name)
+		}
 	} else {
 		params.Set("api_key_id", id)
 		params.Set("start_date", startDate)
@@ -295,13 +297,25 @@ type KeyUsageAggregate struct {
 }
 
 func (s *PlatformService) FetchManagedKeyAggregates(ctx context.Context, session Session, id, granularity string, start, end time.Time) ([]KeyUsageAggregate, []KeyUsageAggregate, error) {
+	return s.fetchManagedUsageAggregates(ctx, session, id, granularity, start, end, true)
+}
+
+func (s *PlatformService) FetchManagedUsageTrend(ctx context.Context, session Session, id string, start, end time.Time) ([]KeyUsageAggregate, error) {
+	trend, _, err := s.fetchManagedUsageAggregates(ctx, session, id, "day", start, end, false)
+	return trend, err
+}
+
+func (s *PlatformService) fetchManagedUsageAggregates(ctx context.Context, session Session, id, granularity string, start, end time.Time, includeModels bool) ([]KeyUsageAggregate, []KeyUsageAggregate, error) {
 	if granularity != "hour" {
 		granularity = "day"
 	}
 	dates := url.Values{
-		"api_key_id": {id}, "start_date": {start.Format("2006-01-02")},
-		"end_date": {end.AddDate(0, 0, -1).Format("2006-01-02")}, "timezone": {"Asia/Shanghai"},
-		"granularity": {granularity}, "include_trend": {"true"}, "include_models": {"true"},
+		"start_date": {start.Format("2006-01-02")},
+		"end_date":   {end.AddDate(0, 0, -1).Format("2006-01-02")}, "timezone": {"Asia/Shanghai"},
+		"granularity": {granularity}, "include_trend": {"true"}, "include_models": {strconv.FormatBool(includeModels)},
+	}
+	if id != "" {
+		dates.Set("api_key_id", id)
 	}
 	opts := sub2APIRequestOptions(session)
 	opts.Context = ctx
@@ -326,6 +340,9 @@ func (s *PlatformService) FetchManagedKeyAggregates(ctx context.Context, session
 		if err != nil || trend[i].Time.Before(start) || !trend[i].Time.Before(end) {
 			return nil, nil, fmt.Errorf("上游返回的聚合周期无效")
 		}
+	}
+	if !includeModels {
+		return trend, nil, nil
 	}
 	models, err := decodeManagedKeyAggregates(data["models"], "model")
 	return trend, models, err

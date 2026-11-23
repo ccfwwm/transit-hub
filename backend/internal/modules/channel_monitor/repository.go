@@ -216,7 +216,8 @@ func (r *Repository) EnsureSchema(ctx context.Context) error {
 		ALTER TABLE channel_monitor_test_model_configs
 		ADD COLUMN IF NOT EXISTS balance_refresh_interval_minutes integer NOT NULL DEFAULT 5,
 		ADD COLUMN IF NOT EXISTS group_models_json jsonb NOT NULL DEFAULT '[]'::jsonb,
-        ADD COLUMN IF NOT EXISTS status_source text NOT NULL DEFAULT 'upstream'
+        ADD COLUMN IF NOT EXISTS status_source text NOT NULL DEFAULT 'upstream';
+		UPDATE channel_monitor_test_model_configs SET status_source = 'upstream' WHERE status_source <> 'upstream';
 	`); err != nil {
 		return err
 	}
@@ -699,6 +700,7 @@ func (r *Repository) GetTestModelConfig(ctx context.Context, userID, adminAccoun
 	if config.GroupModels == nil {
 		config.GroupModels = []TestModelGroupConfig{}
 	}
+	config.StatusSource = upstreamStatusSource
 	return &config, rows.Err()
 }
 
@@ -724,7 +726,7 @@ func (r *Repository) SaveTestModelConfig(ctx context.Context, config TestModelCo
 			balance_refresh_interval_minutes = EXCLUDED.balance_refresh_interval_minutes,
 			status_source = EXCLUDED.status_source,
             updated_at = now()
-	`, config.UserID, config.AdminAccountID, config.OpenAIModelID, config.AnthropicModelID, config.GrokModelID, string(groupModelsJSON), config.BalanceRefreshIntervalMinutes, normalizeStatusSource(config.StatusSource))
+	`, config.UserID, config.AdminAccountID, config.OpenAIModelID, config.AnthropicModelID, config.GrokModelID, string(groupModelsJSON), config.BalanceRefreshIntervalMinutes, upstreamStatusSource)
 	return err
 }
 

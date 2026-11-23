@@ -252,27 +252,14 @@ func (m *KeyManagement) deleteKey(w http.ResponseWriter, r *http.Request) {
 	if site == nil {
 		return
 	}
-	ctx, id := r.Context(), r.PathValue("key")
-	lock, err := m.lockOperation(ctx, "key-security|"+site.ID+"|"+id)
-	if err != nil {
-		apiResult(w, nil, err)
+	if err := m.removeIndependentKey(r.Context(), uid, aid, site, r.PathValue("key")); err != nil {
+		if err == errBoundKeyCleanup {
+			httpjson.WriteError(w, http.StatusConflict, err.Error())
+		} else {
+			apiResult(w, nil, err)
+		}
 		return
 	}
-	defer lock()
-	bound, err := m.isBound(ctx, uid, aid, site.ID, id)
-	if err != nil {
-		apiResult(w, nil, err)
-		return
-	}
-	if bound {
-		httpjson.WriteError(w, 409, "请先在对接详情处理转发账号")
-		return
-	}
-	if err = m.platform.DeleteSecurityKey(ctx, *site.Session, id); err != nil {
-		apiResult(w, nil, err)
-		return
-	}
-	m.invalidate(site)
 	httpjson.Write(w, 200, map[string]bool{"deleted": true})
 }
 

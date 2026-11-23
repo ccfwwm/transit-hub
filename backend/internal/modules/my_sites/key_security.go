@@ -3,6 +3,7 @@ package my_sites
 import (
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -178,7 +179,12 @@ func (k *KeySecurity) targets(ctx context.Context, uid, aid, action string, sele
 	if len(selected) > 0 {
 		ids = selected[0]
 	}
-	rows, e := k.db.Query(ctx, `SELECT DISTINCT upstream_site_id,upstream_key_id,upstream_group_id FROM real_connections WHERE user_id=$1 AND workspace_admin_account_id=$2 AND upstream_key_id<>'' AND admin_account_id<>'' AND upstream_key<>'' AND ($3::text[] IS NULL OR id=ANY($3::text[]))`, uid, aid, ids)
+	rows, e := k.db.Query(ctx, `SELECT DISTINCT c.upstream_site_id,coalesce(r.old_key_id,c.upstream_key_id),coalesce(r.group_id,c.upstream_group_id)
+		FROM real_connections c LEFT JOIN key_security_rotations r
+		ON $4='rotate' AND r.user_id=c.user_id AND r.admin_account_id=c.workspace_admin_account_id
+		AND r.site_id=c.upstream_site_id AND r.new_key_id=c.upstream_key_id AND r.phase NOT IN('done','cancelled')
+		WHERE c.user_id=$1 AND c.workspace_admin_account_id=$2 AND c.upstream_key_id<>'' AND c.admin_account_id<>'' AND c.upstream_key<>''
+		AND ($3::text[] IS NULL OR c.id=ANY($3::text[])) ORDER BY 1,2,3`, uid, aid, ids, action)
 	if e != nil {
 		return nil, e
 	}
@@ -201,6 +207,26 @@ func (k *KeySecurity) targets(ctx context.Context, uid, aid, action string, sele
 	}
 	return out, rows.Err()
 }
+func rotationPlanVersion(items []jobs.Item) string {
+	hash := sha256.New()
+	for _, item := range items {
+		hash.Write(item.Payload)
+	}
+	return hex.EncodeToString(hash.Sum(nil))
+}
+
+func (k *KeySecurity) rotationPreview(ctx context.Context, uid, aid string, ids []string, total int) (map[string]any, error) {
+	items, err := k.targets(ctx, uid, aid, "rotate", ids)
+	if err != nil {
+		return nil, err
+	}
+	var eligible int
+	err = k.db.QueryRow(ctx, `SELECT count(*) FROM real_connections
+		WHERE user_id=$1 AND workspace_admin_account_id=$2 AND id=ANY($3::text[])
+		AND upstream_key_id<>'' AND admin_account_id<>'' AND upstream_key<>''`, uid, aid, ids).Scan(&eligible)
+	return map[string]any{"keys": len(items), "skipped": total - eligible, "version": rotationPlanVersion(items)}, err
+}
+
 func (k *KeySecurity) submit(ctx context.Context, uid, aid, action string) (jobs.Job, error) {
 	items, e := k.targets(ctx, uid, aid, action)
 	if e != nil {
@@ -419,7 +445,7 @@ func (k *KeySecurity) rotate(ctx context.Context, uid, aid string, site upstream
 			return out, fmt.Errorf("没有可轮换的绑定凭据")
 		}
 		var shared bool
-		e = k.db.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM real_connections WHERE upstream_key=$3 AND (user_id<>$1 OR workspace_admin_account_id<>$2 OR upstream_site_id<>$4))`, uid, aid, old, site.ID).Scan(&shared)
+		e = k.db.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM real_connections WHERE coalesce(nullif(upstream_key_fingerprint,''),upstream_key)=$3 AND (user_id<>$1 OR workspace_admin_account_id<>$2 OR upstream_site_id<>$4))`, uid, aid, connectionKeyMatch(k.sites.storageCipher, old), site.ID).Scan(&shared)
 		if e != nil {
 			return out, e
 		}
@@ -625,10 +651,20 @@ func (k *KeySecurity) rotate(ctx context.Context, uid, aid string, site upstream
 			return out, e
 		}
 		defer tx.Rollback(ctx)
-		_, e = tx.Exec(ctx, `UPDATE real_connections SET upstream_key_id=$5,upstream_key=$6 WHERE user_id=$1 AND workspace_admin_account_id=$2 AND upstream_site_id=$3 AND upstream_key_id=$4 AND upstream_key=$7`, uid, aid, site.ID, r.OldID, r.NewID, r.NewSecret, r.OldSecret)
+		key, fingerprint, e := protectConnectionKey(k.sites.storageCipher, r.NewSecret)
 		if e != nil {
 			return out, e
 		}
+		tag, e := tx.Exec(ctx, `UPDATE real_connections SET upstream_key_id=$5,upstream_key=$6,upstream_key_fingerprint=$8
+			WHERE user_id=$1 AND workspace_admin_account_id=$2 AND upstream_site_id=$3 AND upstream_key_id=$4
+			AND coalesce(nullif(upstream_key_fingerprint,''),upstream_key)=$7`, uid, aid, site.ID, r.OldID, r.NewID, key, connectionKeyMatch(k.sites.storageCipher, r.OldSecret), fingerprint)
+		if e != nil {
+			return out, e
+		}
+		if tag.RowsAffected() != int64(count) {
+			return out, fmt.Errorf("转发绑定已变化，保留旧 Key 待核对")
+		}
+
 		_, e = tx.Exec(ctx, `UPDATE key_security_rotations SET phase='switched',updated_at=now() WHERE id=$1`, r.ID)
 		if e != nil {
 			return out, e
@@ -851,6 +887,64 @@ func (k *KeySecurity) Register(mux *http.ServeMux) {
 			httpjson.WriteError(w, 403, "请先登录自有 Sub2API 管理员")
 			return
 		}
+		var req struct {
+			ConnectionIDs []string `json:"connectionIds"`
+			RuleIDs       []string `json:"ruleIds"`
+			Preview       bool     `json:"preview"`
+			Version       string   `json:"version"`
+		}
+		if r.ContentLength != 0 {
+			if httpjson.Decode(r, &req) != nil {
+				httpjson.WriteError(w, 400, "无效目标")
+				return
+			}
+		}
+		action := r.PathValue("action")
+		if len(req.ConnectionIDs) > 10000 || len(req.RuleIDs) > 10000 {
+			httpjson.WriteError(w, 400, "目标过多")
+			return
+		}
+		if req.RuleIDs != nil {
+			if action != "rotate" || req.ConnectionIDs != nil {
+				httpjson.WriteError(w, 400, "无效轮换目标")
+				return
+			}
+			e = k.db.QueryRow(r.Context(), `SELECT coalesce(array_agg(DISTINCT connection_id),'{}') FROM channel_monitor_rules
+				WHERE user_id=$1 AND admin_account_id=$2 AND id=ANY($3::text[])`, uid, aid, req.RuleIDs).Scan(&req.ConnectionIDs)
+			if e != nil {
+				httpjson.WriteError(w, 500, "无法读取监控绑定")
+				return
+			}
+		}
+		if req.ConnectionIDs != nil && len(req.ConnectionIDs) == 0 && !req.Preview {
+			httpjson.WriteError(w, 400, "请选择轮换目标")
+			return
+		}
+		if req.RuleIDs == nil && len(req.ConnectionIDs) > 0 {
+			var count int
+			e = k.db.QueryRow(r.Context(), `SELECT count(*) FROM real_connections WHERE user_id=$1 AND workspace_admin_account_id=$2 AND id=ANY($3::text[])`, uid, aid, req.ConnectionIDs).Scan(&count)
+			if e != nil || count != len(req.ConnectionIDs) {
+				httpjson.WriteError(w, 404, "目标不属于当前工作区或有重复")
+				return
+			}
+		}
+		if req.Preview {
+			if action != "rotate" || req.ConnectionIDs == nil {
+				httpjson.WriteError(w, 400, "请选择轮换目标")
+				return
+			}
+			total := len(req.ConnectionIDs)
+			if req.RuleIDs != nil {
+				total = len(req.RuleIDs)
+			}
+			plan, err := k.rotationPreview(r.Context(), uid, aid, req.ConnectionIDs, total)
+			if err != nil {
+				httpjson.WriteError(w, 500, "无法预览轮换")
+				return
+			}
+			httpjson.Write(w, 200, plan)
+			return
+		}
 		lock, e := k.db.Acquire(r.Context())
 		if e != nil {
 			httpjson.WriteError(w, 503, "安全任务服务忙")
@@ -870,29 +964,8 @@ func (k *KeySecurity) Register(mux *http.ServeMux) {
 			httpjson.WriteError(w, 409, "已有 Key 安全任务正在执行，请等待完成")
 			return
 		}
-		var req struct {
-			ConnectionIDs []string `json:"connectionIds"`
-		}
-		if r.ContentLength != 0 {
-			if httpjson.Decode(r, &req) != nil {
-				httpjson.WriteError(w, 400, "无效目标")
-				return
-			}
-		}
-		if len(req.ConnectionIDs) > 10000 {
-			httpjson.WriteError(w, 400, "目标过多")
-			return
-		}
-		if len(req.ConnectionIDs) > 0 {
-			var count int
-			e = k.db.QueryRow(r.Context(), `SELECT count(*) FROM real_connections WHERE user_id=$1 AND workspace_admin_account_id=$2 AND id=ANY($3::text[])`, uid, aid, req.ConnectionIDs).Scan(&count)
-			if e != nil || count != len(req.ConnectionIDs) {
-				httpjson.WriteError(w, 404, "目标不属于当前工作区或有重复")
-				return
-			}
-		}
 		var job jobs.Job
-		switch r.PathValue("action") {
+		switch action {
 		case "discover":
 			job, e = k.jobs.Submit(r.Context(), uid, aid, "key_security_bindings", []jobs.Item{{ID: "workspace"}})
 		case "sync-all":
@@ -908,9 +981,15 @@ func (k *KeySecurity) Register(mux *http.ServeMux) {
 				job, e = k.submit(r.Context(), uid, aid, "audit")
 			}
 		case "rotate":
-			if len(req.ConnectionIDs) > 0 {
+			if req.ConnectionIDs != nil {
 				var items []jobs.Item
 				items, e = k.targets(r.Context(), uid, aid, "rotate", req.ConnectionIDs)
+				if e == nil && req.Version != "" && req.Version != rotationPlanVersion(items) {
+					e = fmt.Errorf("轮换目标已变化，请重新预览")
+				}
+				if e == nil && len(items) == 0 {
+					e = fmt.Errorf("所选记录没有可轮换的绑定 Key")
+				}
 				if e == nil {
 					job, e = k.jobs.Submit(r.Context(), uid, aid, "key_security", items)
 				}

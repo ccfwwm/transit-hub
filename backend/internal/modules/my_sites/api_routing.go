@@ -193,7 +193,7 @@ func (a *APIRouting) run(ctx context.Context, uid, aid, id string, raw json.RawM
 		e = a.sites.platformService.UpdateForwardingAPIURL(ctx, state.Session, c.AdminAccountID, c.UpstreamKey, t.URL)
 	}
 	if e == nil {
-		_, e = a.db.Exec(ctx, `UPDATE real_connections SET upstream_api_url=$4 WHERE id=$1 AND user_id=$2 AND workspace_admin_account_id=$3 AND upstream_key=$5`, id, uid, aid, t.URL, c.UpstreamKey)
+		_, e = a.db.Exec(ctx, `UPDATE real_connections SET upstream_api_url=$4 WHERE id=$1 AND user_id=$2 AND workspace_admin_account_id=$3 AND coalesce(nullif(upstream_key_fingerprint,''),upstream_key)=$5`, id, uid, aid, t.URL, connectionKeyMatch(a.sites.storageCipher, c.UpstreamKey))
 	}
 	if e != nil {
 		if t.Attempt < 3 {

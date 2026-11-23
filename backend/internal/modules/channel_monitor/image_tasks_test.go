@@ -55,34 +55,6 @@ func TestImageTaskMigrationRetiresOnlyUnrecoverableImages(t *testing.T) {
 	}
 }
 
-func TestOldImageWithoutQueryableTaskDoesNotBlockNewCheck(t *testing.T) {
-	for _, status := range []string{"unknown", "timeout"} {
-		t.Run(status, func(t *testing.T) {
-			ctx, s, store, p := targetFixture()
-			store.tasks["old"] = MediaTask{Key: "old", RuleID: "conn-1", ModelID: "gpt-image-2.5", Mode: "image", Status: status, Options: AccountTestOptions{OneShot: true}, CreatedAt: time.Now().Add(-24 * time.Hour)}
-			started := make(chan AccountTestOptions, 1)
-			p.probe = func(o AccountTestOptions) (AccountTestResult, error) {
-				started <- o
-				return AccountTestResult{Success: true}, nil
-			}
-			o := AccountTestOptions{ModelID: "gpt-image-2.5", Mode: "image", Adapter: "openai_image", OneShot: true}
-			result, e := s.mediaCheck(ctx, store.mustRule("conn-1"), s.conns.connections[0], upstream.Site{}, TargetState{Fingerprint: "new", Model: o.ModelID}, o)
-			if e != nil || !result.Pending {
-				t.Fatal("old image blocked new check", result, e)
-			}
-			select {
-			case <-started:
-			case <-time.After(time.Second):
-				t.Fatal("new image check not submitted")
-			}
-			old, _ := store.GetMediaTask(ctx, "old")
-			if old.Status != "failed" || store.claims != 1 {
-				t.Fatal("obsolete task retained or duplicated generation")
-			}
-		})
-	}
-}
-
 func TestAcceptedImageRetainsOriginalTaskWhileConfigurationChanges(t *testing.T) {
 	ctx, s, store, p := targetFixture()
 	o := AccountTestOptions{ModelID: "gpt-image-2.5", Mode: "image", Adapter: "sub2api_async_image", APIURL: "https://original.example", OneShot: true}

@@ -5,7 +5,7 @@ import (
 	"time"
 )
 
-func TestOneShotMediaRunsInPassiveModeWithoutReconciliation(t *testing.T) {
+func TestOldOneShotMediaDoesNotSubmit(t *testing.T) {
 	_, s, store, p := targetFixture()
 	store.testModelConfig.StatusSource = "upstream"
 	conn := s.conns.connections[0]
@@ -15,8 +15,8 @@ func TestOneShotMediaRunsInPassiveModeWithoutReconciliation(t *testing.T) {
 	store.tasks[task.Key] = task
 	s.executeMedia(store, task, conn, *site, o, false)
 	got, e := store.GetMediaTask(nil, task.Key)
-	if e != nil || got.Status != "success" || len(p.testOptions) != 1 || len(p.schedulableCalls) != 0 || len(store.states) != 0 {
-		t.Fatalf("one-shot blocked or entered periodic dispatch: %+v %v", got, e)
+	if e != nil || got.Status != "blocked" || len(p.testOptions) != 0 || len(p.schedulableCalls) != 0 || len(store.states) != 0 {
+		t.Fatalf("legacy one-shot entered periodic dispatch or submitted work: %+v %v", got, e)
 	}
 }
 func TestDispatchStateReasons(t *testing.T) {

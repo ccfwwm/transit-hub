@@ -55,8 +55,8 @@ const requestJson = async <T>(path: string, options: RequestInit = {}): Promise<
 export const listAdminAccounts = async (): Promise<AdminAccount[]> =>
   requestJson<AdminAccount[]>('/admin-accounts')
 
-export const getCurrentAdminAccount = async (): Promise<AdminAccount> =>
-  requestJson<AdminAccount>('/admin-accounts/current')
+export const getCurrentAdminAccount = async (signal?: AbortSignal): Promise<AdminAccount> =>
+  requestJson<AdminAccount>('/admin-accounts/current', { signal })
 
 export const switchAdminAccount = async (id: string): Promise<AdminAccount> =>
   requestJson<AdminAccount>('/admin-accounts/current', {

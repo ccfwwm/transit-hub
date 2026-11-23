@@ -3,6 +3,7 @@ package channel_monitor
 import (
 	"context"
 	"errors"
+	"net/url"
 	"sync"
 	"testing"
 	"time"
@@ -73,7 +74,7 @@ func TestRunRuleSkipsUnknownPlatformWithoutConfiguredModel(t *testing.T) {
 	if result.Status != StatusUnsupported || result.Success {
 		t.Fatalf("expected unsupported result, got %+v", result)
 	}
-	if len(service.platform.testOptions) != 0 || len(service.platform.schedulableCalls) != 0 {
+	if len(service.platform.evidenceModels) != 0 || len(service.platform.schedulableCalls) != 0 {
 		t.Fatalf("unknown platform must not be tested or mutated")
 	}
 }
@@ -167,7 +168,7 @@ func TestRunRuleSuccessWritesHealthyResultWithoutPausing(t *testing.T) {
 	}
 }
 
-func TestRunDueDoesNotLoadAdminSessionForHealthyProbes(t *testing.T) {
+func TestRunDueDoesNotLoadAdminSessionForHealthyEvidence(t *testing.T) {
 	ctx := context.Background()
 	repo := newFakeRepository()
 	second := DefaultRule("user-1", "admin-1", "conn-2")
@@ -195,7 +196,7 @@ func TestRunDueDoesNotLoadAdminSessionForHealthyProbes(t *testing.T) {
 	}
 }
 
-func TestRunDueExecutesMultipleDirectUpstreamProbes(t *testing.T) {
+func TestRunDueReadsUpstreamEvidenceWithoutModelProbes(t *testing.T) {
 	ctx := context.Background()
 	repo := newFakeRepository()
 	second := DefaultRule("user-1", "admin-1", "conn-2")
@@ -219,8 +220,8 @@ func TestRunDueExecutesMultipleDirectUpstreamProbes(t *testing.T) {
 	service.platform.mu.Lock()
 	started := append([]time.Time(nil), service.platform.testStartedAt...)
 	service.platform.mu.Unlock()
-	if len(started) != 2 {
-		t.Fatalf("expected two direct upstream probes, got %d", len(started))
+	if len(started) != 2 || len(service.platform.probeConnections) != 0 {
+		t.Fatalf("expected two evidence reads and no probes, got %d reads and %d probes", len(started), len(service.platform.probeConnections))
 	}
 }
 
@@ -255,7 +256,7 @@ func TestRunDueSkipsOverlappingBatch(t *testing.T) {
 	}
 }
 
-func TestRunRuleHealthyProbeDoesNotUseAdminSession(t *testing.T) {
+func TestRunRuleUpstreamEvidenceDoesNotUseAdminSession(t *testing.T) {
 	ctx := context.Background()
 	repo := newFakeRepository()
 	service := newTestService(repo)
@@ -267,15 +268,15 @@ func TestRunRuleHealthyProbeDoesNotUseAdminSession(t *testing.T) {
 	if err != nil {
 		t.Fatalf("RunRule returned error: %v", err)
 	}
-	if result.Status != StatusHealthy || len(service.platform.probeConnections) != 1 {
-		t.Fatalf("expected one healthy direct probe, got result=%+v probes=%d", result, len(service.platform.probeConnections))
+	if result.Status != StatusHealthy || len(service.platform.probeConnections) != 0 {
+		t.Fatalf("expected healthy upstream evidence without probing, got result=%+v probes=%d", result, len(service.platform.probeConnections))
 	}
 	if sessions.calls != 0 {
-		t.Fatalf("healthy direct probe unexpectedly loaded admin session %d times", sessions.calls)
+		t.Fatalf("healthy upstream evidence unexpectedly loaded admin session %d times", sessions.calls)
 	}
 }
 
-func TestRunRuleDoesNotListRemoteAdminAccountForProbe(t *testing.T) {
+func TestRunRuleReadsUpstreamEvidenceWithoutListingAdminAccounts(t *testing.T) {
 	ctx := context.Background()
 	repo := newFakeRepository()
 	service := newTestService(repo)
@@ -287,10 +288,10 @@ func TestRunRuleDoesNotListRemoteAdminAccountForProbe(t *testing.T) {
 		t.Fatalf("RunRule returned error: %v", err)
 	}
 	if result.Status != StatusHealthy || !result.Success {
-		t.Fatalf("expected direct upstream probe to remain healthy, got %+v", result)
+		t.Fatalf("expected upstream evidence to remain healthy, got %+v", result)
 	}
-	if len(service.platform.probeConnections) != 1 || len(service.platform.schedulableCalls) != 0 {
-		t.Fatalf("expected probe without admin mutation")
+	if len(service.platform.probeConnections) != 0 || len(service.platform.schedulableCalls) != 0 {
+		t.Fatalf("expected passive evidence without admin mutation")
 	}
 }
 
@@ -304,11 +305,11 @@ func TestRunRuleUsesDefaultOpenAITestModel(t *testing.T) {
 	if err != nil {
 		t.Fatalf("RunRule returned error: %v", err)
 	}
-	if len(service.platform.testOptions) != 1 {
-		t.Fatalf("expected one test option, got %d", len(service.platform.testOptions))
+	if len(service.platform.evidenceModels) != 1 {
+		t.Fatalf("expected one test option, got %d", len(service.platform.evidenceModels))
 	}
-	if service.platform.testOptions[0].ModelID != DefaultOpenAITestModel {
-		t.Fatalf("expected default openai model %q, got %q", DefaultOpenAITestModel, service.platform.testOptions[0].ModelID)
+	if service.platform.evidenceModels[0] != DefaultOpenAITestModel {
+		t.Fatalf("expected default openai model %q, got %q", DefaultOpenAITestModel, service.platform.evidenceModels[0])
 	}
 }
 
@@ -326,11 +327,11 @@ func TestRunRuleUsesDefaultAnthropicTestModel(t *testing.T) {
 	if err != nil {
 		t.Fatalf("RunRule returned error: %v", err)
 	}
-	if len(service.platform.testOptions) != 1 {
-		t.Fatalf("expected one test option, got %d", len(service.platform.testOptions))
+	if len(service.platform.evidenceModels) != 1 {
+		t.Fatalf("expected one test option, got %d", len(service.platform.evidenceModels))
 	}
-	if service.platform.testOptions[0].ModelID != DefaultAnthropicTestModel {
-		t.Fatalf("expected default anthropic model %q, got %q", DefaultAnthropicTestModel, service.platform.testOptions[0].ModelID)
+	if service.platform.evidenceModels[0] != DefaultAnthropicTestModel {
+		t.Fatalf("expected default anthropic model %q, got %q", DefaultAnthropicTestModel, service.platform.evidenceModels[0])
 	}
 }
 
@@ -347,11 +348,11 @@ func TestRunRuleUsesDefaultAnthropicTestModelForClaudeGroup(t *testing.T) {
 	if err != nil {
 		t.Fatalf("RunRule returned error: %v", err)
 	}
-	if len(service.platform.testOptions) != 1 {
-		t.Fatalf("expected one test option, got %d", len(service.platform.testOptions))
+	if len(service.platform.evidenceModels) != 1 {
+		t.Fatalf("expected one test option, got %d", len(service.platform.evidenceModels))
 	}
-	if service.platform.testOptions[0].ModelID != DefaultAnthropicTestModel {
-		t.Fatalf("expected default claude model %q, got %q", DefaultAnthropicTestModel, service.platform.testOptions[0].ModelID)
+	if service.platform.evidenceModels[0] != DefaultAnthropicTestModel {
+		t.Fatalf("expected default claude model %q, got %q", DefaultAnthropicTestModel, service.platform.evidenceModels[0])
 	}
 }
 
@@ -368,11 +369,11 @@ func TestRunRuleUsesDefaultGrokTestModel(t *testing.T) {
 	if err != nil {
 		t.Fatalf("RunRule returned error: %v", err)
 	}
-	if len(service.platform.testOptions) != 1 {
-		t.Fatalf("expected one test option, got %d", len(service.platform.testOptions))
+	if len(service.platform.evidenceModels) != 1 {
+		t.Fatalf("expected one test option, got %d", len(service.platform.evidenceModels))
 	}
-	if service.platform.testOptions[0].ModelID != DefaultGrokTestModel {
-		t.Fatalf("expected default grok model %q, got %q", DefaultGrokTestModel, service.platform.testOptions[0].ModelID)
+	if service.platform.evidenceModels[0] != DefaultGrokTestModel {
+		t.Fatalf("expected default grok model %q, got %q", DefaultGrokTestModel, service.platform.evidenceModels[0])
 	}
 }
 
@@ -393,11 +394,11 @@ func TestRunRuleUsesSavedTestModelConfig(t *testing.T) {
 	if err != nil {
 		t.Fatalf("RunRule returned error: %v", err)
 	}
-	if len(service.platform.testOptions) != 1 {
-		t.Fatalf("expected one test option, got %d", len(service.platform.testOptions))
+	if len(service.platform.evidenceModels) != 1 {
+		t.Fatalf("expected one test option, got %d", len(service.platform.evidenceModels))
 	}
-	if service.platform.testOptions[0].ModelID != "gpt-custom" {
-		t.Fatalf("expected saved model, got %q", service.platform.testOptions[0].ModelID)
+	if service.platform.evidenceModels[0] != "gpt-custom" {
+		t.Fatalf("expected saved model, got %q", service.platform.evidenceModels[0])
 	}
 }
 
@@ -415,8 +416,8 @@ func TestRunRuleUsesSavedGrokTestModelForXAI(t *testing.T) {
 	if err != nil {
 		t.Fatalf("RunRule returned error: %v", err)
 	}
-	if len(service.platform.testOptions) != 1 || service.platform.testOptions[0].ModelID != "grok-custom" {
-		t.Fatalf("expected saved grok model, got %#v", service.platform.testOptions)
+	if len(service.platform.evidenceModels) != 1 || service.platform.evidenceModels[0] != "grok-custom" {
+		t.Fatalf("expected saved grok model, got %#v", service.platform.evidenceModels)
 	}
 }
 
@@ -432,8 +433,8 @@ func TestRunRuleUsesPerRuleTestModelOverride(t *testing.T) {
 	if _, err := service.RunRule(ctx, rule.ID, "manual"); err != nil {
 		t.Fatalf("RunRule returned error: %v", err)
 	}
-	if len(service.platform.testOptions) != 1 || service.platform.testOptions[0].ModelID != "account-specific-model" {
-		t.Fatalf("expected per-rule model override, got %#v", service.platform.testOptions)
+	if len(service.platform.evidenceModels) != 1 || service.platform.evidenceModels[0] != "account-specific-model" {
+		t.Fatalf("expected per-rule model override, got %#v", service.platform.evidenceModels)
 	}
 }
 
@@ -452,8 +453,8 @@ func TestRunRuleUsesOwnGroupDefaultTestModel(t *testing.T) {
 	if _, err := service.RunRule(ctx, rule.ID, "manual"); err != nil {
 		t.Fatalf("RunRule returned error: %v", err)
 	}
-	if len(service.platform.testOptions) != 1 || service.platform.testOptions[0].ModelID != "gpt-5.6-sol" {
-		t.Fatalf("expected own-group model, got %#v", service.platform.testOptions)
+	if len(service.platform.evidenceModels) != 1 || service.platform.evidenceModels[0] != "gpt-5.6-sol" {
+		t.Fatalf("expected own-group model, got %#v", service.platform.evidenceModels)
 	}
 }
 
@@ -500,7 +501,7 @@ func TestSummaryReportsEffectiveModelAndSource(t *testing.T) {
 	}
 }
 
-func TestRunRuleHealthyProbeWorksWhenAdminSessionCannotBeRecovered(t *testing.T) {
+func TestUpstreamEvidenceWorksWhenAdminSessionCannotBeRecovered(t *testing.T) {
 	ctx := context.Background()
 	repo := newFakeRepository()
 	service := newTestService(repo)
@@ -518,7 +519,7 @@ func TestRunRuleHealthyProbeWorksWhenAdminSessionCannotBeRecovered(t *testing.T)
 	if updated.ConsecutiveFailures != 0 {
 		t.Fatalf("admin auth failure should not count against channel, got %d", updated.ConsecutiveFailures)
 	}
-	if len(service.platform.probeConnections) != 1 {
+	if len(service.platform.probeConnections) != 0 {
 		t.Fatalf("expected one direct probe when admin session cannot be recovered")
 	}
 	if len(service.platform.schedulableCalls) != 0 {
@@ -824,7 +825,7 @@ func TestSetRuleEnabledOnlyControlsDetection(t *testing.T) {
 	}
 }
 
-func TestManualRunStillChecksDisabledRule(t *testing.T) {
+func TestManualSyncReadsEvidenceForDisabledRule(t *testing.T) {
 	ctx := context.Background()
 	repo := newFakeRepository()
 	service := newTestService(repo)
@@ -838,7 +839,7 @@ func TestManualRunStillChecksDisabledRule(t *testing.T) {
 	}
 
 	if result.Status != StatusHealthy {
-		t.Fatalf("expected manual run to perform a real check, got %+v", result)
+		t.Fatalf("expected manual sync to use upstream evidence, got %+v", result)
 	}
 }
 
@@ -1542,6 +1543,7 @@ type fakeMonitorPlatform struct {
 	accounts         []AdminAccountStatus
 	probeSites       []upstream.Site
 	probeConnections []my_sites.RealConnection
+	evidenceModels   []string
 	testOptions      []AccountTestOptions
 	testStartedAt    []time.Time
 	testStarted      chan<- struct{}
@@ -1562,9 +1564,16 @@ type priorityCall struct {
 
 func (f *fakeMonitorPlatform) ProbeUpstreamConnection(_ context.Context, site upstream.Site, connection my_sites.RealConnection, options AccountTestOptions) (AccountTestResult, error) {
 	f.mu.Lock()
+	defer f.mu.Unlock()
 	f.probeSites = append(f.probeSites, site)
 	f.probeConnections = append(f.probeConnections, connection)
 	f.testOptions = append(f.testOptions, options)
+	return AccountTestResult{}, errors.New("unexpected active probe")
+}
+
+func (f *fakeMonitorPlatform) MatchConfigured(_ context.Context, _, _, _, model string) (upstream.ModelHealth, bool) {
+	f.mu.Lock()
+	f.evidenceModels = append(f.evidenceModels, model)
 	f.testStartedAt = append(f.testStartedAt, time.Now())
 	f.mu.Unlock()
 	if f.testStarted != nil {
@@ -1576,10 +1585,15 @@ func (f *fakeMonitorPlatform) ProbeUpstreamConnection(_ context.Context, site up
 	if f.testBlock != nil {
 		<-f.testBlock
 	}
+	status := StatusHealthy
 	if f.testErr != nil {
-		return AccountTestResult{}, f.testErr
+		status = StatusFailed
 	}
-	return AccountTestResult{Success: true, Message: "ok", LatencyMS: 42, Model: "gpt-test"}, nil
+	return upstream.ModelHealth{Model: model, Status: status, LatencyMS: intPtr(42)}, true
+}
+
+func (f *fakeMonitorPlatform) Page(context.Context, string, string, string, url.Values) (upstream.HealthPage, error) {
+	return upstream.HealthPage{}, nil
 }
 
 func (f *fakeMonitorPlatform) SetSub2APIAdminAccountSchedulable(_ upstream.Session, accountID string, schedulable bool) error {
@@ -1676,6 +1690,7 @@ func newTestService(repo *fakeRepository) *testService {
 	}
 	conns := &fakeConnections{connections: []my_sites.RealConnection{conn}}
 	service := NewService(repo, conns, fakeStateStore{state: state}, upstreams, platform, fakeAccounts{})
+	service.SetModelHealth(platform)
 	return &testService{Service: service, platform: platform, upstreams: upstreams, conns: conns}
 }
 

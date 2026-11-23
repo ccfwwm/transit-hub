@@ -26,6 +26,9 @@ export interface UpstreamSiteForm {
 }
 
 export interface UpstreamMetricValue {
+  state?: 'complete' | 'partial' | 'unavailable'
+  source?: string
+  date?: string
   value: number | null
   display: string
 }

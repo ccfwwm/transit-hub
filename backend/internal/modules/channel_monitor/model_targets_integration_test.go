@@ -10,7 +10,6 @@ import (
 	"strings"
 	"testing"
 	"time"
-	"transithub/backend/internal/modules/jobs"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	"transithub/backend/internal/modules/upstream"
@@ -72,8 +71,8 @@ func TestModelTargetsKeepPartialChannelAndReuseEvidence(t *testing.T) {
 		t.Fatal(e)
 	}
 	target := states[conn.ID]["a"]
-	if len(target.Models) != 1 || target.Models[0].Model != "good" || target.Status != StatusHealthy || len(platform.testOptions) != 2 {
-		t.Fatalf("active mode must only probe the first configured model per run: %+v", target)
+	if len(target.Models) != 1 || target.Models[0].Model != "good" || target.Status != StatusUnknown || len(platform.testOptions) != 0 {
+		t.Fatalf("legacy config caused model calls or changed evidence selection: %+v", target)
 	}
 	if calls := len(platform.schedulableCalls); calls != 0 {
 		t.Fatal("partial failure disabled entire account")
@@ -208,112 +207,31 @@ func TestModelTargetsKeepPartialChannelAndReuseEvidence(t *testing.T) {
 		t.Fatal("upstream-only mode made a paid call")
 	}
 	// One-shot verification remains available in passive mode and never changes dispatch.
-	j := jobs.New(db)
-	if e = j.EnsureSchema(ctx); e != nil {
+	// A previously accepted active configuration is migrated at startup.
+	if _, e = db.Exec(ctx, `UPDATE channel_monitor_test_model_configs SET status_source='active'
+		WHERE user_id='user-1' AND admin_account_id='admin-1'`); e != nil {
 		t.Fatal(e)
 	}
-	s.SetOperations(j, nil)
-	before = len(platform.testOptions)
-	dispatchBefore := len(platform.schedulableCalls)
-	oneRequest := httptest.NewRequest("POST", "/api/channel-monitor/rules/"+rule.ID+"/models/check", bytes.NewBufferString(`{"model":"good","mode":"text"}`)).WithContext(authctx.WithUserID(ctx, "user-1"))
-	oneRequest.SetPathValue("id", rule.ID)
-	oneResponse := httptest.NewRecorder()
-	h.checkModel(oneResponse, oneRequest)
-	var oneJob jobs.Job
-	if oneResponse.Code != 202 || json.Unmarshal(oneResponse.Body.Bytes(), &oneJob) != nil {
-		t.Fatalf("one-shot request: %s", oneResponse.Body.String())
-	}
-	work, _ := json.Marshal(struct{ RuleID, Model string }{rule.ID, "good"})
-	if _, e = s.manualModelCheck(ctx, "user-1", "admin-1", rule.ID, work); e != nil {
+	if e = repo.EnsureSchema(ctx); e != nil {
 		t.Fatal(e)
 	}
-	if _, e = s.manualModelCheck(ctx, "user-1", "admin-1", rule.ID, work); e != nil {
-		t.Fatal(e)
+	var source string
+	if e = db.QueryRow(ctx, `SELECT status_source FROM channel_monitor_test_model_configs WHERE user_id='user-1' AND admin_account_id='admin-1'`).Scan(&source); e != nil || source != "upstream" {
+		t.Fatalf("legacy source was not migrated: %s, %v", source, e)
 	}
-	checks, e := repo.manualChecks(ctx, "user-1", "admin-1", rule.ID)
-	if e != nil || checks["good"].Status != StatusHealthy || len(platform.testOptions) != before+1 || len(platform.schedulableCalls) != dispatchBefore {
-		t.Fatalf("one-shot replayed or changed dispatch: %+v %v", checks, e)
+	patch := httptest.NewRequest("PATCH", "/status-source", bytes.NewBufferString(`{"source":"active"}`)).WithContext(authctx.WithUserID(ctx, "user-1"))
+	res := httptest.NewRecorder()
+	h.statusSource(res, patch)
+	if res.Code != 200 || !strings.Contains(res.Body.String(), `"source":"upstream"`) {
+		t.Fatalf("legacy client re-enabled active monitoring: %s", res.Body.String())
 	}
-	savedConfig, e := repo.GetTestModelConfig(ctx, "user-1", "admin-1")
-	if e != nil || savedConfig.StatusSource != "upstream" {
-		t.Fatal("one-shot enabled periodic checks")
+	request = httptest.NewRequest("POST", "/models/check", nil).WithContext(authctx.WithUserID(ctx, "user-1"))
+	res = httptest.NewRecorder()
+	h.checkModel(res, request)
+	if res.Code != 410 {
+		t.Fatalf("legacy model check was accepted: %s", res.Body.String())
 	}
-	duplicate := httptest.NewRequest("POST", oneRequest.URL.String(), bytes.NewBufferString(`{"model":"good","mode":"text"}`)).WithContext(oneRequest.Context())
-	duplicate.SetPathValue("id", rule.ID)
-	duplicateResponse := httptest.NewRecorder()
-	h.checkModel(duplicateResponse, duplicate)
-	var duplicateJob jobs.Job
-	if duplicateResponse.Code != 202 || json.Unmarshal(duplicateResponse.Body.Bytes(), &duplicateJob) != nil || duplicateJob.ID != oneJob.ID {
-		t.Fatal("duplicate click created another billable check")
-	}
-	before = len(platform.testOptions)
-	// Explicit active mode must ignore even fresh upstream evidence.
-	config.StatusSource = "active"
-	config.GroupModels = []TestModelGroupConfig{{GroupID: "a", ModelID: "reported-model", Mode: "text"}}
-	if e = repo.SaveTestModelConfig(ctx, config); e != nil {
-		t.Fatal(e)
-	}
-	if _, e = s.runRule(ctx, *rule, "manual"); e != nil {
-		t.Fatal(e)
-	}
-	if len(platform.testOptions) != before+1 {
-		t.Fatal("active mode reused passive evidence")
-	}
-	// Expanding active-mode details may display upstream observations for other
-	// models, while the selected model keeps its actual-check state/source.
-	extra, _ := json.Marshal(upstream.ModelHealth{ID: "extra-reported", Model: "extra-model", GroupID: conn.UpstreamGroupID, Source: "sub2api_v1", Scope: "group_model", Status: StatusHealthy, CheckedAt: &stamp, CollectedAt: stamp})
-	if _, e = db.Exec(ctx, `INSERT INTO upstream_model_health VALUES($1,'user-1','admin-1','extra-reported','extra-model',$2,'sub2api_v1',$3)`, fixture.upstreams.site.ID, conn.UpstreamGroupID, extra); e != nil {
-		t.Fatal(e)
-	}
-	expanded := httptest.NewRequest("GET", "/models?includeCatalog=1&includeReported=1", nil).WithContext(authctx.WithUserID(ctx, "user-1"))
-	expanded.SetPathValue("id", rule.ID)
-	expandedResponse := httptest.NewRecorder()
-	h.browseModels(expandedResponse, expanded)
-	var expandedBrowser modelBrowser
-	if expandedResponse.Code != 200 || json.Unmarshal(expandedResponse.Body.Bytes(), &expandedBrowser) != nil {
-		t.Fatal(expandedResponse.Body.String())
-	}
-	seenExtra, seenActive := false, false
-	for _, m := range expandedBrowser.Items {
-		if m.Model == "extra-model" && m.Source == "sub2api_v1" && m.Status == StatusHealthy {
-			seenExtra = true
-		}
-		if m.Model == "reported-model" && m.Source == "active" {
-			seenActive = true
-		}
-	}
-	if !seenExtra || !seenActive || len(platform.testOptions) != before+1 {
-		t.Fatalf("expanded details lost source separation: %+v", expandedBrowser.Items)
-	}
-	// A manual image check on a disabled rule must consume its uncertain result,
-	// while waiting never repeats text checks whose normal interval has elapsed.
-	config.GroupModels = []TestModelGroupConfig{{GroupID: "a", ModelID: "waiting-image", Mode: "image", Adapter: "openai_image"}, {GroupID: "a", ModelID: "reported-model", Mode: "text"}}
-	if e = repo.SaveTestModelConfig(ctx, config); e != nil {
-		t.Fatal(e)
-	}
-	rule.Enabled = false
-	if e = repo.UpdateRule(ctx, *rule); e != nil {
-		t.Fatal(e)
-	}
-	fp := configFingerprint(conn, AccountTestOptions{ModelID: "waiting-image", Mode: "image", Adapter: "openai_image"})
-	past := time.Now().Add(-time.Minute)
-	target = TargetState{RuleID: rule.ID, GroupID: "a", Fingerprint: fp, Status: StatusGenerating, Model: "waiting-image", Mode: "image", NextCheckAt: &past}
-	if e = repo.saveModel(ctx, target); e != nil {
-		t.Fatal(e)
-	}
-	_, e = db.Exec(ctx, `INSERT INTO channel_monitor_media_tasks(key,user_id,admin_account_id,rule_id,group_id,model_id,mode,config_fingerprint,status,message) VALUES($1,'user-1','admin-1',$2,'a','waiting-image','image',$3,'unknown','受理待确认') ON CONFLICT(key) DO UPDATE SET status='unknown',updated_at=now()`, rule.ID+"|"+fp, rule.ID, fp)
-	if e != nil {
-		t.Fatal(e)
-	}
-	before = len(platform.testOptions)
-	if _, e = s.runRule(ctx, *rule, "operation_poll"); e != nil {
-		t.Fatal(e)
-	}
-	states, e = repo.ListTargetStates(ctx, "user-1", "admin-1")
-	if e != nil {
-		t.Fatal(e)
-	}
-	if states[rule.ID]["a"].Status == StatusGenerating || len(platform.testOptions) != before {
-		t.Fatal("waiting operation stuck or repeated paid probe")
+	if _, e = s.manualModelCheck(ctx, "user-1", "admin-1", rule.ID, nil); e == nil || len(platform.testOptions) != 0 {
+		t.Fatal("a persisted manual model check reached the upstream API")
 	}
 }

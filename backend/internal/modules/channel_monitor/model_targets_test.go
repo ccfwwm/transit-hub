@@ -5,20 +5,12 @@ import (
 	"transithub/backend/internal/modules/upstream"
 )
 
-func TestActiveModeSelectsOnlyOneModelPerGroup(t *testing.T) {
+func TestOnlyFirstConfiguredModelDeterminesDispatch(t *testing.T) {
 	_, fixture, _, _ := targetFixture()
 	conn := fixture.conns.connections[0]
-	config := TestModelConfig{StatusSource: "active", GroupModels: []TestModelGroupConfig{{GroupID: "a", ModelID: "first"}, {GroupID: "a", ModelID: "second"}, {GroupID: "b", ModelID: "other"}}}
-	got := selectedModelConfigs(Rule{}, conn, nil, config, "a")
-	if len(got) != 1 || got[0].ModelID != "first" {
-		t.Fatalf("active mode selected extra billable models: %+v", got)
-	}
-	config.StatusSource = "upstream"
-	if got = selectedModelConfigs(Rule{}, conn, nil, config, "a"); len(got) != 1 {
-		t.Fatal("passive scheduling must only follow the configured model")
-	}
-	if normalizeStatusSource("") != "upstream" {
-		t.Fatal("default mode must be passive")
+	config := TestModelConfig{GroupModels: []TestModelGroupConfig{{GroupID: "a", ModelID: "first"}, {GroupID: "a", ModelID: "second"}, {GroupID: "b", ModelID: "other"}}}
+	if got := selectedModelConfigs(Rule{}, conn, nil, config, "a"); len(got) != 1 || got[0].ModelID != "first" {
+		t.Fatalf("unexpected dispatch reference model: %+v", got)
 	}
 }
 

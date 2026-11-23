@@ -64,6 +64,18 @@ func (r *targetTestStore) ResetMediaTask(_ context.Context, key string) error {
 	delete(r.tasks, key)
 	return nil
 }
+func (r *targetTestStore) ListPendingMediaTasks(context.Context) ([]MediaTask, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	var tasks []MediaTask
+	for _, task := range r.tasks {
+		if task.Status == "pending" || task.Status == "submitting" || task.Status == "unknown" {
+			tasks = append(tasks, task)
+		}
+	}
+	return tasks, nil
+}
+
 func (r *targetTestStore) ActiveMediaTask(_ context.Context, id string) (*MediaTask, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -90,7 +102,12 @@ func (r *targetTestStore) ClaimMediaTask(_ context.Context, s MediaTask, before 
 
 type targetTestPlatform struct {
 	*fakeMonitorPlatform
-	probe func(AccountTestOptions) (AccountTestResult, error)
+	probe       func(AccountTestOptions) (AccountTestResult, error)
+	observation func(string) (upstream.ModelHealth, bool)
+}
+
+func (p *targetTestPlatform) MatchConfigured(_ context.Context, _, _, _, model string) (upstream.ModelHealth, bool) {
+	return p.observation(model)
 }
 
 func (p *targetTestPlatform) ProbeUpstreamConnection(_ context.Context, _ upstream.Site, _ my_sites.RealConnection, o AccountTestOptions) (AccountTestResult, error) {
@@ -121,10 +138,21 @@ func targetFixture() (context.Context, *testService, *targetTestStore, *targetTe
 	config.StatusSource = "active"
 	config.GroupModels = []TestModelGroupConfig{{GroupID: "a", ModelID: "good"}, {GroupID: "b", ModelID: "bad"}}
 	repo.testModelConfig = &config
-	platform := &targetTestPlatform{fakeMonitorPlatform: ts.platform, probe: func(o AccountTestOptions) (AccountTestResult, error) {
-		return AccountTestResult{Model: o.ModelID, Success: o.ModelID == "good", Message: o.ModelID}, nil
-	}}
+	platform := &targetTestPlatform{
+		fakeMonitorPlatform: ts.platform,
+		probe: func(AccountTestOptions) (AccountTestResult, error) {
+			return AccountTestResult{}, errors.New("unexpected active probe")
+		},
+		observation: func(model string) (upstream.ModelHealth, bool) {
+			status := StatusFailed
+			if model == "good" {
+				status = StatusHealthy
+			}
+			return upstream.ModelHealth{Model: model, Status: status}, true
+		},
+	}
 	ts.Service.platform = platform
+	ts.SetModelHealth(platform)
 	return context.Background(), ts, store, platform
 }
 
@@ -155,8 +183,8 @@ func TestGroupIndependentHealthAndAllGroupDispatchPolicy(t *testing.T) {
 	if summary.Channels[0].Status != StatusFailed || summary.Channels[0].EffectiveTestModelID != "bad" {
 		t.Fatal(summary.Channels[0])
 	}
-	p.probe = func(o AccountTestOptions) (AccountTestResult, error) {
-		return AccountTestResult{Model: o.ModelID, Message: "failed"}, nil
+	p.observation = func(model string) (upstream.ModelHealth, bool) {
+		return upstream.ModelHealth{Model: model, Status: StatusFailed}, true
 	}
 	for i := 0; i < 2; i++ {
 		if _, err = s.RunRule(ctx, "conn-1", "manual"); err != nil {
@@ -166,8 +194,8 @@ func TestGroupIndependentHealthAndAllGroupDispatchPolicy(t *testing.T) {
 	if len(p.schedulableCalls) != 1 || p.schedulableCalls[0].Schedulable {
 		t.Fatal("all groups did not trigger one disable", p.schedulableCalls)
 	}
-	p.probe = func(o AccountTestOptions) (AccountTestResult, error) {
-		return AccountTestResult{Success: o.ModelID == "good", Model: o.ModelID}, nil
+	p.observation = func(model string) (upstream.ModelHealth, bool) {
+		return upstream.ModelHealth{Model: model, Status: StatusHealthy}, true
 	}
 	if _, err = s.RunRule(ctx, "conn-1", "manual"); err != nil {
 		t.Fatal(err)
@@ -186,15 +214,15 @@ func TestGroupIndependentHealthAndAllGroupDispatchPolicy(t *testing.T) {
 	}
 }
 
-func TestGroupConfigResetInheritanceAndRoundDeduplication(t *testing.T) {
+func TestGroupConfigResetInheritanceAndPassiveSync(t *testing.T) {
 	ctx, s, store, p := targetFixture()
 	cfg := store.testModelConfig
 	cfg.GroupModels[1].ModelID = "good"
 	if _, err := s.RunRule(ctx, "conn-1", "manual"); err != nil {
 		t.Fatal(err)
 	}
-	if len(p.testOptions) != 1 || len(store.results) != 2 {
-		t.Fatalf("same parameters weren't coalesced: probes=%d results=%d", len(p.testOptions), len(store.results))
+	if len(p.testOptions) != 0 || len(store.results) != 2 {
+		t.Fatalf("unexpected active probes or missing group results: probes=%d results=%d", len(p.testOptions), len(store.results))
 	}
 	cfg.GroupModels[0].ModelID = "new-model"
 	summary, err := s.SummaryInGroup(ctx, "user-1", "a")
@@ -219,62 +247,19 @@ func TestGroupConfigResetInheritanceAndRoundDeduplication(t *testing.T) {
 	}
 }
 
-func TestMediaSubmissionSurvivesRepeatedClicksAndRestart(t *testing.T) {
-	ctx, s, store, p := targetFixture()
-	store.testModelConfig.GroupModels = []TestModelGroupConfig{{GroupID: "a", ModelID: "gpt-image-2", Mode: "image"}, {GroupID: "b", ModelID: "gpt-image-2", Mode: "image"}}
-	started := make(chan struct{}, 1)
-	release := make(chan struct{})
-	p.probe = func(o AccountTestOptions) (AccountTestResult, error) {
-		started <- struct{}{}
-		<-release
-		return AccountTestResult{Success: true, Model: o.ModelID, Message: "decoded"}, nil
-	}
-	for i := 0; i < 3; i++ {
-		result, err := s.RunRule(ctx, "conn-1", "manual")
-		if err != nil {
-			t.Fatal(err)
-		}
-		if result.Status != StatusGenerating {
-			t.Fatal(result)
+func TestLegacyActiveConfigDoesNotSubmitMediaOrText(t *testing.T) {
+	ctx, svc, store, platform := targetFixture()
+	store.testModelConfig.StatusSource = "active"
+	store.testModelConfig.GroupModels = []TestModelGroupConfig{{GroupID: "a", ModelID: "gpt-image-2", Mode: "image"}, {GroupID: "b", ModelID: "model", Mode: "text"}}
+	svc.health = nil
+	for _, reason := range []string{"manual", "scheduled", "operation_poll", "media_complete"} {
+		result, err := svc.RunRule(ctx, "conn-1", reason)
+		if err != nil || result.Status != StatusUnknown {
+			t.Fatalf("%s sync returned %+v, %v", reason, result, err)
 		}
 	}
-	select {
-	case <-started:
-	case <-time.After(2 * time.Second):
-		t.Fatal("worker not started")
-	}
-	if store.claims != 1 {
-		t.Fatal("duplicate paid submission", store.claims)
-	}
-	close(release)
-	deadline := time.Now().Add(2 * time.Second)
-	for time.Now().Before(deadline) {
-		task, _ := store.GetMediaTask(ctx, "conn-1|"+configFingerprint(s.conns.connections[0], effectiveTestOptionsForGroup(store.mustRule("conn-1"), s.conns.connections[0], s.state(), *store.testModelConfig, "a").options()))
-		if task != nil && task.Status == "success" {
-			break
-		}
-		time.Sleep(time.Millisecond)
-	}
-	result, err := s.RunRule(ctx, "conn-1", "manual")
-	if err != nil || result.Status != StatusHealthy {
-		t.Fatalf("terminal result: %+v %v", result, err)
-	}
-	if store.claims != 1 {
-		t.Fatal("completed result repeated billable request")
-	}
-	// A crash after registration but before a task ID is persisted must not POST.
-	for key, task := range store.tasks {
-		task.Status = "submitting"
-		task.TaskID = ""
-		store.tasks[key] = task
-	}
-	replacement := NewService(store, s.conns, s.states, s.upstreams, p, fakeAccounts{})
-	result, err = replacement.RunRule(ctx, "conn-1", "manual")
-	if err != nil || result.Status != StatusGenerating {
-		t.Fatal(result, err)
-	}
-	if store.claims != 1 {
-		t.Fatal("restart resubmitted an uncertain request")
+	if store.claims != 0 || len(platform.testOptions) != 0 || len(platform.schedulableCalls) != 0 {
+		t.Fatal("sync started paid work or changed dispatch without evidence")
 	}
 }
 
@@ -284,7 +269,7 @@ func TestMediaPollingTimeoutAndTransportAmbiguity(t *testing.T) {
 	s.conns.connections[0].OwnGroupIDs = []string{"a"}
 	fp := configFingerprint(s.conns.connections[0], effectiveTestOptionsForGroup(store.mustRule("conn-1"), s.conns.connections[0], s.state(), *store.testModelConfig, "a").options())
 	key := "conn-1|" + fp
-	store.tasks[key] = MediaTask{Key: key, RuleID: "conn-1", ModelID: "alias", Mode: "video", Status: "pending", TaskID: "original", CreatedAt: time.Now().Add(-time.Minute), UpdatedAt: time.Now().Add(-40 * time.Second)}
+	store.tasks[key] = MediaTask{Key: key, RuleID: "conn-1", ModelID: "alias", Mode: "video", Status: "pending", TaskID: "original", UserID: "user-1", AdminAccountID: "admin-1", ConfigFingerprint: fp, Options: effectiveTestOptionsForGroup(store.mustRule("conn-1"), s.conns.connections[0], s.state(), *store.testModelConfig, "a").options(), CreatedAt: time.Now().Add(-time.Minute), UpdatedAt: time.Now().Add(-40 * time.Second)}
 	polled := make(chan struct{}, 1)
 	p.probe = func(o AccountTestOptions) (AccountTestResult, error) {
 		if o.TaskID != "original" {
@@ -293,9 +278,7 @@ func TestMediaPollingTimeoutAndTransportAmbiguity(t *testing.T) {
 		polled <- struct{}{}
 		return AccountTestResult{}, errors.New("temporary network failure")
 	}
-	if _, err := s.RunRule(ctx, "conn-1", "manual"); err != nil {
-		t.Fatal(err)
-	}
+	s.recoverMediaTasks(ctx)
 	select {
 	case <-polled:
 	case <-time.After(time.Second):
@@ -316,12 +299,9 @@ func TestMediaPollingTimeoutAndTransportAmbiguity(t *testing.T) {
 	store.mu.Lock()
 	store.tasks[key] = *task
 	store.mu.Unlock()
-	result, err := s.RunRule(ctx, "conn-1", "manual")
-	if err != nil || result.Status != StatusGenerating {
-		t.Fatal(result, err)
-	}
+	s.recoverMediaTasks(ctx)
 	task, _ = store.GetMediaTask(ctx, key)
-	if task.Status != "timeout" || store.states["conn-1"]["a"].ConsecutiveFailures != 0 {
+	if task.Status != "timeout" {
 		t.Fatal(task)
 	}
 }
@@ -356,92 +336,6 @@ func TestUnknownGeneratingAndConfigErrorsNeverAvailable(t *testing.T) {
 		if isAvailable(ChannelStatus{Status: status, Enabled: true, Supported: true, Schedulable: boolPtr(true)}) {
 			t.Fatal(status)
 		}
-	}
-}
-
-func TestMediaTerminalFailureOnlyConsumedOnce(t *testing.T) {
-	ctx, s, store, _ := targetFixture()
-	store.testModelConfig.GroupModels = []TestModelGroupConfig{{GroupID: "a", ModelID: "gpt-image-2", Mode: "image"}}
-	s.conns.connections[0].OwnGroupIDs = []string{"a"}
-	rule := store.mustRule("conn-1")
-	target := targetFor(rule, s.conns.connections[0], "a", s.state(), *store.testModelConfig, nil)
-	key := rule.ID + "|" + target.Fingerprint
-	store.tasks[key] = MediaTask{Key: key, RuleID: rule.ID, ModelID: "gpt-image-2", Status: "failed", Message: "invalid output", CreatedAt: time.Now().Add(-time.Second), UpdatedAt: time.Now()}
-	for i := 0; i < 4; i++ {
-		if _, err := s.RunRule(ctx, rule.ID, "manual"); err != nil {
-			t.Fatal(err)
-		}
-	}
-	if store.states[rule.ID]["a"].ConsecutiveFailures != 1 || len(store.results) != 1 {
-		t.Fatalf("reused terminal counted repeatedly: %+v histories=%d", store.states, len(store.results))
-	}
-}
-
-func TestMediaWorkerCompletesDisabledManualTargets(t *testing.T) {
-	for _, scenario := range []string{"success", "failed", "config_changed"} {
-		t.Run(scenario, func(t *testing.T) {
-			ctx, s, store, p := targetFixture()
-			store.testModelConfig.GroupModels = []TestModelGroupConfig{{GroupID: "a", ModelID: "gpt-image-2", Mode: "image"}, {GroupID: "b", ModelID: "gpt-image-2", Mode: "image"}}
-			rule := store.mustRule("conn-1")
-			rule.Enabled = false
-			store.rules[rule.ID] = rule
-			conn := s.conns.connections[0]
-			o := effectiveTestOptionsForGroup(rule, conn, s.state(), *store.testModelConfig, "a").options()
-			fp := configFingerprint(conn, o)
-			key := rule.ID + "|" + fp
-			before := time.Now().Add(-time.Second)
-			for _, g := range []string{"a", "b"} {
-				_ = store.SaveTargetState(ctx, TargetState{RuleID: rule.ID, GroupID: g, Fingerprint: fp, Status: StatusGenerating, MediaTaskKey: key, CheckedAt: &before})
-			}
-			task := MediaTask{Key: key, RuleID: rule.ID, Status: "submitting", CreatedAt: before, Options: o}
-			store.tasks[key] = task
-			if scenario == "config_changed" {
-				store.testModelConfig.GroupModels[0].ModelID = "new-model"
-				store.testModelConfig.GroupModels[1].ModelID = "new-model"
-			}
-			p.probe = func(AccountTestOptions) (AccountTestResult, error) {
-				return AccountTestResult{Success: scenario != "failed", Model: o.ModelID, Message: "validated"}, nil
-			}
-			site, _ := s.upstreams.GetSite(ctx, conn.UpstreamSiteID)
-			s.executeMedia(store, task, conn, *site, o, false)
-			if scenario == "config_changed" {
-				if len(store.results) != 0 {
-					t.Fatal("late media result was attributed to new config")
-				}
-			} else {
-				want := StatusHealthy
-				if scenario == "failed" {
-					want = StatusFailed
-				}
-				for _, g := range []string{"a", "b"} {
-					if got := store.states[rule.ID][g]; got.Status != want || (scenario == "failed" && got.ConsecutiveFailures != 1) {
-						t.Fatal("worker did not finish independent group target", got)
-					}
-				}
-				if len(store.results) != 2 || store.mustRule(rule.ID).Enabled {
-					t.Fatal("manual completion changed monitoring or omitted history")
-				}
-			}
-			historyCount := len(store.results)
-			s.completeMediaTask(task)
-			if len(p.testOptions) != 1 || len(store.results) != historyCount {
-				t.Fatal("completion repeated submission or history")
-			}
-		})
-	}
-}
-
-func TestTextErrorCoalescedAcrossGroups(t *testing.T) {
-	ctx, s, store, p := targetFixture()
-	store.testModelConfig.GroupModels[1].ModelID = "good"
-	p.probe = func(AccountTestOptions) (AccountTestResult, error) {
-		return AccountTestResult{}, errors.New("transport failed")
-	}
-	if _, err := s.RunRule(ctx, "conn-1", "manual"); err != nil {
-		t.Fatal(err)
-	}
-	if len(p.testOptions) != 1 || len(store.results) != 2 {
-		t.Fatalf("same failing request wasn't coalesced: %d", len(p.testOptions))
 	}
 }
 

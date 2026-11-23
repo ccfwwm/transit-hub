@@ -3,10 +3,11 @@ import { computed, ref, watch } from 'vue'
 import { X } from 'lucide-vue-next'
 import { Button } from '@/components/ui/button'
 import { operationJSON } from '../../api/operations'
+import { keyJobMessage, previewKeyRotation, rotateKeys } from '../../api/keyRotation'
 import { realConnect, realDisconnect } from '../../api/mySites'
-import type { KeyEntry, KeyInventory, KeyUsage } from '../../types/upstreamKeys'
+import type { KeyEntry, KeyInventory, KeyUsage, KeyUsageSummary } from '../../types/upstreamKeys'
 
-const props = defineProps<{ entry: KeyEntry | null; inventory: KeyInventory; initialSite: string }>()
+const props = defineProps<{ entry: KeyEntry | null; inventory: KeyInventory; initialSite: string; startRotation?: boolean; overview?: KeyUsageSummary }>()
 const emit = defineEmits<{ close: []; changed: []; migrate: [site: string, binding: string] }>()
 const siteID = ref(props.entry?.siteId || props.initialSite || props.inventory.sites.find(site => !site.error)?.id || '')
 const site = computed(() => props.inventory.sites.find(item => item.id === siteID.value))
@@ -15,7 +16,7 @@ const custom = ref('')
 const createdKey = ref('')
 const created = ref(false)
 const config = ref<Record<string, any>>({ ...props.entry?.config })
-const tab = ref(props.entry ? 'usage' : 'settings')
+const tab = ref(props.startRotation ? 'binding' : props.entry ? 'usage' : 'settings')
 const interval = ref('day')
 const start = ref('')
 const end = ref('')
@@ -27,6 +28,8 @@ const models = ref<string[]>([])
 const model = ref('')
 const modelPlatform = ref('openai')
 const confirmAction = ref('')
+const confirmRotation = ref(Boolean(props.startRotation))
+const rotationSubmitted = ref(false)
 const connect = ref(false)
 const selectedGroups = ref<string[]>([])
 const type = ref('openai')
@@ -136,6 +139,29 @@ const bind = () => action(async () => {
   message.value = '已为所选分组创建独立 Key'
   connect.value = false
 })
+const rotationGroups = computed(() => [...new Set(props.entry?.bindings.flatMap(binding => binding.groups) || [])])
+async function rotate() {
+  if (rotationSubmitted.value || !props.entry?.bindings.length) return
+  const targets = { connectionIds: [...new Set(props.entry.bindings.map(binding => binding.id))] }
+  await action(async () => {
+    const preview = await previewKeyRotation(targets)
+    if (preview.keys !== 1 || preview.skipped) throw new Error('绑定已变化，请关闭详情后刷新 Key 列表')
+    rotationSubmitted.value = true
+    message.value = '轮换任务进行中…'
+    try {
+      const job = await rotateKeys(targets, preview.version)
+      confirmRotation.value = false
+      emit('changed')
+      if (job.failed || job.items.some(item => item.result?.skipped)) {
+        message.value = ''
+        throw new Error(keyJobMessage(job) || '轮换未完成，请在任务进度中查看')
+      }
+      message.value = 'Key 已轮换'
+    } finally {
+      if (confirmRotation.value) rotationSubmitted.value = false
+    }
+  })
+}
 const copyCreatedKey = () => action(async () => { await navigator.clipboard.writeText(createdKey.value); message.value = 'Key 已复制' })
 const amount = (value: number | null | undefined) => value == null ? '—' : value.toLocaleString(undefined, { maximumFractionDigits: 8 })
 const maxUsage = computed(() => Math.max(1, ...(usage.value?.trend.map(point => point.requests) || [])))
@@ -145,11 +171,11 @@ const maxUsage = computed(() => Math.max(1, ...(usage.value?.trend.map(point => 
   <Teleport to="body">
     <div class="fixed inset-0 z-[110] flex items-center justify-center bg-black/50 p-3" @click.self="!busy && emit('close')">
       <section role="dialog" aria-modal="true" aria-labelledby="key-detail-title" class="max-h-[92dvh] w-full max-w-3xl overflow-y-auto rounded-xl border border-border bg-card p-5 shadow-2xl">
-        <header class="flex items-start justify-between gap-3"><h2 id="key-detail-title" class="break-all text-lg font-semibold">{{ entry?.name || '创建独立 Key' }}</h2><button aria-label="关闭" class="rounded-md p-1 hover:bg-muted" @click="emit('close')"><X class="size-5" /></button></header>
+        <header class="flex items-start justify-between gap-3"><h2 id="key-detail-title" class="break-all text-lg font-semibold">{{ entry?.name || '创建独立 Key' }}</h2><button aria-label="关闭" :disabled="busy" class="rounded-md p-1 hover:bg-muted" @click="emit('close')"><X class="size-5" /></button></header>
         <nav v-if="entry" aria-label="Key 详情" class="mt-4 flex flex-wrap gap-2 border-b border-border pb-3">
           <Button v-for="item in [['usage','用量'],['settings','配置'],['test','测试'],['binding','对接与维护']]" :key="item[0]" size="sm" :variant="tab === item[0] ? 'default' : 'ghost'" :disabled="busy" @click="tab = item[0]!">{{ item[1] }}</Button>
         </nav>
-        <p v-if="error || message" :role="error ? 'alert' : 'status'" class="mt-3 text-sm" :class="error ? 'text-destructive' : 'text-signal'">{{ error || message }}</p>
+        <p v-if="error || message" :role="error ? 'alert' : 'status'" class="mt-3 whitespace-pre-line text-sm" :class="error ? 'text-destructive' : 'text-signal'">{{ error || message }}</p>
         <div v-if="created" class="mt-4 space-y-3">
           <input v-if="createdKey" :value="createdKey" readonly aria-label="完整 Key" @focus="($event.target as HTMLInputElement).select()" />
           <div class="flex gap-2"><Button v-if="createdKey" type="button" @click="copyCreatedKey">复制 Key</Button><Button variant="secondary" @click="emit('close')">完成</Button></div>
@@ -196,6 +222,16 @@ const maxUsage = computed(() => Math.max(1, ...(usage.value?.trend.map(point => 
           <div class="flex flex-wrap items-end gap-2"><label>模型<input v-model="model" list="key-test-models" /><datalist id="key-test-models"><option v-for="item in models" :key="item" :value="item" /></datalist></label><label>协议<select v-model="modelPlatform"><option>openai</option><option>anthropic</option><option>gemini</option><option>grok</option></select></label><Button :disabled="busy || !model" @click="test(true)">实际调用模型（可能计费）</Button></div>
         </section>
         <section v-if="tab === 'binding' && entry" class="mt-4 space-y-3">
+          <div v-if="bound" class="space-y-3 rounded-lg border border-border bg-surface p-3">
+            <Button v-if="!confirmRotation" variant="secondary" :disabled="busy || rotationSubmitted" @click="confirmRotation = true">轮换 Key</Button>
+            <template v-else>
+              <p class="font-medium">轮换 {{ entry.name }}</p>
+              <p class="text-sm text-muted-foreground">自有分组 {{ rotationGroups.join(' / ') || '—' }}</p>
+              <p class="text-sm text-muted-foreground">今日消费 {{ amount(overview?.today.amount) }} {{ overview?.today.amount == null ? '' : overview.unit === 'quota' ? '额度' : 'USD' }}</p>
+              <p class="text-sm text-muted-foreground">新 Key 沿用现有的规范名称和编号。系统会等待已有媒体任务结束，并核验转发切换后再撤销旧 Key。</p>
+              <div class="flex gap-2"><Button variant="secondary" :disabled="busy" @click="confirmRotation = false">取消</Button><Button :disabled="busy" @click="rotate">{{ busy ? '轮换中…' : '确认轮换' }}</Button></div>
+            </template>
+          </div>
           <div v-for="item in entry.bindings" :key="item.id" class="flex flex-wrap items-center justify-between gap-2 border-b border-border pb-2">
             <div class="break-all"><p class="font-medium">{{ item.account }}</p><p class="text-sm text-muted-foreground">{{ item.groups.join(' / ') }}</p></div>
             <div class="flex flex-wrap gap-2"><Button v-if="item.update" variant="secondary" @click="emit('migrate', siteID, item.id)">命名与拆分</Button><Button v-if="confirmAction === item.id" variant="destructive" :disabled="busy" @click="remove(item.id)">确认移除账号和 Key</Button><Button v-else variant="secondary" :disabled="busy" @click="confirmAction = item.id">解除对接</Button></div>

@@ -21,6 +21,7 @@ export interface KeyEntry {
   groupName: string
   status: string
   lastUsed?: number | string | null
+  used?: number | null
   config: Record<string, unknown>
   bindings: KeyBinding[]
 }
@@ -37,6 +38,12 @@ export interface KeyUsage {
   trend: UsagePoint[]
   models: UsagePoint[]
   logs: { time: number; model: string; amount: number | null; ip?: string }[]
+}
+export interface KeyUsageSummary {
+  state: KeyUsage['state']
+  unit: string
+  today: UsagePoint
+  week: UsagePoint
 }
 export interface BindingPlan {
   id: string

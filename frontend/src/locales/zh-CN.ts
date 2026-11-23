@@ -101,6 +101,7 @@ export default {
     }
   },
   admin: {
+    navigation: { updateFailed: '页面资源暂不可用，请重试。', loadFailed: '暂时无法打开该页面，请重试。', retry: '重试' },
     layout: {
       toggleLanguage: '切换语言',
       toggleTheme: '切换主题',

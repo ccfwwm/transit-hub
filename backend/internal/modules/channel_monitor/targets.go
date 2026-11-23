@@ -9,7 +9,6 @@ import (
 	"sync"
 	"time"
 
-	media "transithub/backend/internal/modules/monitor_media"
 	"transithub/backend/internal/modules/my_sites"
 	"transithub/backend/internal/modules/upstream"
 )
@@ -138,10 +137,6 @@ func (s *Service) runRuleSingle(ctx context.Context, rule Rule, reason string) (
 		}
 	}
 	results := []Result{}
-	dedup := map[string]struct {
-		result AccountTestResult
-		err    error
-	}{}
 	next := time.Now().Add(time.Duration(rule.CheckIntervalMinutes) * time.Minute)
 	completionKey, _ := ctx.Value(completedMediaTaskContextKey{}).(string)
 	for _, groupID := range groups {
@@ -171,35 +166,21 @@ func (s *Service) runRuleSingle(ctx context.Context, rule Rule, reason string) (
 			target.Message = "余额低于阈值，停止调度"
 			target.ConsecutiveFailures = 0
 		default:
-			if normalizeStatusSource(config.StatusSource) != "active" && completionKey == "" {
-				check.Inconclusive = true
-				check.Message = "上游未提供该模型的有效状态"
-			} else {
-				if options.Mode == "image" || options.Mode == "video" {
-					if _, _, err = media.Resolve(media.Options{Model: options.ModelID, Mode: options.Mode, Prompt: options.Prompt, Size: options.Size, Seconds: options.Seconds, Adapter: options.Adapter, PresetModel: options.PresetModel}); err != nil {
-						target.Status = StatusConfigError
-						target.Message = err.Error()
-						target.ConsecutiveFailures = 0
-						break
-					}
-					check, checkErr = s.mediaCheck(ctx, rule, *conn, *site, target, options)
-					target.MediaTaskKey = rule.ID + "|" + target.Fingerprint
-					if check.MediaTaskKey != "" {
-						target.MediaTaskKey = check.MediaTaskKey
-					}
-				} else {
-					cached, found := dedup[target.Fingerprint]
-					if found {
-						check, checkErr = cached.result, cached.err
-					} else {
-						check, checkErr = s.platform.ProbeUpstreamConnection(ctx, *site, *conn, options)
-						dedup[target.Fingerprint] = struct {
-							result AccountTestResult
-							err    error
-						}{result: check, err: checkErr}
-					}
+			var observation upstream.ModelHealth
+			var found bool
+			if s.health != nil {
+				observation, found = s.health.MatchConfigured(ctx, site.ID, conn.UpstreamGroupID, conn.UpstreamGroupName, options.ModelID)
+			}
+			check.Inconclusive = !found
+			check.Success = found && observation.Status == StatusHealthy
+			check.Message = "上游未提供该模型的有效状态"
+			if found {
+				check.Message = "上游已报告模型状态"
+				if observation.LatencyMS != nil {
+					check.LatencyMS = *observation.LatencyMS
 				}
 			}
+
 			if check.Inconclusive {
 				target.Status = StatusUnknown
 				target.Message = check.Message

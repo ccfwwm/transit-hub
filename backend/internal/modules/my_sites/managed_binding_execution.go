@@ -463,8 +463,12 @@ func (m *KeyManagement) commitSplit(ctx context.Context, source RealConnection, 
 		return err
 	}
 	for _, child := range children {
-		_, err = tx.Exec(ctx, `INSERT INTO real_connections(id,user_id,workspace_admin_account_id,upstream_site_id,upstream_group_id,upstream_group_name,upstream_key_id,upstream_key,admin_account_id,admin_account_name,own_group_ids,group_type,created_at,upstream_api_url)
-			VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14) ON CONFLICT(id) DO NOTHING`, child.ID, uid, aid, child.UpstreamSiteID, child.UpstreamGroupID, child.UpstreamGroupName, child.UpstreamKeyID, child.UpstreamKey, child.AdminAccountID, child.AdminAccountName, child.OwnGroupIDs, child.GroupType, child.CreatedAt, child.UpstreamAPIURL)
+		key, fingerprint, err := protectConnectionKey(m.sites.storageCipher, child.UpstreamKey)
+		if err != nil {
+			return err
+		}
+		_, err = tx.Exec(ctx, `INSERT INTO real_connections(id,user_id,workspace_admin_account_id,upstream_site_id,upstream_group_id,upstream_group_name,upstream_key_id,upstream_key,admin_account_id,admin_account_name,own_group_ids,group_type,created_at,upstream_api_url,upstream_key_fingerprint)
+			VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15) ON CONFLICT(id) DO NOTHING`, child.ID, uid, aid, child.UpstreamSiteID, child.UpstreamGroupID, child.UpstreamGroupName, child.UpstreamKeyID, key, child.AdminAccountID, child.AdminAccountName, child.OwnGroupIDs, child.GroupType, child.CreatedAt, child.UpstreamAPIURL, fingerprint)
 		if err != nil {
 			return err
 		}

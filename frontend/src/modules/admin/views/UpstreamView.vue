@@ -480,6 +480,21 @@ const cnyMetricDisplay = (site: UpstreamSite, metric: UpstreamMetricValue): stri
   return t('admin.upstream.currency.cnyValue', { amount: (metric.value * site.rechargeRate).toFixed(2) })
 }
 
+const usageSources: Record<string, string> = {
+  sub2api_dashboard_stats: 'Sub2API 用量概览',
+  sub2api_dashboard_snapshot: 'Sub2API 用量趋势',
+  newapi_log_stat: 'New API 消费日志统计',
+}
+const usageDay = new Intl.DateTimeFormat('sv-SE', { timeZone: 'Asia/Shanghai', year: 'numeric', month: '2-digit', day: '2-digit' })
+function todayUsageAvailable(site: UpstreamSite) {
+  const metric = site.metrics.todayConsume
+  if (site.status === 'error' || metric.value == null || metric.state === 'unavailable') return false
+  const recordedDay = metric.date || (site.lastSyncedAt ? usageDay.format(new Date(site.lastSyncedAt)) : '')
+  return recordedDay === usageDay.format(new Date())
+}
+function todayUsageSource(site: UpstreamSite) {
+  return todayUsageAvailable(site) ? usageSources[site.metrics.todayConsume.source || ''] || '上次同步的消费数据' : '当前无法读取上游今日消费'
+}
 const usdMetricDisplay = (metric: UpstreamMetricValue): string => {
   if (metric.display.toUpperCase().includes('USD')) return metric.display
   return t('admin.upstream.currency.usdValue', { amount: metric.display })
@@ -636,14 +651,17 @@ onBeforeUnmount(() => {
                 {{ usdMetricDisplay(site.metrics.balance) }}
               </span>
             </div>
-            <div class="flex flex-col items-center justify-center p-3 rounded-xl bg-surface/50 border border-border/40">
+            <div :title="todayUsageSource(site)" class="flex flex-col items-center justify-center p-3 rounded-xl bg-surface/50 border border-border/40">
               <span class="text-xs text-muted-foreground mb-1">{{ t('admin.upstream.fields.todayConsume') }}</span>
-              <span v-if="cnyMetricDisplay(site, site.metrics.todayConsume)" :class="['font-bold text-sm text-center', site.metrics.todayConsume.value && site.metrics.todayConsume.value > 0 ? 'text-orange-500' : 'text-foreground']">
+              <template v-if="todayUsageAvailable(site)">
+                <span v-if="cnyMetricDisplay(site, site.metrics.todayConsume)" :class="['font-bold text-sm text-center', site.metrics.todayConsume.value && site.metrics.todayConsume.value > 0 ? 'text-orange-500' : 'text-foreground']">
                 {{ cnyMetricDisplay(site, site.metrics.todayConsume) }}
               </span>
               <span :class="[cnyMetricDisplay(site, site.metrics.todayConsume) ? 'text-[10px] font-medium mt-0.5' : 'font-bold text-sm', site.metrics.todayConsume.value && site.metrics.todayConsume.value > 0 ? (cnyMetricDisplay(site, site.metrics.todayConsume) ? 'text-orange-500/70' : 'text-orange-500') : (cnyMetricDisplay(site, site.metrics.todayConsume) ? 'text-muted-foreground' : 'text-foreground'), 'text-center']">
                 {{ usdMetricDisplay(site.metrics.todayConsume) }}
               </span>
+              </template>
+              <span v-else class="text-sm font-medium text-muted-foreground">不可用</span>
             </div>
             <div class="flex flex-col items-center justify-center p-3 rounded-xl bg-surface/50 border border-border/40">
               <span class="text-xs text-muted-foreground mb-1">{{ t('admin.upstream.fields.historyRecharge') }}</span>
@@ -809,13 +827,16 @@ onBeforeUnmount(() => {
                 </div>
               </td>
               <td class="px-6 py-4">
-                <div class="flex flex-col gap-0.5">
+                <div :title="todayUsageSource(site)" class="flex flex-col gap-0.5">
+                  <template v-if="todayUsageAvailable(site)">
                   <span v-if="cnyMetricDisplay(site, site.metrics.todayConsume)" :class="['font-medium', site.metrics.todayConsume.value && site.metrics.todayConsume.value > 0 ? 'text-orange-500' : 'text-muted-foreground']">
                     {{ cnyMetricDisplay(site, site.metrics.todayConsume) }}
                   </span>
                   <span :class="[cnyMetricDisplay(site, site.metrics.todayConsume) ? 'text-xs font-medium' : 'font-medium', site.metrics.todayConsume.value && site.metrics.todayConsume.value > 0 ? (cnyMetricDisplay(site, site.metrics.todayConsume) ? 'text-orange-500/70' : 'text-orange-500') : 'text-muted-foreground']">
                     {{ usdMetricDisplay(site.metrics.todayConsume) }}
                   </span>
+                  </template>
+                  <span v-else class="font-medium text-muted-foreground">不可用</span>
                 </div>
               </td>
               <td class="px-6 py-4">

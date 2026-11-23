@@ -34,10 +34,23 @@ type SiteCache interface {
 // 因此使用 sitePayload 包装结构绕过标签限制，保证完整序列化。
 type RedisSiteCache struct {
 	client *redis.Client
+	cipher *SiteCredentialCipher
 }
 
 func NewRedisSiteCache(client *redis.Client) *RedisSiteCache {
 	return &RedisSiteCache{client: client}
+}
+
+func (c *RedisSiteCache) SetCredentialCipher(cipher *SiteCredentialCipher) { c.cipher = cipher }
+
+func (c *RedisSiteCache) decode(id, raw string) (sitePayload, error) {
+	var payload sitePayload
+	plaintext, err := c.cipher.OpenField(siteKey(id), raw)
+	if err != nil {
+		return payload, err
+	}
+	err = json.Unmarshal([]byte(plaintext), &payload)
+	return payload, err
 }
 
 // sitePayload 是 Site 在 Redis 中的序列化格式。
@@ -127,8 +140,8 @@ func (c *RedisSiteCache) Get(ctx context.Context, id string) (*Site, error) {
 		}
 		return nil, err
 	}
-	var p sitePayload
-	if err := json.Unmarshal([]byte(raw), &p); err != nil {
+	p, err := c.decode(id, raw)
+	if err != nil {
 		return nil, err
 	}
 	return fromPayload(p), nil
@@ -141,8 +154,12 @@ func (c *RedisSiteCache) Set(ctx context.Context, site *Site) error {
 	if err != nil {
 		return err
 	}
+	stored, err := c.cipher.ProtectField(siteKey(site.ID), string(payload))
+	if err != nil {
+		return err
+	}
 	pipe := c.client.TxPipeline()
-	pipe.Set(ctx, siteKey(site.ID), payload, 0)
+	pipe.Set(ctx, siteKey(site.ID), stored, 0)
 	if strings.TrimSpace(site.UserID) != "" {
 		pipe.SAdd(ctx, userSitesKey(site.UserID), site.ID)
 	}
@@ -184,7 +201,7 @@ func (c *RedisSiteCache) ListByUser(ctx context.Context, userID string) ([]*Site
 	}
 
 	sites := make([]*Site, 0, len(ids))
-	for _, cmd := range cmds {
+	for i, cmd := range cmds {
 		raw, err := cmd.Result()
 		if err != nil {
 			if err == redis.Nil {
@@ -192,8 +209,8 @@ func (c *RedisSiteCache) ListByUser(ctx context.Context, userID string) ([]*Site
 			}
 			return nil, err
 		}
-		var p sitePayload
-		if err := json.Unmarshal([]byte(raw), &p); err != nil {
+		p, err := c.decode(ids[i], raw)
+		if err != nil {
 			return nil, err
 		}
 		sites = append(sites, fromPayload(p))

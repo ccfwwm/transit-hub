@@ -1244,7 +1244,8 @@ func (s *PlatformService) fetchNewAPIMetrics(session Session, loginData map[stri
 	if err != nil {
 		return Metrics{}, err
 	}
-	statURL := session.BaseURL + "/api/log/self/stat?type=2&start_timestamp=" + strconvInt(todayStart()) + "&end_timestamp=" + strconvInt(todayEnd())
+	today := usageDay()
+	statURL := session.BaseURL + "/api/log/self/stat?type=2&start_timestamp=" + strconvInt(today.Unix()) + "&end_timestamp=" + strconvInt(today.AddDate(0, 0, 1).Unix()-1)
 	stat, err := s.httpClient.requestJSON(statURL, cookieOptions)
 	if err != nil {
 		log.Printf("new-api stat request failed base_url=%s err=%v", session.BaseURL, err)
@@ -1288,7 +1289,7 @@ func (s *PlatformService) fetchNewAPIMetrics(session Session, loginData map[stri
 	qpu := session.QuotaPerUnit
 	return Metrics{
 		Balance:         metric(quotaToUSDWithUnit(quota, qpu)),
-		TodayConsume:    metric(quotaToUSDWithUnit(firstNumber(dataRecord(stat.Payload), []string{"quota", "used_quota", "usedQuota"}), qpu)),
+		TodayConsume:    todayMetric(quotaToUSDWithUnit(firstNumber(dataRecord(stat.Payload), []string{"quota", "used_quota", "usedQuota"}), qpu), "newapi_log_stat", today),
 		HistoryRecharge: metric(quotaToUSDWithUnit(estimatedGranted, qpu)),
 		Group:           group,
 		Groups:          groups,
@@ -1333,9 +1334,24 @@ func (s *PlatformService) fetchSub2APIMetrics(session Session) (Metrics, error) 
 	if len(groups) > 0 {
 		firstGroup = groups[0]
 	}
+	today := usageDay()
+	amount := firstNumber(statsData, []string{"today_actual_cost"})
+	source := "sub2api_dashboard_stats"
+	if amount == nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		trend, err := s.FetchManagedUsageTrend(ctx, session, "", today, today.AddDate(0, 0, 1))
+		if err == nil {
+			amount = new(float64)
+			for _, row := range trend {
+				*amount += row.Amount
+			}
+			source = "sub2api_dashboard_snapshot"
+		}
+	}
 	return Metrics{
 		Balance:         metric(balance),
-		TodayConsume:    metric(firstNumber(statsData, []string{"today_actual_cost"})),
+		TodayConsume:    todayMetric(amount, source, today),
 		HistoryRecharge: metric(totalRecharged),
 		Group:           firstGroup,
 		Groups:          groups,
@@ -1394,6 +1410,22 @@ func newAPIRequestOptionsWith(session Session, method string, body any) requestO
 	options.Method = method
 	options.Body = body
 	return options
+}
+
+func usageDay() time.Time {
+	zone := time.FixedZone("Asia/Shanghai", 8*60*60)
+	now := time.Now().In(zone)
+	return time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, zone)
+}
+
+func todayMetric(amount *float64, source string, date time.Time) MetricValue {
+	value := metric(amount)
+	value.State = "unavailable"
+	if amount != nil {
+		value.State, value.Source = "complete", source
+	}
+	value.Date = date.Format("2006-01-02")
+	return value
 }
 
 func todayStart() int64 {
@@ -2472,7 +2504,7 @@ func (s *PlatformService) ProbeAPIKey(ctx context.Context, options APIKeyProbeOp
 	}
 
 	platform := normalizeGroupPlatform(options.Platform)
-	if options.Mode == "connection" {
+	if options.Mode == "connection" && options.TaskID == "" && !options.Recover {
 		return s.probeConnection(ctx, options)
 	}
 	prompt := strings.TrimSpace(options.Prompt)
@@ -2481,6 +2513,9 @@ func (s *PlatformService) ProbeAPIKey(ctx context.Context, options APIKeyProbeOp
 	}
 	if mode := strings.ToLower(strings.TrimSpace(options.Mode)); mode == "image" || mode == "video" || mode == "audio" {
 		return s.probeMedia(ctx, options)
+	}
+	if options.TaskID != "" || options.Recover {
+		return APIKeyProbeResult{Inconclusive: true, Message: "没有可查询的媒体任务"}, nil
 	}
 	endpoint := apiProbeEndpoint(baseURL, platform)
 	body := apiProbeBody(platform, modelID, prompt)
