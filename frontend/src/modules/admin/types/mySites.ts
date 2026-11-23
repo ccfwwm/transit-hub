@@ -32,6 +32,7 @@ export interface MySiteStatus {
 }
 
 export interface MySiteMappingOptionsResponse {
+  platform: 'sub2api' | 'newapi'
   ownGroups: MySiteMappingOwnGroupOption[]
   mappings: MySiteMapping[]
 }

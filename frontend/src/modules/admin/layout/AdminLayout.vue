@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref, onMounted, onBeforeUnmount } from 'vue'
+import { computed, ref, watch, onMounted, onBeforeUnmount } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { navigationError } from '@/router'
 import { LayoutDashboard, Network, Settings, LogOut, Globe, Moon, Sun, Percent, Megaphone, ChevronDown, ArrowRightLeft, Activity, KeyRound } from 'lucide-vue-next'
@@ -12,6 +12,18 @@ import type { SystemVersionResponse } from '../api/system'
 
 const route = useRoute()
 const router = useRouter()
+const content = ref<HTMLElement | null>(null)
+const refreshVersion = ref(0)
+const pageKey = computed(() => `${String(route.name)}:${refreshVersion.value}`)
+
+function selectMenu(event: MouseEvent, path: string, navigate: (event: MouseEvent) => Promise<unknown>) {
+  if (route.path === path && event.button === 0 && !event.ctrlKey && !event.metaKey && !event.shiftKey && !event.altKey && !event.defaultPrevented) {
+    refreshVersion.value++
+  }
+  void navigate(event)
+}
+
+watch(pageKey, () => content.value?.scrollTo({ top: 0 }), { flush: 'post' })
 const retryNavigation = () => {
   if (navigationError.value) void router.push(navigationError.value.path).catch(() => {})
 }
@@ -108,17 +120,21 @@ const handleLogout = () => {
           v-for="item in menuItems"
           :key="item.path"
           :to="item.path"
-          :title="item.name"
-          :aria-label="item.name"
-          class="flex items-center justify-center gap-3 px-2 py-2.5 rounded-xl transition-colors md:justify-start md:px-3"
-          :class="[
-            route.path === item.path
-              ? 'bg-primary text-primary-foreground font-medium shadow-md shadow-primary/20'
-              : 'text-muted-foreground hover:bg-surface-line hover:text-foreground'
-          ]"
+          custom
+          v-slot="{ href, navigate, isExactActive }"
         >
-          <component :is="item.icon" class="w-5 h-5" />
-          <span class="hidden md:inline">{{ item.name }}</span>
+          <a
+            :href="href"
+            :title="item.name"
+            :aria-label="item.name"
+            :aria-current="isExactActive ? 'page' : undefined"
+            class="flex items-center justify-center gap-3 px-2 py-2.5 rounded-xl transition-colors md:justify-start md:px-3"
+            :class="isExactActive ? 'bg-primary text-primary-foreground font-medium shadow-md shadow-primary/20' : 'text-muted-foreground hover:bg-surface-line hover:text-foreground'"
+            @click="selectMenu($event, item.path, navigate)"
+          >
+            <component :is="item.icon" class="w-5 h-5" />
+            <span class="hidden md:inline">{{ item.name }}</span>
+          </a>
         </router-link>
       </nav>
 
@@ -201,15 +217,13 @@ const handleLogout = () => {
       </header>
 
       <!-- Content Area -->
-      <main class="flex-1 overflow-auto" :class="isWorkspaceSelectionPage ? '' : 'p-3 md:p-6'">
+      <main ref="content" class="flex-1 overflow-auto" :class="isWorkspaceSelectionPage ? '' : 'p-3 md:p-6'">
         <div v-if="navigationError" role="alert" class="mb-3 flex items-center gap-3 rounded-lg border border-warning/40 bg-warning/10 p-3 text-sm">
           <span>{{ t(navigationError.message) }}</span>
           <button type="button" class="font-medium text-primary" @click="retryNavigation">{{ t('admin.navigation.retry') }}</button>
         </div>
         <router-view v-slot="{ Component }">
-          <transition name="fade" mode="out-in">
-            <component :is="Component" :key="route.name" />
-          </transition>
+          <component :is="Component" :key="pageKey" />
         </router-view>
       </main>
     </div>
@@ -217,17 +231,6 @@ const handleLogout = () => {
 </template>
 
 <style scoped>
-.fade-enter-active,
-.fade-leave-active {
-  transition: opacity 0.2s ease, transform 0.2s ease;
-}
-
-.fade-enter-from,
-.fade-leave-to {
-  opacity: 0;
-  transform: translateY(10px);
-}
-
 .dropdown-enter-active,
 .dropdown-leave-active {
   transition: opacity 0.15s ease, transform 0.15s ease;

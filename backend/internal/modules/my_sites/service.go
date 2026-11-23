@@ -159,7 +159,7 @@ func (s *Service) MappingOptions(ctx context.Context, userID string) (MappingOpt
 		}
 		return groups[i].SiteName < groups[j].SiteName
 	})
-	return MappingOptionsResponse{OwnGroups: groups, Mappings: state.Mappings}, nil
+	return MappingOptionsResponse{Platform: state.Session.Platform, OwnGroups: groups, Mappings: state.Mappings}, nil
 }
 
 // RefreshOwnGroups refreshes the current admin workspace's complete group list and removes
@@ -780,6 +780,43 @@ func (s *Service) RealBind(ctx context.Context, userID string, req RealBindReque
 	upstreamSite, err := s.upstreamLookup.GetSite(ctx, req.UpstreamSiteID)
 	if err != nil || upstreamSite == nil || upstreamSite.UserID != userID || upstreamSite.AdminAccountID != adminAccountID {
 		return RealConnectResponse{}, requestError(ErrorRequest)
+	}
+	if s.keyManagement != nil {
+		state, err := s.authenticatedState(ctx, userID, adminAccountID)
+		if err != nil {
+			return RealConnectResponse{}, err
+		}
+		if state.Session.Platform == upstream.PlatformSub2API {
+			req.OwnGroupIDs = uniqueStrings(req.OwnGroupIDs)
+			if len(req.OwnGroupIDs) != 1 {
+				return RealConnectResponse{}, fmt.Errorf("一个已有 Key 只能关联一个自有分组")
+			}
+			unlock, err := s.keyManagement.lockBindingGroup(ctx, userID, adminAccountID, req.UpstreamSiteID, req.UpstreamGroupID)
+			if err != nil {
+				return RealConnectResponse{}, err
+			}
+			defer unlock()
+			unlockKey, err := s.keyManagement.lockOperation(ctx, "key-security|"+req.UpstreamSiteID+"|"+strings.TrimSpace(req.UpstreamKeyID))
+			if err != nil {
+				return RealConnectResponse{}, err
+			}
+			defer unlockKey()
+			existing, err := s.connRepository.ListRealConnections(ctx, userID, adminAccountID)
+			if err != nil {
+				return RealConnectResponse{}, err
+			}
+			for _, conn := range existing {
+				if conn.UpstreamSiteID != req.UpstreamSiteID {
+					continue
+				}
+				if conn.UpstreamKeyID == strings.TrimSpace(req.UpstreamKeyID) {
+					return RealConnectResponse{}, fmt.Errorf("此 Key 已关联，请选择未关联的 Key")
+				}
+				if conn.UpstreamGroupID == req.UpstreamGroupID && slices.Contains(conn.OwnGroupIDs, req.OwnGroupIDs[0]) {
+					return RealConnectResponse{}, fmt.Errorf("该自有分组已对接此上游分组")
+				}
+			}
+		}
 	}
 
 	groupType, _ := resolveGroupInfo(upstreamSite.Metrics.Groups, req.UpstreamGroupID)

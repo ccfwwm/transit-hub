@@ -18,7 +18,7 @@ func (m *KeyManagement) connectManaged(ctx context.Context, uid string, state *S
 	if len(groups) == 0 || len(groups) > 30 {
 		return RealConnectResponse{}, fmt.Errorf("请选择 1 至 30 个自有分组")
 	}
-	unlock, err := m.lockOperation(ctx, "managed-create|"+uid+"|"+aid+"|"+site.ID+"|"+req.UpstreamGroupID)
+	unlock, err := m.lockBindingGroup(ctx, uid, aid, site.ID, req.UpstreamGroupID)
 	if err != nil {
 		return RealConnectResponse{}, err
 	}
@@ -84,20 +84,30 @@ func (m *KeyManagement) connectManaged(ctx context.Context, uid string, state *S
 
 func (m *KeyManagement) connectManagedGroup(ctx context.Context, uid string, state *State, site *upstream.Site, req RealConnectRequest, platform, groupName, group, label, slug string, rate *float64, existing []RealConnection) (RealConnection, error) {
 	aid := state.AdminAccountID
+	hash := sha256.Sum256([]byte(uid + "\x00" + aid + "\x00" + site.ID + "\x00" + req.UpstreamGroupID + "\x00" + group))
+	id := fmt.Sprintf("mk-%x", hash[:16])
 	for _, c := range existing {
 		if c.UpstreamSiteID != site.ID || c.UpstreamGroupID != req.UpstreamGroupID || !slices.Contains(c.OwnGroupIDs, group) {
 			continue
 		}
-		if len(c.OwnGroupIDs) != 1 || c.AdminAccountID == "" {
-			return RealConnection{}, fmt.Errorf("已有共享对接，请先在 Key 管理中拆分")
+		if len(c.OwnGroupIDs) != 1 {
+			return RealConnection{}, fmt.Errorf("该自有分组已有共享对接，请先在 Key 管理中拆分")
 		}
-		if err := m.sites.configureBindingModel(ctx, &c, req.TestModelID, req.AllowWhenUpstreamRateGteOwn); err != nil {
-			return c, err
+		if c.AdminAccountID == "" || c.UpstreamKeyID == "" {
+			return RealConnection{}, fmt.Errorf("该自有分组已有 Key 关联，请在绑定列表中处理")
+		}
+		if c.ID == id {
+			keyID, accountID, step, err := m.progress(ctx, uid, aid, id, site.ID, group)
+			if err != nil {
+				return c, err
+			}
+			if step == "ready" && c.UpstreamKeyID == keyID && c.AdminAccountID == accountID {
+				err = m.finishManagedGroup(ctx, &c, req)
+				return c, err
+			}
 		}
 		return c, nil
 	}
-	hash := sha256.Sum256([]byte(uid + "\x00" + aid + "\x00" + site.ID + "\x00" + req.UpstreamGroupID + "\x00" + group))
-	id := fmt.Sprintf("mk-%x", hash[:16])
 	names, err := m.reserveBindingNames(ctx, uid, aid, []bindingNameRow{{ConnectionID: id, GroupID: group, Slug: slug}})
 	if err != nil {
 		return RealConnection{}, err
@@ -177,18 +187,25 @@ func (m *KeyManagement) connectManagedGroup(ctx context.Context, uid string, sta
 	if err = m.sites.connRepository.SaveRealConnection(ctx, conn); err != nil {
 		return RealConnection{}, err
 	}
-	if _, err = m.db.Exec(ctx, `UPDATE managed_binding_names SET applied_name=$5 WHERE user_id=$1 AND workspace_id=$2 AND connection_id=$3 AND own_group_id=$4`, uid, aid, id, group, name); err != nil {
-		return conn, err
+	err = m.finishManagedGroup(ctx, &conn, req)
+	return conn, err
+}
+
+func (m *KeyManagement) finishManagedGroup(ctx context.Context, conn *RealConnection, req RealConnectRequest) error {
+	uid, aid, group := conn.UserID, conn.WorkspaceAdminAccountID, conn.OwnGroupIDs[0]
+	if _, err := m.db.Exec(ctx, `UPDATE managed_binding_names SET applied_name=$5 WHERE user_id=$1 AND workspace_id=$2 AND connection_id=$3 AND own_group_id=$4`, uid, aid, conn.ID, group, conn.AdminAccountName); err != nil {
+		return err
 	}
-	if err = m.saveProgress(ctx, uid, aid, id, group, keyID, accountID, "done"); err != nil {
-		return conn, err
+	m.sites.addUpstreamMapping(ctx, uid, aid, conn.OwnGroupIDs, conn.UpstreamSiteID, conn.UpstreamGroupName)
+	if err := m.sites.configureBindingModel(ctx, conn, req.TestModelID, req.AllowWhenUpstreamRateGteOwn); err != nil {
+		return err
 	}
-	m.sites.addUpstreamMapping(ctx, uid, aid, conn.OwnGroupIDs, site.ID, groupName)
-	if err = m.sites.configureBindingModel(ctx, &conn, req.TestModelID, req.AllowWhenUpstreamRateGteOwn); err != nil {
-		return conn, err
-	}
-	m.sites.membershipChanged(ctx, conn, conn.OwnGroupIDs)
-	return conn, nil
+	m.sites.membershipChanged(ctx, *conn, conn.OwnGroupIDs)
+	return m.saveProgress(ctx, uid, aid, conn.ID, group, conn.UpstreamKeyID, conn.AdminAccountID, "done")
+}
+
+func (m *KeyManagement) lockBindingGroup(ctx context.Context, uid, aid, siteID, groupID string) (func(), error) {
+	return m.lockOperation(ctx, "managed-create|"+uid+"|"+aid+"|"+siteID+"|"+groupID)
 }
 
 func newBindingKeyConfig(platform upstream.Platform, name, group string, ips []string) (map[string]any, error) {

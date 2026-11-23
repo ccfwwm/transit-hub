@@ -78,6 +78,7 @@ type StatusResponse struct {
 
 // MappingOptionsResponse mapping-options 接口的响应体。
 type MappingOptionsResponse struct {
+	Platform  upstream.Platform       `json:"platform"`
 	OwnGroups []MappingOwnGroupOption `json:"ownGroups"`
 	Mappings  []GroupMapping          `json:"mappings"`
 }

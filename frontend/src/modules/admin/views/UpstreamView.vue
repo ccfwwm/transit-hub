@@ -6,6 +6,7 @@ import StatusSourceControl from '../components/StatusSourceControl.vue'
 import GroupModelStatus from '../components/GroupModelStatus.vue'
 import GroupKeyPolicy from '../components/GroupKeyPolicy.vue'
 import GroupAPIAddress from '../components/GroupAPIAddress.vue'
+import GroupBindingList from '../components/GroupBindingList.vue'
 import ModelHealthExplorer from '../components/ModelHealthExplorer.vue'
 import { operationJSON, followJob, checkedOperation,type OperationJob } from '../api/operations'
 import type { UpstreamGroupInfo as PreviewGroup } from '../types/upstream'
@@ -18,7 +19,6 @@ import { Input } from '@/components/ui/input'
 import { Tooltip } from '@/components/ui/tooltip'
 import { getStrategySettings, saveStrategySettings } from '../api/settings'
 import { getMySiteMappingOptions, listRealConnections, realConnect, realDisconnect, updateRealConnectionGroups } from '../api/mySites'
-import { getDashboardAdminStatus } from '../api/dashboardAdmin'
 import { listGroupRates } from '../api/groupRates'
 import { useUpstreamSites } from '../composables/useUpstreamSites'
 import SiteSettingsModal from '../components/upstream/SiteSettingsModal.vue'
@@ -55,9 +55,10 @@ const ownGroups = ref<MySiteMappingOwnGroupOption[]>([])
 const isGroupActionLoading = ref(false)
 const groupActionError = ref('')
 const groupActionGroup = ref<UpstreamGroupInfo | null>(null)
-const groupActionConnectionID = ref("")
+const groupActionConnectionID = ref('')
 const groupActionSite = ref<UpstreamSite | null>(null)
 const groupActionOwnGroupIds = ref<string[]>([])
+const groupActionSearch = ref('')
 const groupActionTestModel = ref('')
 const groupActionAllowHigherRate = ref(false)
 const isGroupActionOpen = ref(false)
@@ -319,7 +320,7 @@ const openGroupsModal = async (site: UpstreamSite) => {
 
 const loadGroupConnections = async () => {
   try {
-    realConnections.value = await listRealConnections()
+    realConnections.value = await listRealConnections() ?? []
     connectionsLoaded.value = true
     connectionsError.value = ''
   } catch {
@@ -335,13 +336,23 @@ const groupConnections = (site: UpstreamSite, group: UpstreamGroupInfo) => realC
 
 const groupConnection = (site: UpstreamSite, group: UpstreamGroupInfo) => groupConnections(site, group)[0]
 const chosenGroupConnections = computed(() => groupActionSite.value && groupActionGroup.value ? groupConnections(groupActionSite.value, groupActionGroup.value) : [])
-const unusedOwnGroups = computed(() => adminPlatform.value === 'sub2api' ? compatibleOwnGroups.value.filter(group => !chosenGroupConnections.value.some(connection => connection.ownGroupIds.includes(group.id))) : compatibleOwnGroups.value)
+const occupiedGroupIds = computed(() => new Set(chosenGroupConnections.value.flatMap(connection => connection.ownGroupIds ?? [])))
+const unusedOwnGroups = computed(() => adminPlatform.value === 'sub2api'
+  ? compatibleOwnGroups.value.filter(group => !occupiedGroupIds.value.has(group.id))
+  : compatibleOwnGroups.value)
+const visibleOwnGroups = computed(() => unusedOwnGroups.value.filter(group => group.groupName.toLowerCase().includes(groupActionSearch.value.trim().toLowerCase())))
+const canCreateGroupBinding = computed(() => !actionConnection.value && !!adminPlatform.value && !groupOptionsLoading.value
+  && groupActionOwnGroupIds.value.length > 0
+  && groupActionOwnGroupIds.value.every(id => unusedOwnGroups.value.some(group => group.id === id))
+  && (adminPlatform.value === 'newapi' ? groupChannelType.value > 0 : !!groupActionType.value))
 const chooseGroupConnection = (id: string) => {
   groupActionConnectionID.value = id
   const connection = chosenGroupConnections.value.find(item => item.id === id)
   groupActionOwnGroupIds.value = [...(connection?.ownGroupIds || [])]
   groupActionTestModel.value = connection?.testModelId || ''
   groupActionAllowHigherRate.value = connection?.allowWhenUpstreamRateGteOwn ?? false
+  groupActionSearch.value = ''
+  disconnectMode.value = 'full'
   groupActionError.value = ''
 }
 
@@ -351,6 +362,8 @@ const openGroupAction = async (site: UpstreamSite, group: UpstreamGroupInfo) => 
   if (!connectionsLoaded.value || isGroupActionLoading.value) return
   groupActionSite.value = site
   groupActionGroup.value = group
+  adminPlatform.value = ''
+  ownGroups.value = []
   chooseGroupConnection(groupConnection(site, group)?.id || '')
   groupActionError.value = ''
   isGroupActionOpen.value = true
@@ -361,9 +374,12 @@ const openGroupAction = async (site: UpstreamSite, group: UpstreamGroupInfo) => 
   disconnectMode.value = 'full'
   groupOptionsLoading.value = true
   try {
-    const [options, status] = await Promise.all([getMySiteMappingOptions(), getDashboardAdminStatus()])
-    ownGroups.value = options.ownGroups
-    adminPlatform.value = status.platform || ''
+    const [options, connections] = await Promise.all([getMySiteMappingOptions(), listRealConnections()])
+    if (groupActionSite.value?.id !== site.id || groupActionGroup.value?.id !== group.id) return
+    realConnections.value = connections ?? []
+    ownGroups.value = options.ownGroups ?? []
+    adminPlatform.value = options.platform
+    chooseGroupConnection(groupConnection(site, group)?.id || '')
   } catch (error) {
     groupActionError.value = error instanceof Error ? t(error.message) : t('admin.upstream.errors.request')
   } finally {
@@ -372,7 +388,7 @@ const openGroupAction = async (site: UpstreamSite, group: UpstreamGroupInfo) => 
 }
 
 const closeGroupAction = () => {
-  if (isGroupActionLoading.value) return
+  if (isGroupActionLoading.value || groupOptionsLoading.value) return
   isGroupActionOpen.value = false
   groupActionGroup.value = null
   groupActionSite.value = null
@@ -384,7 +400,7 @@ const closeGroupAction = () => {
 const submitGroupAction = async () => {
   const site = groupActionSite.value
   const group = groupActionGroup.value
-  if (!site || !group || isGroupActionLoading.value || groupOptionsLoading.value || actionConnection.value || groupActionOwnGroupIds.value.length === 0) return
+  if (!site || !group || isGroupActionLoading.value || !canCreateGroupBinding.value) return
   isGroupActionLoading.value = true
   groupActionError.value = ''
   try {
@@ -399,11 +415,12 @@ const submitGroupAction = async () => {
       allowWhenUpstreamRateGteOwn: groupActionAllowHigherRate.value,
     })
     const created = result.connections || [result.connection]
-    const existing = new Set(realConnections.value.map(item => item.id))
-    realConnections.value.push(...created.filter(item => !existing.has(item.id)))
-    isGroupActionLoading.value = false
-    closeGroupAction()
+    const createdById = new Map(created.map(item => [item.id, item]))
+    realConnections.value = [...createdById.values(), ...realConnections.value.filter(item => !createdById.has(item.id))]
+    chooseGroupConnection(created[0]?.id || '')
   } catch (error) {
+    await loadGroupConnections()
+    groupActionOwnGroupIds.value = groupActionOwnGroupIds.value.filter(id => unusedOwnGroups.value.some(group => group.id === id))
     groupActionError.value = error instanceof Error ? t(error.message) : t('admin.upstream.errors.request')
   } finally {
     isGroupActionLoading.value = false
@@ -412,7 +429,7 @@ const submitGroupAction = async () => {
 
 const saveGroupBinding = async () => {
   const connection=actionConnection.value
-  if(!connection||isGroupActionLoading.value||!groupActionOwnGroupIds.value.length)return
+  if(!connection||!adminPlatform.value||isGroupActionLoading.value||groupOptionsLoading.value||!groupActionOwnGroupIds.value.length)return
   isGroupActionLoading.value=true;groupActionError.value=''
   try {
     const updated=await updateRealConnectionGroups(connection.id,{connectionId:connection.id,ownGroupIds:[...groupActionOwnGroupIds.value],testModelId:groupActionTestModel.value,allowWhenUpstreamRateGteOwn:groupActionAllowHigherRate.value})
@@ -1028,7 +1045,7 @@ onBeforeUnmount(() => {
               <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
                 <div
                   v-for="group in groups"
-                  :key="group.name"
+                  :key="group.id || group.name"
                   role="button" tabindex="0"
                   :aria-disabled="!connectionsLoaded"
                   @keydown.enter.self="selectedSiteForGroups && openGroupAction(selectedSiteForGroups, group)"
@@ -1043,7 +1060,7 @@ onBeforeUnmount(() => {
                   <span class="text-sm font-medium text-foreground truncate w-full group-hover:text-primary transition-colors">{{ group.name }}</span>
 
                   <span class="mt-1 text-[10px] font-semibold" :class="groupConnection(selectedSiteForGroups!, group) ? 'text-signal' : 'text-muted-foreground'">
-                    {{ !connectionsLoaded ? '-' : groupConnection(selectedSiteForGroups!, group) ? t('admin.upstream.fields.connected') : t('admin.upstream.fields.disconnected') }}
+                    {{ !connectionsLoaded ? '—' : groupConnection(selectedSiteForGroups!, group) ? `已对接 ${groupConnections(selectedSiteForGroups!, group).length} 条` : t('admin.upstream.fields.disconnected') }}
                   </span>
                   <span
                     v-if="group.multiplier !== null && selectedSiteForGroups && selectedSiteForGroups.rechargeRate > 0"
@@ -1064,7 +1081,7 @@ onBeforeUnmount(() => {
 
                   <GroupModelStatus upstream-only v-if="selectedSiteForGroups" :site-id="selectedSiteForGroups.id" :group-id="group.id" :group-name="group.name" :multiplier="group.multiplier==null?null:group.multiplier*(selectedSiteForGroups?.rechargeRate??1)" :rule-id="groupConnection(selectedSiteForGroups!,group)?.id" compact summary class="mt-3 w-full text-left" />
                   <GroupKeyPolicy v-if="selectedSiteForGroups" :site-id="selectedSiteForGroups.id" :group-id="group.id" :group-name="group.name" />
-                  <span class="mt-1 text-xs text-primary">{{groupConnection(selectedSiteForGroups!,group)?'编辑绑定':'对接分组'}} ›</span>
+                  <span class="mt-1 text-xs text-primary">{{groupConnection(selectedSiteForGroups!,group)?'管理对接':'对接分组'}} ›</span>
                 </div>
               </div>
             </div>
@@ -1094,26 +1111,32 @@ onBeforeUnmount(() => {
             </button>
           </div>
           <div v-if="groupActionError" class="mt-4 rounded-lg border border-warning/30 bg-warning/10 px-3 py-2 text-sm text-warning">{{ groupActionError }}</div>
-          <label v-if="chosenGroupConnections.length" class="mt-3 block text-sm">选择对接
-            <select :value="groupActionConnectionID" :disabled="isGroupActionLoading" class="mt-1 block w-full rounded-md border border-border bg-surface p-2" @change="chooseGroupConnection(($event.target as HTMLSelectElement).value)">
-              <option v-for="item in chosenGroupConnections" :key="item.id" :value="item.id">{{ item.adminAccountName }}</option>
-              <option v-if="adminPlatform === 'sub2api'" value="">添加独立对接</option>
-            </select>
-          </label>
+          <GroupBindingList class="mt-4" :connections="chosenGroupConnections" :own-groups="ownGroups" :selected-id="groupActionConnectionID" :can-add="adminPlatform === 'sub2api'" :disabled="isGroupActionLoading || groupOptionsLoading" @select="chooseGroupConnection" />
+          <div class="mt-4 grid items-start gap-6 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.2fr)]">
+          <div class="min-w-0">
           <GroupAPIAddress v-if="groupActionSite && groupActionGroup" :site-id="groupActionSite.id" :group-id="groupActionGroup.id" :account-api-url="actionConnection?.upstreamApiUrl" />
           <PrimaryModelPicker v-if="groupActionSite && groupActionGroup" :key="`${groupActionSite.id}:${groupActionGroup.id}`" v-model="groupActionTestModel" class="mt-4" :site-id="groupActionSite.id" :group-id="groupActionGroup.id" :connection-id="actionConnection?.id" :disabled="isGroupActionLoading" />
           <label class="mt-4 flex cursor-pointer items-center justify-between gap-3 rounded-lg border border-border/50 bg-surface px-4 py-3 text-sm"><span>倍率大于等于分组时仍允许启用</span><input v-model="groupActionAllowHigherRate" type="checkbox" :disabled="isGroupActionLoading" class="h-4 w-4 shrink-0 accent-blue-600" /></label>
-          <GroupModelStatus inline selectable @select-model="groupActionTestModel=$event" upstream-only v-if="groupActionSite && groupActionGroup" :site-id="groupActionSite.id" :group-id="groupActionGroup.id" :group-name="groupActionGroup.name" :multiplier="groupActionGroup.multiplier==null?null:groupActionGroup.multiplier*(groupActionSite.rechargeRate??1)" :rule-id="actionConnection?.id" summary class="mt-4" />
           <template v-if="actionConnection">
-            <p class="mt-5 text-sm text-foreground">{{ t('admin.upstream.fields.connected') }} · {{ actionConnection.adminAccountName }}</p>
-            <div class="mt-4 rounded-xl border border-border/60 p-3"><h4 class="text-sm font-medium">修改绑定的自有分组</h4><p v-if="groupOptionsLoading" class="mt-2 text-sm">读取分组中…</p><div class="mt-2 max-h-48 space-y-2 overflow-auto"><label v-for="ownGroup in (adminPlatform === 'sub2api' ? compatibleOwnGroups.filter(g => actionConnection?.ownGroupIds.includes(g.id)) : compatibleOwnGroups)" :key="ownGroup.id" class="flex items-center justify-between rounded border border-border/50 px-3 py-2 text-sm"><span>{{ownGroup.groupName}} · {{ownGroup.platform}}</span><input v-model="groupActionOwnGroupIds" type="checkbox" :value="ownGroup.id" :disabled="isGroupActionLoading||groupOptionsLoading||adminPlatform === 'sub2api'" /></label></div><Button class="mt-3" :disabled="isGroupActionLoading||groupOptionsLoading||!groupActionOwnGroupIds.length" @click="saveGroupBinding">保存绑定设置</Button></div>
+            <div class="mt-4 rounded-xl border border-border/60 p-3">
+              <template v-if="adminPlatform === 'newapi'">
+                <h4 class="text-sm font-medium">自有分组</h4>
+                <div class="mt-2 max-h-48 space-y-2 overflow-auto">
+                  <label v-for="ownGroup in compatibleOwnGroups" :key="ownGroup.id" class="flex items-center justify-between rounded border border-border/50 px-3 py-2 text-sm">
+                    <span>{{ ownGroup.groupName }} · {{ ownGroup.platform }}</span>
+                    <input v-model="groupActionOwnGroupIds" type="checkbox" :value="ownGroup.id" :disabled="isGroupActionLoading || groupOptionsLoading" />
+                  </label>
+                </div>
+              </template>
+              <Button :class="adminPlatform === 'newapi' ? 'mt-3' : ''" :disabled="!adminPlatform || isGroupActionLoading || groupOptionsLoading || !groupActionOwnGroupIds.length" @click="saveGroupBinding">保存绑定设置</Button>
+            </div>
             <label class="mt-4 flex gap-2 text-sm"><input v-model="disconnectMode" type="radio" value="unlink" :disabled="isGroupActionLoading" />{{ t('admin.groupRates.disconnect.unlinkOnly') }}</label>
             <p class="mt-1 text-xs text-muted-foreground">{{ t('admin.groupRates.disconnect.unlinkOnlyHint') }}</p>
             <label class="mt-3 flex gap-2 text-sm"><input v-model="disconnectMode" type="radio" value="full" :disabled="isGroupActionLoading" />{{ t('admin.groupRates.disconnect.deleteAll') }}</label>
             <p class="mt-1 text-xs text-muted-foreground">{{ t('admin.groupRates.disconnect.deleteAllHint') }}</p>
             <div class="mt-5 flex justify-end gap-2">
               <Button variant="secondary" :disabled="isGroupActionLoading" @click="closeGroupAction">{{ t('admin.groupRates.actions.cancel') }}</Button>
-              <Button variant="destructive" :disabled="isGroupActionLoading" @click="disconnectGroupAction">
+              <Button variant="destructive" :disabled="isGroupActionLoading || groupOptionsLoading" @click="disconnectGroupAction">
                 <Loader2 v-if="isGroupActionLoading" class="h-4 w-4 animate-spin" />
                 {{ t('admin.groupRates.disconnect.action') }}
               </Button>
@@ -1134,12 +1157,16 @@ onBeforeUnmount(() => {
                 <option v-for="type in NEW_API_CHANNEL_TYPES" :key="type.id" :value="type.id">{{ type.name }}</option>
               </select>
             </label>
-            <p class="mt-5 text-sm text-muted-foreground">{{ t('admin.groupRates.connect.ownGroupLabel') }}</p>
+            <h4 class="mt-5 text-sm font-medium">{{ adminPlatform === 'sub2api' ? '选择要新增对接的自有分组' : t('admin.groupRates.connect.ownGroupLabel') }}</h4>
+            <p v-if="adminPlatform === 'sub2api'" class="mt-1 text-xs text-muted-foreground">每个选中的分组会创建独立的上游 Key 和 Sub2API 转发账号。</p>
             <Loader2 v-if="groupOptionsLoading" class="mt-3 h-5 w-5 animate-spin text-primary" />
             <p v-else-if="!compatibleOwnGroups.length" class="mt-3 text-sm text-muted-foreground">{{ t('admin.groupRateCampaigns.editor.groupsEmpty') }}</p>
+            <p v-else-if="!unusedOwnGroups.length" class="mt-3 text-sm text-muted-foreground">所有可用的自有分组均已绑定。</p>
+            <input v-else v-model="groupActionSearch" aria-label="搜索可绑定分组" placeholder="搜索可绑定分组" class="mt-3 h-9 w-full rounded-lg border border-border/50 bg-surface px-3 text-sm" />
+            <p v-if="unusedOwnGroups.length && !visibleOwnGroups.length" class="mt-3 text-sm text-muted-foreground">没有匹配的分组</p>
             <div class="mt-3 max-h-56 space-y-2 overflow-y-auto">
               <label
-                v-for="ownGroup in unusedOwnGroups"
+                v-for="ownGroup in visibleOwnGroups"
                 :key="ownGroup.id"
                 :class="[
                   'flex w-full items-center justify-between rounded-lg border px-3 py-2 text-left text-sm transition-colors',
@@ -1152,12 +1179,15 @@ onBeforeUnmount(() => {
             </div>
             <div class="mt-5 flex justify-end gap-2">
               <Button variant="secondary" :disabled="isGroupActionLoading" @click="closeGroupAction">{{ t('admin.groupRates.actions.cancel') }}</Button>
-              <Button :disabled="isGroupActionLoading || groupOptionsLoading || groupActionOwnGroupIds.length === 0 || (adminPlatform !== 'newapi' && !groupActionType) || (adminPlatform === 'newapi' && groupChannelType <= 0)" @click="submitGroupAction">
+              <Button :disabled="isGroupActionLoading || !canCreateGroupBinding" @click="submitGroupAction">
                 <Loader2 v-if="isGroupActionLoading" class="h-4 w-4 animate-spin" />
-                {{ t('admin.groupRates.actions.connect') }}
+                {{ adminPlatform === 'sub2api' ? '创建 Key 并对接' : t('admin.groupRates.actions.connect') }}
               </Button>
             </div>
           </template>
+          </div>
+          <GroupModelStatus v-if="groupActionSite && groupActionGroup" inline selectable upstream-only summary class="min-w-0 border-t border-border/50 pt-4 lg:border-l lg:border-t-0 lg:pl-5 lg:pt-0" :site-id="groupActionSite.id" :group-id="groupActionGroup.id" :group-name="groupActionGroup.name" :multiplier="groupActionGroup.multiplier == null ? null : groupActionGroup.multiplier * (groupActionSite.rechargeRate ?? 1)" :rule-id="actionConnection?.id" @select-model="groupActionTestModel = $event" />
+          </div>
         </div>
       </div>
     </Teleport>

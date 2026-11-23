@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -67,15 +68,23 @@ func TestManagedSplitResumesAfterAccountMembershipFailure(t *testing.T) {
 					send(map[string]any{"items": items, "total": len(items)})
 				}
 				switch {
+				case path == "/api/v1/admin/groups/all":
+					send([]any{
+						map[string]any{"id": 8, "name": "Pro"},
+						map[string]any{"id": 9, "name": "Ultra"},
+						map[string]any{"id": 10, "name": "Enterprise"},
+						map[string]any{"id": 11, "name": "Team"},
+					})
 				case path == "/api/v1/keys" || path == "/api/token/":
 					switch r.Method {
 					case "GET":
 						list(keyRecords)
 					case "POST":
 						record := read()
-						record["id"] = 14
-						record["key"] = newCredential
-						keyRecords["14"] = record
+						id := 14 + keyCreates
+						record["id"] = id
+						record["key"] = newCredential + strconv.Itoa(id)
+						keyRecords[strconv.Itoa(id)] = record
 						keyCreates++
 						send(record)
 					case "PUT":
@@ -104,9 +113,10 @@ func TestManagedSplitResumesAfterAccountMembershipFailure(t *testing.T) {
 						return
 					}
 					body := read()
-					body["id"] = 2
+					id := 2 + accountCreates
+					body["id"] = id
 					body["schedulable"] = true
-					accounts["2"] = body
+					accounts[strconv.Itoa(id)] = body
 					accountCreates++
 					send(body)
 				case strings.HasPrefix(path, "/api/v1/admin/accounts/"):
@@ -134,7 +144,8 @@ func TestManagedSplitResumesAfterAccountMembershipFailure(t *testing.T) {
 			}))
 			defer server.Close()
 			siteSession := upstream.Session{Platform: platform, BaseURL: server.URL, AccessToken: "upstream-fixture"}
-			site := &upstream.Site{ID: "site", UserID: "user", AdminAccountID: "workspace", Platform: platform, Session: &siteSession}
+			rate := 0.15
+			site := &upstream.Site{ID: "site", BaseURL: "https://api.foxrouter.com", UserID: "user", AdminAccountID: "workspace", Platform: platform, Session: &siteSession, Metrics: upstream.Metrics{Groups: []upstream.GroupInfo{{ID: "3", Multiplier: &rate}}}}
 			svc := NewService(repo, upstream.NewPlatformService(upstream.NewHTTPClient(server.Client())), realConnectLookup{site: site})
 			if err := svc.EnsureSchema(ctx); err != nil {
 				t.Fatal(err)
@@ -183,6 +194,32 @@ func TestManagedSplitResumesAfterAccountMembershipFailure(t *testing.T) {
 			}
 			if !slices.Equal(accounts["1"]["group_ids"].([]any), []any{float64(8)}) {
 				t.Fatal("retained account has wrong groups")
+			}
+			state := State{UserID: "user", AdminAccountID: "workspace", Session: admin}
+			if err = repo.Save(ctx, state); err != nil {
+				t.Fatal(err)
+			}
+			// Existing split bindings and new groups share an upstream group.
+			req := RealConnectRequest{UpstreamGroupID: "3", OwnGroupIDs: []string{"8", "10", "11"}}
+			created, err := manager.connectManaged(ctx, "user", &state, site, req, "openai", "Upstream Pro")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(created.Connections) != 3 || created.Connections[0].ID != conn.ID || keyCreates != 3 || accountCreates != 3 {
+				t.Fatalf("existing binding was not reused or new groups shared a resource: bindings=%d keys=%d accounts=%d", len(created.Connections), keyCreates, accountCreates)
+			}
+			for i, binding := range created.Connections[1:] {
+				groupID := req.OwnGroupIDs[i+1]
+				accountGroups := accounts[binding.AdminAccountID]["group_ids"].([]any)
+				if !slices.Equal(binding.OwnGroupIDs, []string{groupID}) || len(accountGroups) != 1 || keyString(accountGroups[0]) != groupID || binding.AdminAccountName != keyRecords[binding.UpstreamKeyID]["name"] {
+					t.Fatalf("new binding did not get its own named key and forwarding group: %s", binding.ID)
+				}
+			}
+			otherModel := "do-not-overwrite-existing"
+			req.TestModelID = &otherModel
+			retry, err := manager.connectManaged(ctx, "user", &state, site, req, "openai", "Upstream Pro")
+			if err != nil || len(retry.Connections) != 3 || retry.Connections[1].ID != created.Connections[1].ID || keyCreates != 3 || accountCreates != 3 {
+				t.Fatalf("repeat request did not reuse existing bindings: %v", err)
 			}
 		})
 	}

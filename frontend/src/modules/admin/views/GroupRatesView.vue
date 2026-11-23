@@ -3,12 +3,12 @@ import GroupModelStatus from '../components/GroupModelStatus.vue'
 import PrimaryModelPicker from '../components/PrimaryModelPicker.vue'
 import { computed, ref, watch } from 'vue'
 import GroupAPIAddress from '../components/GroupAPIAddress.vue'
+import GroupBindingList from '../components/GroupBindingList.vue'
 import { useI18n } from 'vue-i18n'
 import { useRouter } from 'vue-router'
 import { AlertCircle, ArrowUpDown, Edit3, History, Link2, Loader2, Megaphone, RefreshCw, Search, X } from 'lucide-vue-next'
 import { Button } from '@/components/ui/button'
 import { getMySiteMappingOptions, realConnect, realBind, listUpstreamKeys, listRealConnections, realDisconnect, updateRealConnectionGroups } from '../api/mySites'
-import { getDashboardAdminStatus } from '../api/dashboardAdmin'
 import { useGroupRates } from '../composables/useGroupRates'
 import type { GroupRate, GroupRateHistoryRow } from '../types/groupRates'
 import type { MySiteMapping, MySiteMappingOwnGroupOption, RealConnection, UpstreamKeyItem } from '../types/mySites'
@@ -46,19 +46,18 @@ const selectedRate = ref<GroupRate | null>(null)
 const isHistoryOpen = ref(false)
 const editingRate = ref<GroupRate | null>(null)
 const connectingRate = ref<GroupRate | null>(null)
-const editingConnectionGroups = ref(false)
+const editingConnectionId = ref('')
 const editTypeValue = ref('')
 const connectOwnGroups = ref<string[]>([])
 const connectMode = ref<'real' | 'bind'>('real')
 const ownGroups = ref<MySiteMappingOwnGroupOption[]>([])
 const mySiteMappings = ref<MySiteMapping[]>([])
-const hasLoadedMappingOptions = ref(false)
 const searchQuery = ref('')
 let searchDebounceTimer: ReturnType<typeof setTimeout> | null = null
 const mappedFilter = ref<'all' | 'mapped' | 'unmapped' | 'deleted'>('all')
 const sortMode = ref<'multiplierAsc' | 'multiplierDesc' | 'siteNameAsc' | 'groupNameAsc'>('multiplierAsc')
 const realConnectionsData = ref<RealConnection[]>([])
-const disconnectingRate = ref<GroupRate | null>(null)
+const disconnectingConnection = ref<RealConnection | null>(null)
 const disconnectMode = ref<'unlink' | 'full'>('full')
 const isDisconnecting = ref(false)
 const disconnectError = ref('')
@@ -99,14 +98,15 @@ const channelTypeForGroupType: Record<string, number> = {
 }
 
 const filteredOwnGroups = computed(() => {
-  // new-api admin 不按渠道类型筛选，直接显示全部自有分组
   if (isAdminNewAPI.value) return ownGroups.value
-  const upstreamType = normalizeGroupType(connectingRate.value?.type || selectedGroupType.value)
-  if (upstreamType) {
-    const matching = ownGroups.value.filter(g => normalizeGroupType(g.platform) === upstreamType)
-    return matching.length > 0 ? matching : ownGroups.value
+  if (editingConnectionGroups.value) {
+    return ownGroups.value.filter(group => connectOwnGroups.value.includes(group.id))
   }
-  return ownGroups.value
+  const upstreamType = normalizeGroupType(selectedGroupType.value || connectingRate.value?.type)
+  const matching = ownGroups.value.filter(group => normalizeGroupType(group.platform) === upstreamType)
+  const compatible = matching.length ? matching : ownGroups.value
+  const occupied = new Set(connectingConnections.value.flatMap(connection => connection.ownGroupIds ?? []))
+  return compatible.filter(group => !occupied.has(group.id))
 })
 
 const dynamicGroupTypes = computed(() => {
@@ -122,30 +122,30 @@ const dynamicGroupTypes = computed(() => {
   return Array.from(values).sort()
 })
 
-const realConnectionForRate = (rate: GroupRate): RealConnection | undefined =>
-  realConnectionsData.value.find(c => c.upstreamSiteId === rate.siteId && (c.upstreamGroupId === rate.groupId || c.upstreamGroupName === rate.groupName))
-
-const isRealConnected = (rate: GroupRate): boolean => !!realConnectionForRate(rate)
+const connectionsForRate = (rate: GroupRate) => realConnectionsData.value.filter(connection =>
+  connection.upstreamSiteId === rate.siteId
+  && (connection.upstreamGroupId && rate.groupId ? connection.upstreamGroupId === rate.groupId : connection.upstreamGroupName === rate.groupName),
+)
+const connectingConnections = computed(() => connectingRate.value ? connectionsForRate(connectingRate.value) : [])
+const editingConnection = computed(() => connectingConnections.value.find(connection => connection.id === editingConnectionId.value))
+const editingConnectionGroups = computed(() => !!editingConnection.value)
+const isRealConnected = (rate: GroupRate): boolean => connectionsForRate(rate).length > 0
+const availableUpstreamKeys = computed(() => {
+  if (isAdminNewAPI.value || !connectingRate.value) return upstreamKeys.value
+  const rate = connectingRate.value
+  const used = new Set(realConnectionsData.value.filter(connection => connection.upstreamSiteId === rate.siteId).map(connection => connection.upstreamKeyId))
+  return upstreamKeys.value.filter(key => !used.has(key.id) && (!key.groupId || key.groupId === rate.groupId))
+})
 
 const loadRealConnections = async () => {
   try {
-    realConnectionsData.value = await listRealConnections()
+    realConnectionsData.value = await listRealConnections() ?? []
   } catch {
     realConnectionsData.value = []
   }
 }
 
 void loadRealConnections()
-
-const loadAdminPlatform = async () => {
-  try {
-    const status = await getDashboardAdminStatus()
-    adminPlatform.value = status.platform ?? ''
-  } catch {
-    adminPlatform.value = ''
-  }
-}
-void loadAdminPlatform()
 
 const filteredRates = computed(() => {
   const filtered = rates.value.filter(rate => {
@@ -191,6 +191,10 @@ watch(searchQuery, (value) => {
   }, 300)
 })
 
+watch(selectedGroupType, () => {
+  if (!editingConnectionGroups.value) connectOwnGroups.value = []
+})
+
 // new-api admin：根据自有分组类型过滤可选的渠道类型
 // 分组类型已知时只显示对应渠道，未知时显示全部
 const groupTypeToChannelIds: Record<string, number[]> = {
@@ -211,12 +215,13 @@ const filteredChannelTypes = computed(() => {
 })
 
 const canSubmitConnect = computed(() => {
-  if (!connectingRate.value || connectOwnGroups.value.length === 0) return false
+  if (!connectingRate.value || !adminPlatform.value || connectOwnGroups.value.length === 0) return false
+  if (!editingConnectionGroups.value && !connectOwnGroups.value.every(id => filteredOwnGroups.value.some(group => group.id === id))) return false
   // sub2api admin：分组类型未知时必须手动选择
   if (needsGroupTypeSelection.value && !selectedGroupType.value) return false
   // new-api admin：必须选择渠道类型
   if (needsChannelTypeSelection.value && !selectedChannelType.value) return false
-  if (connectMode.value === 'bind') return !!selectedKeyId.value
+  if (connectMode.value === 'bind') return availableUpstreamKeys.value.some(key => key.id === selectedKeyId.value) && (isAdminNewAPI.value || connectOwnGroups.value.length === 1)
   return true
 })
 
@@ -336,42 +341,47 @@ const closeTypeEditor = () => {
   editTypeValue.value = ''
 }
 
-const openConnector = async (rate: GroupRate) => {
+const openConnector = async (rate: GroupRate, editExisting = false) => {
   connectingRate.value = rate
-  connectTestModel.value = ''
-  connectAllowHigherRate.value = false
-  editingConnectionGroups.value = false
-  connectOwnGroups.value = []
-  connectMode.value = 'real'
-  selectedGroupType.value = ''
-  selectedChannelType.value = 0
+  adminPlatform.value = ''
+  realConnectError.value = ''
+  chooseConnection(editExisting ? connectionsForRate(rate)[0]?.id ?? '' : '')
   const normalizedType = normalizeGroupType(rate.type)
   selectedChannelType.value = channelTypeForGroupType[normalizedType]
     ?? NEW_API_CHANNEL_TYPES.find(type => normalizeGroupType(type.name) === normalizedType)?.id
     ?? 0
-  await loadMySiteMappingData()
+  isActionLoading.value = true
+  try {
+    const [options, connections] = await Promise.all([getMySiteMappingOptions(), listRealConnections()])
+    realConnectionsData.value = connections ?? []
+    ownGroups.value = options.ownGroups ?? []
+    mySiteMappings.value = options.mappings ?? []
+    adminPlatform.value = options.platform
+    if (editExisting) chooseConnection(connectingConnections.value[0]?.id ?? '')
+  } catch (error) {
+    realConnectError.value = translatedActionError(error, 'admin.groupRates.errors.request')
+  } finally {
+    isActionLoading.value = false
+  }
 }
 
-const openGroupEditor = async (rate: GroupRate) => {
-  const connection = realConnectionForRate(rate)
-  if (!connection) return
-  connectingRate.value = rate
-  connectTestModel.value = connection.testModelId || ''
-  connectAllowHigherRate.value = connection.allowWhenUpstreamRateGteOwn ?? false
-  editingConnectionGroups.value = true
-  connectOwnGroups.value = [...connection.ownGroupIds]
+const chooseConnection = (id: string) => {
+  editingConnectionId.value = id
+  const connection = editingConnection.value
+  connectTestModel.value = connection?.testModelId || ''
+  connectAllowHigherRate.value = connection?.allowWhenUpstreamRateGteOwn ?? false
+  connectOwnGroups.value = [...(connection?.ownGroupIds ?? [])]
   connectMode.value = 'real'
   selectedGroupType.value = ''
-  selectedChannelType.value = 0
-  await loadMySiteMappingData(true)
-  const liveGroupIDs = new Set(ownGroups.value.map(group => group.id))
-  connectOwnGroups.value = connectOwnGroups.value.filter(groupID => liveGroupIDs.has(groupID))
+  selectedKeyId.value = ''
+  connectGroupSearch.value = ''
+  realConnectError.value = ''
 }
 
 const closeConnector = () => {
   connectGroupSearch.value = ''
   connectingRate.value = null
-  editingConnectionGroups.value = false
+  editingConnectionId.value = ''
   connectOwnGroups.value = []
   connectMode.value = 'real'
   realConnectError.value = ''
@@ -388,33 +398,20 @@ const submitTypeEditor = async () => {
   closeTypeEditor()
 }
 
-const loadMySiteMappingData = async (force = false) => {
-  if (hasLoadedMappingOptions.value && !force) return
-  isActionLoading.value = true
-  try {
-    const options = await getMySiteMappingOptions()
-    ownGroups.value = options.ownGroups
-    mySiteMappings.value = options.mappings ?? []
-    hasLoadedMappingOptions.value = true
-  } finally {
-    isActionLoading.value = false
-  }
-}
-
 const toggleOwnGroup = (groupId: string) => {
   const index = connectOwnGroups.value.indexOf(groupId)
   if (index === -1) {
-    connectOwnGroups.value = [...connectOwnGroups.value, groupId]
+    connectOwnGroups.value = connectMode.value === 'bind' && !isAdminNewAPI.value ? [groupId] : [...connectOwnGroups.value, groupId]
   } else {
     connectOwnGroups.value = connectOwnGroups.value.filter(id => id !== groupId)
   }
 }
 
 const submitConnector = async () => {
-  if (!connectingRate.value || connectOwnGroups.value.length === 0) return
+  if (!canSubmitConnect.value || !connectingRate.value || isActionLoading.value) return
 
   if (editingConnectionGroups.value) {
-    const connection = realConnectionForRate(connectingRate.value)
+    const connection = editingConnection.value
     if (!connection) return
     realConnectError.value = ''
     isActionLoading.value = true
@@ -443,7 +440,7 @@ const realConnectError = ref('')
 
 const translatedActionError = (err: unknown, fallbackKey: string): string => {
   const key = err instanceof Error ? err.message : ''
-  return key && te(key) ? t(key) : t(fallbackKey)
+  return key ? te(key) ? t(key) : key : t(fallbackKey)
 }
 
 const submitRealConnect = async () => {
@@ -459,10 +456,15 @@ const submitRealConnect = async () => {
     testModelId: connectTestModel.value, allowWhenUpstreamRateGteOwn: connectAllowHigherRate.value, ownGroupIds: connectOwnGroups.value,
   }
   try {
-    await realConnect(payload)
-    closeConnector()
-    await Promise.all([loadRates(), loadRealConnections()])
+    const result = await realConnect(payload)
+    const created = result.connections ?? [result.connection]
+    const ids = new Set(created.map(connection => connection.id))
+    realConnectionsData.value = [...created, ...realConnectionsData.value.filter(connection => !ids.has(connection.id))]
+    chooseConnection(created[0]?.id ?? '')
+    await loadRates()
   } catch (err: unknown) {
+    await loadRealConnections()
+    connectOwnGroups.value = connectOwnGroups.value.filter(id => filteredOwnGroups.value.some(group => group.id === id))
     realConnectError.value = translatedActionError(err, 'admin.groupRates.connect.realFailed')
   } finally {
     isActionLoading.value = false
@@ -482,7 +484,7 @@ const loadUpstreamKeys = async (siteId: string) => {
 
 const submitBind = async () => {
   if (!connectingRate.value || connectOwnGroups.value.length === 0 || !selectedKeyId.value) return
-  const selectedKey = upstreamKeys.value.find(k => k.id === selectedKeyId.value)
+  const selectedKey = availableUpstreamKeys.value.find(k => k.id === selectedKeyId.value)
   if (!selectedKey) return
   realConnectError.value = ''
   isActionLoading.value = true
@@ -505,21 +507,21 @@ const submitBind = async () => {
   }
 }
 
-const openDisconnect = (rate: GroupRate) => {
-  disconnectingRate.value = rate
+const openDisconnect = (connection: RealConnection) => {
+  disconnectingConnection.value = connection
+  closeConnector()
   disconnectMode.value = 'full'
   disconnectError.value = ''
 }
 
 const closeDisconnect = () => {
-  disconnectingRate.value = null
+  disconnectingConnection.value = null
   disconnectMode.value = 'full'
   disconnectError.value = ''
 }
 
 const submitDisconnect = async () => {
-  if (!disconnectingRate.value) return
-  const conn = realConnectionForRate(disconnectingRate.value)
+  const conn = disconnectingConnection.value
   if (!conn) return
 
   isDisconnecting.value = true
@@ -733,25 +735,14 @@ const historyRowKey = (row: GroupRateHistoryRow, index: number): string => (
                 <div v-if="!rate.deleted" class="flex justify-end gap-2">
                   <Button
                     v-if="isRealConnected(rate)"
-                    variant="destructive"
-                    size="sm"
-                    class="gap-1.5"
-                    :disabled="isActionLoading || isDisconnecting"
-                    @click="openDisconnect(rate)"
-                  >
-                    <X class="h-3.5 w-3.5" />
-                    {{ t('admin.groupRates.disconnect.action') }}
-                  </Button>
-                  <Button
-                    v-if="isRealConnected(rate)"
                     variant="secondary"
                     size="sm"
                     class="gap-1.5 text-primary hover:text-primary"
                     :disabled="isActionLoading || isDisconnecting"
-                    @click="openGroupEditor(rate)"
+                    @click="openConnector(rate, true)"
                   >
                     <Edit3 class="h-3.5 w-3.5" />
-                    {{ t('admin.groupRates.actions.editGroups') }}
+                    管理对接（{{ connectionsForRate(rate).length }}）
                   </Button>
                   <Button
                     v-else
@@ -922,10 +913,11 @@ const historyRowKey = (row: GroupRateHistoryRow, index: number): string => (
 
         <form class="flex min-h-0 flex-1 flex-col" @submit.prevent="submitConnector">
           <div class="min-h-0 overflow-y-auto p-6" data-binding-scroll>
+            <GroupBindingList class="mb-5" :connections="connectingConnections" :own-groups="ownGroups" :selected-id="editingConnectionId" :can-add="adminPlatform === 'sub2api'" :disabled="isActionLoading" @select="chooseConnection" />
             <div class="grid items-start gap-6 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.25fr)]">
               <div class="min-w-0 space-y-4">
-          <GroupAPIAddress v-if="connectingRate" :site-id="connectingRate.siteId" :group-id="connectingRate.groupId" :account-api-url="realConnectionForRate(connectingRate)?.upstreamApiUrl" />
-          <PrimaryModelPicker v-if="connectingRate" v-model="connectTestModel" :site-id="connectingRate.siteId" :group-id="connectingRate.groupId || ''" :connection-id="editingConnectionGroups ? realConnectionForRate(connectingRate)?.id : undefined" :key-id="connectMode === 'bind' ? selectedKeyId : undefined" />
+          <GroupAPIAddress :site-id="connectingRate.siteId" :group-id="connectingRate.groupId" :account-api-url="editingConnection?.upstreamApiUrl" />
+          <PrimaryModelPicker v-model="connectTestModel" :site-id="connectingRate.siteId" :group-id="connectingRate.groupId || ''" :connection-id="editingConnection?.id" :key-id="connectMode === 'bind' ? selectedKeyId : undefined" :disabled="isActionLoading" />
           <label class="flex cursor-pointer items-center justify-between gap-3 rounded-lg border border-border/50 bg-surface px-4 py-3 text-sm"><span>倍率大于等于分组时仍允许启用</span><input v-model="connectAllowHigherRate" type="checkbox" class="h-4 w-4 shrink-0 accent-blue-600" /></label>
 
           <div v-if="!editingConnectionGroups" class="flex items-center gap-1 rounded-xl bg-surface border border-border/50 p-1">
@@ -997,12 +989,12 @@ const historyRowKey = (row: GroupRateHistoryRow, index: number): string => (
               <Loader2 class="mr-2 h-4 w-4 animate-spin" />
               {{ t('admin.groupRates.connect.bindKeysLoading') }}
             </div>
-            <div v-else-if="upstreamKeys.length === 0" class="px-4 py-6 text-center text-sm text-muted-foreground">
+            <div v-else-if="availableUpstreamKeys.length === 0" class="px-4 py-6 text-center text-sm text-muted-foreground">
               {{ t('admin.groupRates.connect.bindKeysEmpty') }}
             </div>
             <div v-else class="grid grid-cols-1 gap-2 sm:grid-cols-2">
               <label
-                v-for="keyItem in upstreamKeys"
+                v-for="keyItem in availableUpstreamKeys"
                 :key="keyItem.id"
                 :class="[
                   'flex items-center gap-3 px-4 py-2.5 cursor-pointer transition-colors',
@@ -1037,8 +1029,11 @@ const historyRowKey = (row: GroupRateHistoryRow, index: number): string => (
             </div>
           </div>
 
-          <div class="space-y-2">
+          <div v-if="!editingConnectionGroups || isAdminNewAPI" class="space-y-2">
             <span class="text-sm font-medium text-foreground">{{ t('admin.groupRates.connect.ownGroupLabel') }}</span>
+            <p v-if="adminPlatform === 'sub2api'" class="text-xs text-muted-foreground">
+              {{ connectMode === 'real' ? '每个选中的分组会创建独立的上游 Key 和 Sub2API 转发账号。' : '一个已有 Key 可关联一个自有分组。' }}
+            </p>
             <input v-model="connectGroupSearch" aria-label="搜索对接分组" placeholder="搜索分组" class="h-9 w-full rounded-lg border border-border/50 bg-surface px-3 text-sm" />
             <div class="grid grid-cols-1 gap-2 sm:grid-cols-2">
               <label
@@ -1047,7 +1042,8 @@ const historyRowKey = (row: GroupRateHistoryRow, index: number): string => (
                 class="flex flex-wrap items-center gap-2 rounded-lg border border-border/50 px-3 py-2.5 cursor-pointer transition-colors hover:bg-surface-elevated"
               >
                 <input
-                  type="checkbox"
+                  :type="connectMode === 'bind' && !isAdminNewAPI ? 'radio' : 'checkbox'"
+                  :name="connectMode === 'bind' && !isAdminNewAPI ? 'own-group' : undefined"
                   :checked="connectOwnGroups.includes(group.id)"
                   class="h-4 w-4 rounded border-border text-primary focus:ring-primary"
                   :disabled="isActionLoading"
@@ -1059,8 +1055,8 @@ const historyRowKey = (row: GroupRateHistoryRow, index: number): string => (
                 </span>
                 <span class="ml-auto text-xs text-muted-foreground">{{ formatMultiplier(group.multiplier) }}</span>
               </label>
-              <div v-if="filteredOwnGroups.length === 0" class="px-4 py-3 text-sm text-muted-foreground">
-                {{ t('admin.groupRates.connect.ownGroupPlaceholder') }}
+              <div v-if="!visibleConnectGroups.length" class="px-4 py-3 text-sm text-muted-foreground">
+                {{ connectGroupSearch ? '没有匹配的分组' : adminPlatform === 'sub2api' ? '当前没有可新增对接的自有分组。' : t('admin.groupRates.connect.ownGroupPlaceholder') }}
               </div>
             </div>
           </div>
@@ -1075,24 +1071,27 @@ const historyRowKey = (row: GroupRateHistoryRow, index: number): string => (
             </div>
           </div>
           <div class="flex shrink-0 justify-end gap-2 border-t border-border/50 bg-card px-6 py-4">
+            <Button v-if="editingConnection" type="button" variant="destructive" class="mr-auto" :disabled="isActionLoading" @click="openDisconnect(editingConnection)">
+              {{ t('admin.groupRates.disconnect.action') }}
+            </Button>
             <Button type="button" variant="secondary" :disabled="isActionLoading" @click="closeConnector">
               {{ t('admin.groupRates.actions.cancel') }}
             </Button>
             <Button type="submit" class="gap-2" :disabled="isActionLoading || !canSubmitConnect">
               <Loader2 v-if="isActionLoading" class="h-4 w-4 animate-spin" />
-              {{ editingConnectionGroups ? t('admin.groupRates.actions.saveGroups') : t('admin.groupRates.actions.saveConnect') }}
+              {{ editingConnectionGroups ? '保存绑定设置' : adminPlatform === 'sub2api' && connectMode === 'real' ? '创建 Key 并对接' : t('admin.groupRates.actions.saveConnect') }}
             </Button>
           </div>
                 </form>
       </div>
     </div>
 
-    <div v-if="disconnectingRate" class="fixed inset-0 z-50 flex items-center justify-center bg-background/80 p-4 backdrop-blur-sm">
+    <div v-if="disconnectingConnection" class="fixed inset-0 z-50 flex items-center justify-center bg-background/80 p-4 backdrop-blur-sm">
       <div class="w-full max-w-md overflow-hidden rounded-2xl border border-border/50 bg-card shadow-xl">
         <div class="flex items-start justify-between gap-4 border-b border-border/50 p-6">
           <div>
             <h2 class="text-xl font-semibold text-foreground">{{ t('admin.groupRates.disconnect.title') }}</h2>
-            
+            <p class="mt-1 break-words text-sm text-muted-foreground">{{ disconnectingConnection.adminAccountName || `Key ID ${disconnectingConnection.upstreamKeyId}` }}</p>
           </div>
           <button class="rounded-lg p-2 text-muted-foreground transition-colors hover:bg-surface-line hover:text-foreground" :disabled="isDisconnecting" @click="closeDisconnect">
             <X class="h-5 w-5" />
