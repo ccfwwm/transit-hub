@@ -82,15 +82,16 @@ func parseMarketplaceHealth(payload any, site Site, now time.Time) []ModelHealth
 		}
 		if len(h.Timeline) > 0 {
 			last := h.Timeline[len(h.Timeline)-1]
-			h.Status = last.Status
-			h.LatencyMS = last.LatencyMS
-			if last.CheckedAt != nil {
+			if h.CheckedAt == nil || last.CheckedAt != nil && !last.CheckedAt.Before(*h.CheckedAt) {
+				h.Status = last.Status
+				h.LatencyMS = last.LatencyMS
 				h.CheckedAt = last.CheckedAt
 			}
 		}
 		if len(h.Timeline) == 0 && h.CheckedAt == nil {
 			continue
 		}
+		h.CurrentStatus = h.Status
 		out = append(out, qualifyHealth(h))
 	}
 	return out

@@ -36,7 +36,7 @@ export interface ChannelMonitorGroup {
 
 export interface ChannelMonitorChannel {
   keyWhitelistEnabled?:boolean
-  modelSummary?: {id:string;model:string;status:string;source:string;checkedAt?:string|null;message?:string;timeline?:{status:string;checkedAt?:string|null;latencyMs?:number|null}[]}
+  modelSummary?: {id:string;model:string;status:string;source:string;scope?:string;fresh?:boolean;checkedAt?:string|null;message?:string;timeline?:{status:string;checkedAt?:string|null;latencyMs?:number|null}[]}
   keyPolicy?: {allowedIPs:string[];version:number;inherited:boolean;observedIPs:string[];observedAt?:string;boundKeys:number}
   dispatchState?: string
   ruleId: string

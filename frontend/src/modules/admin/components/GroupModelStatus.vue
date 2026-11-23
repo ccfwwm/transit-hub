@@ -5,15 +5,18 @@ import StatusSourceControl from './StatusSourceControl.vue'
 import { operationJSON,followJob,type OperationJob } from '../api/operations'
 export interface ModelRow {mode?:string;id:string;model:string;status:string;source:string;scope?:string;groupId?:string;groupName?:string;fresh?:boolean;usable?:boolean;checkedAt?:string|null;latencyMs?:number|null;pingMs?:number|null;availability?:number|null;throughput?:number|null;timeline?:StatusPoint[];message?:string}
 interface ManualCheck {status:string;message:string;checkedAt?:string;startedAt:string;jobId:string}
-interface ModelPage {monitoredModel?:string;manualChecks?:Record<string,ManualCheck>;reportedTotal?:number;items:ModelRow[];references?:ModelRow[];total:number;multiplier?:number|null;catalogUpdatedAt?:string|null;catalogError?:string}
+interface ModelPage {monitoredModel?:string;modelSummary?:ModelRow;manualChecks?:Record<string,ManualCheck>;reportedTotal?:number;items:ModelRow[];references?:ModelRow[];total:number;multiplier?:number|null;catalogUpdatedAt?:string|null;catalogError?:string}
 const props=defineProps<{preview?:ModelRow;upstreamOnly?:boolean;inline?:boolean;selectable?:boolean;siteId:string;groupId?:string;groupName?:string;ruleId?:string;compact?:boolean;summary?:boolean;multiplier?:number|null;modelId?:string;monitorGroupId?:string}>()
 const emit=defineEmits<{selectModel:[model:string]}>()
 const data=ref<ModelPage>({items:[],total:0}),opened=ref(!!props.inline),loading=ref(false),busy=ref(false),error=ref(''),search=ref(''),filter=ref('all'),page=ref(1)
 const labels:Record<string,string>={auto_paused:'故障',healthy:'正常',failed:'故障',warning:'降级',unknown:'未报告',generating:'生成中',config_error:'待配置',balance_paused:'余额不足',manual_paused:'已停检',unsupported:'未适配'}
+const lineLabels:Record<string,string>={healthy:'线路正常',warning:'线路降级',failed:'线路故障'}
 function color(status:string){return status==='healthy'?'text-emerald-600 dark:text-emerald-400':['failed','auto_paused'].includes(status)?'text-red-500':status==='warning'?'text-amber-600':'text-muted-foreground'}
 // A real monitor's recent observations; model counts are never used as history.
 const summaryModel=computed(()=>{
- if(props.preview&&!opened.value)return props.preview
+ if(opened.value&&data.value.modelSummary)return data.value.modelSummary
+ if(props.preview)return props.preview
+ if(data.value.modelSummary)return data.value.modelSummary
  if(props.summary){
   // Group cards summarize the latest returned model observations, including
   // __other__. Unknown catalog entries and infrastructure are not failures.
@@ -28,10 +31,16 @@ const summaryModel=computed(()=>{
  if(props.ruleId)return undefined
  return [...data.value.items.filter(m=>m.source!=='catalog'),...(data.value.references||[]).filter(m=>m.groupId===props.groupId||m.scope==='infrastructure')].sort((a,b)=>(b.timeline?.length||0)-(a.timeline?.length||0))[0]
 })
-function currentCheck(m?:ModelRow){if(!m)return;const v=data.value.manualChecks?.[m.model];if(v?.status==='generating'&&Date.now()-Date.parse(v.startedAt)<3600000)return v;if(!v?.checkedAt)return;if(m.checkedAt&&Date.parse(m.checkedAt)>Date.parse(v.checkedAt))return;return v}
-function currentStatus(m?:ModelRow){return currentCheck(m)?.status||m?.status||'unknown'}
+function currentCheck(m?:ModelRow){if(!m||m.scope==='channel_reference')return;const v=data.value.manualChecks?.[m.model];if(v?.status==='generating'&&Date.now()-Date.parse(v.startedAt)<3600000)return v;if(!v?.checkedAt)return;if(m.checkedAt&&Date.parse(m.checkedAt)>Date.parse(v.checkedAt))return;return v}
+function reportedStatus(m?:ModelRow){return m?.scope==='channel_reference'&&m.fresh===false?'unknown':m?.status||'unknown'}
+function currentStatus(m?:ModelRow){return currentCheck(m)?.status||reportedStatus(m)}
 function displayPoints(m?:ModelRow){const points=m?.timeline||[];const v=currentCheck(m);return v?.checkedAt&&['healthy','failed'].includes(v.status)?[...points,{status:v.status,checkedAt:v.checkedAt}].slice(-60):points}
-function currentLabel(m?:ModelRow){if(currentStatus(m)==='config_error'&&(currentCheck(m)?.message||m?.message||'').includes('HTTP 403'))return '访问受限';return currentStatus(m)==='unknown'?'当前未知':labels[currentStatus(m)]||currentStatus(m)}
+function statusLabel(m?:ModelRow,status=reportedStatus(m),message=m?.message){
+ if(m?.scope==='channel_reference')return m.fresh===false&&m.checkedAt?'线路状态已过期':lineLabels[status]||'线路状态未知'
+ if(status==='config_error'&&message?.includes('HTTP 403'))return '访问受限'
+ return status==='unknown'?'当前未知':labels[status]||status
+}
+function currentLabel(m?:ModelRow){return statusLabel(m,currentStatus(m),currentCheck(m)?.message||m?.message)}
 const multiplier=computed(()=>props.multiplier??data.value.multiplier)
 const references=computed(()=>(data.value.references||[]).filter(m=>!search.value||m.model.toLowerCase().includes(search.value.toLowerCase())))
 const filtered=computed(()=>data.value.items.filter(m=>(!search.value||m.model.toLowerCase().includes(search.value.toLowerCase()))&&(filter.value==='all'||currentStatus(m)===filter.value)).sort((a,b)=>Number(a.source==='catalog')-Number(b.source==='catalog')||a.model.localeCompare(b.model)))
@@ -63,8 +72,8 @@ async function refresh(){if(busy.value)return;busy.value=true;error.value='';try
 <template>
  <section class="min-w-0" @click.stop>
   <button v-if="!inline" type="button" class="w-full min-w-0 rounded-lg border border-border/50 bg-background/70 px-2.5 py-2 text-left transition-colors hover:border-primary/40" aria-label="查看全部模型状态" @click="open">
-   <div class="mb-1.5 flex justify-end text-xs font-medium"><span :class="color(currentStatus(summaryModel))" :title="currentCheck(summaryModel)?.message||summaryModel?.message">{{loading&&!summaryModel?'读取中':currentLabel(summaryModel)}}</span></div>
-   <ModelStatusStrip :points="displayPoints(summaryModel)" :status="summaryModel?.status" hide-details hide-metrics />
+   <div class="mb-1.5 flex justify-end text-xs font-medium"><span :class="color(reportedStatus(summaryModel))" :title="summaryModel?.message">{{loading&&!summaryModel?'读取中':statusLabel(summaryModel)}}</span></div>
+   <ModelStatusStrip :points="summaryModel?.timeline" :status="reportedStatus(summaryModel)" hide-details hide-metrics />
   </button>
   <Teleport to="body" :disabled="inline"><div v-if="opened" :class="inline ? '' : 'fixed inset-0 z-[150] flex items-center justify-center bg-black/30 p-4 backdrop-blur-sm'" @click.self="opened=false"><section :class="[inline ? 'w-full min-w-0' : 'flex max-h-[85vh] w-full max-w-5xl flex-col overflow-hidden rounded-2xl border border-border/60 bg-card shadow-xl']" :role="inline ? undefined : 'dialog'" :aria-modal="inline ? undefined : true" aria-label="全部模型状态">
    <header :class="['flex items-start justify-between gap-4 border-b border-border/50',inline?'pb-3':'px-5 py-4']"><div class="min-w-0"><h3 class="text-base font-semibold">全部模型状态 <span v-if="multiplier!=null" class="ml-2 rounded bg-primary/10 px-2 py-0.5 text-sm text-primary">{{Number(multiplier.toFixed(4))}}×</span></h3><p class="mt-1 truncate text-sm text-muted-foreground">{{groupName}}</p></div><button v-if="!inline" type="button" class="rounded-lg px-2 py-1 text-sm text-muted-foreground hover:bg-surface" @click="opened=false">关闭</button></header>
@@ -72,7 +81,7 @@ async function refresh(){if(busy.value)return;busy.value=true;error.value='';try
    <div :class="['flex flex-wrap gap-2 py-3',!inline&&'px-5']"><input v-model="search" placeholder="搜索模型" class="min-w-40 flex-1 rounded-lg border border-border/50 bg-background px-3 py-2 text-sm" /><select v-model="filter" class="rounded-lg border border-border/50 bg-background px-3 py-2 text-sm"><option value="all">全部状态</option><option value="healthy">正常</option><option value="failed">故障</option><option value="unknown">当前未知</option></select></div>
    <p v-if="error" class="px-5 pb-3 text-sm text-red-500">{{error}}</p>
    <div :class="inline?'pb-4':'min-h-0 flex-1 overflow-auto px-5 pb-4'">
-    <template v-if="references.length"><h4 class="mb-2 text-sm font-medium text-muted-foreground">线路状态</h4><div class="mb-3 grid grid-cols-1 gap-2 sm:grid-cols-2"><article v-for="m in references" :key="m.id" class="min-w-0 rounded-lg border border-border/50 px-3 py-2.5"><div class="mb-2 flex justify-between gap-3 text-sm"><span class="min-w-0 break-words font-medium">{{m.model}}</span><span class="shrink-0 text-xs" :class="color(currentStatus(m))" :title="currentCheck(m)?.message||m.message">{{currentLabel(m)}}</span></div><ModelStatusStrip :points="displayPoints(m)" :status="m.status" :availability="m.availability" :latency-ms="m.latencyMs" hide-details hide-metrics /></article></div></template>
+    <template v-if="references.length"><h4 class="mb-2 text-sm font-medium text-muted-foreground">线路状态</h4><div class="mb-3 grid grid-cols-1 gap-2 sm:grid-cols-2"><article v-for="m in references" :key="m.id" class="min-w-0 rounded-lg border border-border/50 px-3 py-2.5"><div class="mb-2 flex justify-between gap-3 text-sm"><span class="min-w-0 break-words font-medium">{{m.model}}</span><span class="shrink-0 text-xs" :class="color(reportedStatus(m))" :title="m.message">{{statusLabel(m)}}</span></div><ModelStatusStrip :points="m.timeline" :status="reportedStatus(m)" :availability="m.availability" :latency-ms="m.latencyMs" hide-details hide-metrics /></article></div></template>
     <div :class="['grid grid-cols-1 gap-2',!inline&&'sm:grid-cols-2']"><article v-for="m in visible" :key="m.model" class="min-w-0 rounded-lg border border-border/50 px-3 py-2.5"><div class="mb-2 flex min-w-0 items-start justify-between gap-3 text-sm"><span class="min-w-0 break-words font-medium" :title="m.model">{{m.model}}</span><span class="shrink-0 text-xs" :class="color(currentStatus(m))" :title="currentCheck(m)?.message||m.message">{{currentLabel(m)}}</span><button v-if="selectable && m.source!=='catalog'" type="button" class="shrink-0 text-xs text-primary" @click="emit('selectModel',m.model)">设为主检测</button></div><ModelStatusStrip :points="displayPoints(m)" :status="m.status" :availability="m.availability" :latency-ms="m.latencyMs" :ping-ms="m.pingMs" :throughput="m.throughput" hide-details hide-metrics /></article></div>
     <p v-if="!visible.length" class="py-6 text-center text-sm text-muted-foreground">{{loading?'读取中…':'上游未报告该分组的模型状态'}}</p>
 

@@ -167,6 +167,9 @@ func TestModelTargetsKeepPartialChannelAndReuseEvidence(t *testing.T) {
 	if browser.Items[0].Model != "reported-model" || len(platform.testOptions) != before {
 		t.Fatal("status view included unreported catalog entries or invoked a paid probe")
 	}
+	if browser.ModelSummary == nil || browser.ModelSummary.ID != "reported" || browser.ModelSummary.Status != StatusFailed {
+		t.Fatalf("reported model lost priority over the channel reference: %+v", browser.ModelSummary)
+	}
 	requestAll := httptest.NewRequest("GET", "/api/channel-monitor/rules/"+rule.ID+"/models?includeCatalog=1", nil).WithContext(authctx.WithUserID(ctx, "user-1"))
 	requestAll.SetPathValue("id", rule.ID)
 	allResponse := httptest.NewRecorder()
@@ -198,6 +201,35 @@ func TestModelTargetsKeepPartialChannelAndReuseEvidence(t *testing.T) {
 	config.GroupModels = []TestModelGroupConfig{{GroupID: "a", ModelID: "not-reported", Mode: "text"}}
 	if e = repo.SaveTestModelConfig(ctx, config); e != nil {
 		t.Fatal(e)
+	}
+	base := SummaryResponse{
+		Channels: []ChannelStatus{{RuleID: rule.ID, SiteID: fixture.upstreams.site.ID, UpstreamGroupID: conn.UpstreamGroupID, OwnGroupIDs: []string{"a"}, Enabled: true, Supported: true, EffectiveTestModelID: "not-reported", GroupStates: []TargetState{{GroupID: "a", Model: "not-reported"}}}},
+		Groups:   []GroupSummary{{GroupID: "a"}},
+	}
+	if e = s.applyStatusSource(ctx, "user-1", "admin-1", &base); e != nil {
+		t.Fatal(e)
+	}
+	if e = repo.publishSnapshot(ctx, "user-1", "admin-1", base); e != nil {
+		t.Fatal(e)
+	}
+	response = httptest.NewRecorder()
+	h.browseModels(response, request)
+	browser = modelBrowser{}
+	if response.Code != 200 || json.Unmarshal(response.Body.Bytes(), &browser) != nil || browser.ModelSummary == nil || browser.ModelSummary.ID != "kuma-own" || browser.ModelSummary.Status != StatusHealthy || browser.MonitoredModel != "not-reported" || browser.ReportedTotal != 1 {
+		t.Fatalf("channel fallback or model count incorrect: %s", response.Body.String())
+	}
+	for _, groupID := range []string{"", "a"} {
+		page, err := repo.readPage(ctx, "user-1", "admin-1", ChannelPageQuery{GroupID: groupID, RuleID: rule.ID})
+		if err != nil || len(page.Channels) != 1 {
+			t.Fatalf("snapshot missing for group %q: %v", groupID, err)
+		}
+		row := page.Channels[0]
+		if row.Status != StatusUnknown || row.ModelSummary == nil || row.ModelSummary.ID != browser.ModelSummary.ID || row.ModelSummary.Status != browser.ModelSummary.Status {
+			t.Fatalf("snapshot changed model health or disagreed with detail: %+v", row)
+		}
+	}
+	if _, ok := healthService.MatchConfigured(ctx, fixture.upstreams.site.ID, conn.UpstreamGroupID, conn.UpstreamGroupName, "channel-alias"); ok {
+		t.Fatal("channel reference was accepted as dispatch evidence")
 	}
 	before = len(platform.testOptions)
 	if _, e = s.runRule(ctx, *rule, "manual"); e != nil {

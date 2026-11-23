@@ -41,9 +41,9 @@ func (s *Service) applyStatusSource(ctx context.Context, uid, aid string, base *
 			}
 		}
 		row.ModelSummaries = map[string]upstream.ModelHealth{}
-		row.ModelSummaries[row.EffectiveTestModelID] = selectedModelSummary(models, checks, row.EffectiveTestModelID)
+		row.ModelSummaries[row.EffectiveTestModelID] = selectedModelSummary(models, checks, row.EffectiveTestModelID, row.UpstreamGroupID)
 		for _, group := range row.GroupStates {
-			row.ModelSummaries[group.Model] = selectedModelSummary(models, checks, group.Model)
+			row.ModelSummaries[group.Model] = selectedModelSummary(models, checks, group.Model, row.UpstreamGroupID)
 		}
 		if row.ManualPaused || row.Status == StatusBalancePaused {
 			continue
@@ -75,14 +75,22 @@ func (s *Service) applyStatusSource(ctx context.Context, uid, aid string, base *
 
 // Preserve the latest observation separately from history; a failed old point
 // must never override the most recent status when rendering the compact row.
-func selectedModelSummary(models []upstream.ModelHealth, checks map[string]ManualModelCheck, model string) upstream.ModelHealth {
+func selectedModelSummary(models []upstream.ModelHealth, checks map[string]ManualModelCheck, model, groupID string) upstream.ModelHealth {
 	result := upstream.ModelHealth{ID: model, Model: model, Status: StatusUnknown, Source: "catalog", Timeline: []upstream.HealthPoint{}}
-	for _, m := range models {
-		if m.Model != model || m.Scope == "infrastructure" || m.Scope == "channel_reference" {
+	var reference *upstream.ModelHealth
+	for i := range models {
+		m := &models[i]
+		if m.Scope == "channel_reference" {
+			if groupID != "" && m.GroupID == groupID && (reference == nil || m.CheckedAt != nil && (reference.CheckedAt == nil || m.CheckedAt.After(*reference.CheckedAt))) {
+				reference = m
+			}
+			continue
+		}
+		if m.Model != model || m.Scope == "infrastructure" || m.Source == "newapi_kuma" && m.GroupID != groupID {
 			continue
 		}
 		if result.Source == "catalog" || m.CheckedAt != nil && (result.CheckedAt == nil || m.CheckedAt.After(*result.CheckedAt)) {
-			result = m
+			result = *m
 		}
 	}
 	if check, ok := checks[model]; ok && check.CheckedAt != nil && (result.CheckedAt == nil || !result.CheckedAt.After(*check.CheckedAt)) {
@@ -95,9 +103,24 @@ func selectedModelSummary(models []upstream.ModelHealth, checks map[string]Manua
 			}
 			result.Timeline = points
 		}
+		if result.Status != StatusUnknown && result.Status != "" {
+			return result
+		}
+	}
+	if reference != nil && (!result.Fresh || result.Status == StatusUnknown || result.Status == "") {
+		return displayChannelReference(*reference)
 	}
 	return result
 }
+
+func displayChannelReference(reference upstream.ModelHealth) upstream.ModelHealth {
+	if !reference.Fresh {
+		reference.Status = StatusUnknown
+		reference.CurrentStatus = ""
+	}
+	return reference
+}
+
 func reportedStatus(models []upstream.ModelHealth) string {
 	count, failed := 0, 0
 	for _, m := range models {

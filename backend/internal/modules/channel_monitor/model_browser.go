@@ -17,6 +17,7 @@ import (
 
 type modelBrowser struct {
 	MonitoredModel   string                      `json:"monitoredModel"`
+	ModelSummary     *upstream.ModelHealth       `json:"modelSummary,omitempty"`
 	ManualChecks     map[string]ManualModelCheck `json:"manualChecks,omitempty"`
 	ReportedTotal    int                         `json:"reportedTotal"`
 	References       []upstream.ModelHealth      `json:"references"`
@@ -163,6 +164,7 @@ func (h *Handler) browseModels(w http.ResponseWriter, r *http.Request) {
 			byModel[model] = upstream.ModelHealth{ID: model, Model: model, GroupID: conn.UpstreamGroupID, GroupName: conn.UpstreamGroupName, Status: StatusUnknown, Source: "catalog", Timeline: []upstream.HealthPoint{}}
 		}
 	}
+	var observations []upstream.ModelHealth
 	if h.service.health != nil {
 		q := r.URL.Query()
 		q.Set("pageSize", "100")
@@ -176,8 +178,13 @@ func (h *Handler) browseModels(w http.ResponseWriter, r *http.Request) {
 				writeMonitorError(w, err)
 				return
 			}
+			observations = append(observations, v.Items...)
 			for _, m := range v.Items {
-				if m.Scope == "infrastructure" || m.Scope == "channel_reference" || m.Source == "newapi_kuma" && m.GroupID != conn.UpstreamGroupID {
+				if m.Scope == "channel_reference" {
+					out.References = append(out.References, displayChannelReference(m))
+					continue
+				}
+				if m.Scope == "infrastructure" || m.Source == "newapi_kuma" && m.GroupID != conn.UpstreamGroupID {
 					out.References = append(out.References, m)
 					continue
 				}
@@ -196,6 +203,8 @@ func (h *Handler) browseModels(w http.ResponseWriter, r *http.Request) {
 		writeMonitorError(w, e)
 		return
 	}
+	summary := selectedModelSummary(observations, out.ManualChecks, out.MonitoredModel, conn.UpstreamGroupID)
+	out.ModelSummary = &summary
 	if out.MonitoredModel != "" {
 		if _, exists := byModel[out.MonitoredModel]; !exists {
 			byModel[out.MonitoredModel] = upstream.ModelHealth{ID: out.MonitoredModel, Model: out.MonitoredModel, Source: "catalog", Status: StatusUnknown, Timeline: []upstream.HealthPoint{}}

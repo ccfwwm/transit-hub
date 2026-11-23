@@ -16,3 +16,20 @@ func TestMarketplaceHealthIsAGroupReferenceNotEveryCatalogModel(t *testing.T) {
 		t.Fatalf("lost group history: %+v", h)
 	}
 }
+
+func TestMarketplaceHealthPreservesCurrentStatusWhenHistoryLags(t *testing.T) {
+	now := time.Now().UTC()
+	older := now.Add(-15 * time.Minute)
+	payload := map[string]any{"data": []any{map[string]any{
+		"id": "10",
+		"availability": map[string]any{
+			"last_status":     "degraded",
+			"last_checked_at": now.Format(time.RFC3339Nano),
+			"recent_results":  []any{map[string]any{"outcome": "success", "checked_at": older.Format(time.RFC3339Nano)}},
+		},
+	}}}
+	rows := parseMarketplaceHealth(payload, Site{}, now)
+	if len(rows) != 1 || rows[0].Status != "warning" || !rows[0].Fresh || len(rows[0].Timeline) != 1 || rows[0].Timeline[0].Status != "healthy" {
+		t.Fatalf("older history overrode current status: %+v", rows)
+	}
+}
