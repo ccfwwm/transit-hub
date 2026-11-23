@@ -5,6 +5,7 @@ import MonitorBindingSync from '../components/MonitorBindingSync.vue'
 import OperationProgress from '../components/OperationProgress.vue'
 import StatusSourceControl from '../components/StatusSourceControl.vue'
 import { keyJobMessage, previewKeyRotation, rotateKeys } from '../api/keyRotation'
+import { syncKeyWhitelist } from '../api/keyWhitelist'
 import GroupKeyPolicy from '../components/GroupKeyPolicy.vue'
 import KeyPolicyEditor from '../components/KeyPolicyEditor.vue'
 import ChannelKeyActions from '../components/ChannelKeyActions.vue'
@@ -608,6 +609,27 @@ const rotationFilterReady = computed(() =>
   searchQuery.value === debouncedSearch.value && lastPageQuery.value === JSON.stringify(pageQuery()))
 const rotatingKeys = computed(() => isActionActive('bulk:rotate-keys'))
 const rotationMessage = ref('')
+const whitelistMessage = ref('')
+async function syncMonitorWhitelist(scope: 'filtered' | 'selected') {
+  if (!rotationFilterReady.value || isBulkActionLoading.value) return
+  const ruleIds = [...new Set(scope === 'selected' ? selectedRuleIds.value : filteredRuleIds.value)]
+  if (!ruleIds.length) return
+  whitelistMessage.value = '正在同步白名单…'
+  await runAction(async () => {
+    try {
+      const job = await syncKeyWhitelist({ ruleIds })
+      const skipped = job.items.filter(item => item.result?.skipped).length
+      whitelistMessage.value = `已同步 ${job.total - job.failed - skipped} 个 Key，${job.failed} 个失败${skipped ? `，${skipped} 个跳过` : ''}`
+      window.dispatchEvent(new Event('transithub:key-policy'))
+      await loadChannels()
+      const problems = keyJobMessage(job)
+      if (problems) throw new Error(problems)
+    } catch (error) {
+      if (whitelistMessage.value === '正在同步白名单…') whitelistMessage.value = ''
+      throw error
+    }
+  }, { actionKey: 'bulk:whitelist', refresh: false })
+}
 async function rotateMonitorKeys(scope: 'filtered' | 'selected') {
   if (!rotationFilterReady.value || rotatingKeys.value) return
   const ruleIds = [...new Set(scope === 'selected' ? selectedRuleIds.value : filteredRuleIds.value)]
@@ -917,13 +939,17 @@ const dispatchBadge = (channel:ChannelMonitorChannel) => {
 
     <div class="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-border/40 bg-surface px-3 py-2">
       <div class="flex flex-wrap items-center gap-3"><StatusSourceControl /><select v-model="dispatchFilter" aria-label="调度状态筛选" class="h-8 rounded-md border border-border/50 bg-surface px-2 text-xs"><option value="all">全部调度状态</option><option value="enabled">可调度</option><option value="paused">全部已停用</option><option value="manual">人工停用</option><option value="balance">余额停用</option><option value="rate">倍率限制</option><option value="auto">检测停用</option><option value="disabled">其他停用</option><option value="unknown">调度未知</option><option value="monitor">监控暂停</option></select></div>
-      <Button type="button" variant="secondary" size="sm" :disabled="!rotationFilterReady || !filteredRuleIds.length || isBulkActionLoading" @click="rotateMonitorKeys('filtered')">轮换当前筛选 Key（{{ filteredRuleIds.length }} 条）</Button>
-      <KeyPolicyEditor :ids="selectedRuleIds.length ? selectedRuleIds : filteredRuleIds" />
+      <div class="flex flex-wrap items-center gap-2">
+        <Button type="button" variant="secondary" size="sm" :disabled="!rotationFilterReady || !filteredRuleIds.length || isBulkActionLoading" @click="syncMonitorWhitelist('filtered')">同步当前筛选白名单（{{ filteredRuleIds.length }} 条）</Button>
+        <Button type="button" variant="secondary" size="sm" :disabled="!rotationFilterReady || !filteredRuleIds.length || isBulkActionLoading" @click="rotateMonitorKeys('filtered')">轮换当前筛选 Key（{{ filteredRuleIds.length }} 条）</Button>
+      </div>
+      <KeyPolicyEditor :ids="rotationFilterReady ? selectedRuleIds.length ? selectedRuleIds : filteredRuleIds : []" />
     </div>
 
     <div v-if="selectedCount > 0" class="flex flex-wrap items-center gap-2 rounded-lg border border-border/50 bg-surface px-4 py-3">
       <span class="mr-2 text-sm font-medium text-foreground">{{ t('admin.channelMonitor.bulk.selected', { count: selectedCount }) }}</span>
       <Button type="button" variant="secondary" size="sm" :disabled="!rotationFilterReady || isBulkActionLoading" @click="rotateMonitorKeys('selected')">轮换已选 Key（{{ selectedCount }} 条）</Button>
+      <Button type="button" variant="secondary" size="sm" :disabled="!rotationFilterReady || isBulkActionLoading" @click="syncMonitorWhitelist('selected')">同步已选白名单（{{ selectedCount }} 条）</Button>
       <Button type="button" variant="secondary" size="sm" class="gap-1.5 !border-emerald-500/30 !bg-emerald-500/10 !text-emerald-700 hover:!bg-emerald-500/15 dark:!text-emerald-300" :disabled="isBulkActionLoading" @click="setSelectedMonitoring(true)">
         <Play class="h-3.5 w-3.5" />
         {{ t('admin.channelMonitor.bulk.enableMonitor') }}
@@ -948,6 +974,7 @@ const dispatchBadge = (channel:ChannelMonitorChannel) => {
 
     <OperationProgress :kinds="['key_security']" @completed="loadChannels()" />
     <p v-if="rotationMessage" role="status" class="text-sm text-muted-foreground">{{ rotationMessage }}</p>
+    <p v-if="whitelistMessage" role="status" class="text-sm text-muted-foreground">{{ whitelistMessage }}</p>
     <div v-if="errorKey" class="whitespace-pre-line rounded-xl border border-warning/20 bg-warning/10 p-3 text-sm text-warning">
       {{ t(errorKey) }}
     </div>

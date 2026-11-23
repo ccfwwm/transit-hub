@@ -161,8 +161,8 @@ func (m *KeyManagement) editKey(w http.ResponseWriter, r *http.Request) {
 	} else {
 		whitelistField = "ip_whitelist"
 	}
-	if value, ok := change[whitelistField]; bound && ok {
-		hasOverride = true
+	if value, ok := change[whitelistField]; ok {
+		hasOverride = bound
 		switch values := value.(type) {
 		case string:
 			override = strings.FieldsFunc(values, func(c rune) bool { return c == '\n' || c == '\r' || c == ',' })
@@ -225,10 +225,6 @@ func (m *KeyManagement) editKey(w http.ResponseWriter, r *http.Request) {
 	if hasOverride {
 		policies, ok := m.sites.keyPolicies.(*upstream.KeyPolicies)
 		if ok {
-			if err = m.platform.VerifyManagedKeyConfig(ctx, *site.Session, id, map[string]any{whitelistField: change[whitelistField]}); err != nil {
-				apiResult(w, nil, err)
-				return
-			}
 			if err = policies.SaveKeyIPOverride(ctx, uid, aid, site.ID, id, override); err != nil {
 				apiResult(w, nil, fmt.Errorf("上游白名单已保存，自动巡检配置尚待同步，请重试"))
 				return

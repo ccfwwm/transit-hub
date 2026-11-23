@@ -29,7 +29,7 @@ async function changeInheritance() {
   if (!inherited.value) return
   busy.value = true; error.value = ''; message.value = ''
   try {
-    const defaults = await operationJSON<{allowedIPs: string[]}>('/channel-monitor/key-policy')
+    const defaults = await operationJSON<{allowedIPs: string[]}>(`/upstream-sites/${encodeURIComponent(props.siteId)}/site-key-policy`)
     text.value = defaults.allowedIPs.join('\n')
   } catch (e: any) { inherited.value = false; error.value = e.message } finally { busy.value = false }
 }
@@ -81,7 +81,7 @@ watch(() => [props.siteId, props.groupId], () => {policy.value=props.initialPoli
   <button type="button" class="flex max-w-full items-center gap-1 rounded px-1 py-0.5 text-[11px] text-muted-foreground hover:bg-primary/10 hover:text-primary" :title="`配置 IP：${policy?.allowedIPs.join(', ')||'读取中'}；${policy?.observedAt?'上次回读：'+label:'尚未回读上游'}；点击配置`" @click="show"><span class="shrink-0">IP</span><span class="truncate font-mono">{{label}}</span><span v-if="policy&&!policy.inherited" class="shrink-0 text-primary">独立</span><span class="shrink-0">✎</span></button>
   <Teleport to="body"><div v-if="open" class="fixed inset-0 z-[200] flex items-center justify-center bg-black/40 p-4" @click.self="!busy&&(open=false)"><section role="dialog" aria-modal="true" aria-label="分组 Key 白名单" class="w-full max-w-md space-y-4 rounded-xl border border-border bg-surface p-5 shadow-xl">
    <div class="flex items-center justify-between gap-3"><h3 class="font-semibold">{{groupName||'分组'}} · Key 白名单</h3><button type="button" :disabled="busy" aria-label="关闭分组白名单" @click="open=false">✕</button></div>
-   <label class="flex items-center gap-2 text-sm"><input v-model="inherited" type="checkbox" :disabled="busy" @change="changeInheritance" />继承统一默认 IP</label>
+   <label class="flex items-center gap-2 text-sm"><input v-model="inherited" type="checkbox" :disabled="busy" @change="changeInheritance" />继承站点默认 IP</label>
    <textarea v-model="text" rows="3" :disabled="busy" @input="edit" class="w-full rounded-lg border border-border bg-background p-3 font-mono text-sm disabled:opacity-50" aria-label="分组允许的 IP 和 CIDR" />
    <label class="flex items-center gap-2 text-sm"><input v-model="replace" type="checkbox" :disabled="busy" />整体覆盖上游 IP</label>
    <div v-if="policy?.observedAt" class="break-words text-xs text-muted-foreground">上次回读地址：<span class="font-mono">{{policy.observedIPs.length?policy.observedIPs.join(', '):'未限制 IP'}}</span></div>

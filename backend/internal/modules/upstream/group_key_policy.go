@@ -30,9 +30,16 @@ func (p *KeyPolicies) Group(ctx context.Context, uid, aid, site, group string) (
 	// The version here belongs to the override, independent of the workspace policy.
 	v.Version = 0
 	var raw []byte
-	e = p.db.QueryRow(ctx, `SELECT allowed_ips,version FROM upstream_group_key_policies WHERE user_id=$1 AND admin_account_id=$2 AND site_id=$3 AND group_id=$4`, uid, aid, site, group).Scan(&raw, &v.Version)
+	var selectedGroup string
+	var version int64
+	e = p.db.QueryRow(ctx, `SELECT allowed_ips,version,group_id FROM upstream_group_key_policies
+		WHERE user_id=$1 AND admin_account_id=$2 AND site_id=$3 AND group_id IN ('',$4)
+		ORDER BY (group_id=$4) DESC LIMIT 1`, uid, aid, site, group).Scan(&raw, &version, &selectedGroup)
 	if e == nil {
-		v.Inherited = false
+		if selectedGroup == group {
+			v.Inherited = false
+			v.Version = version
+		}
 		e = json.Unmarshal(raw, &v.AllowedIPs)
 	} else if errors.Is(e, pgx.ErrNoRows) {
 		e = nil
@@ -252,4 +259,39 @@ func (s *HealthService) registerGroupKeyPolicies(mux *http.ServeMux, j *jobs.Ser
 	mux.HandleFunc("GET /api/upstream-sites/{id}/group-key-policy", handler)
 	mux.HandleFunc("PUT /api/upstream-sites/{id}/group-key-policy", handler)
 	mux.HandleFunc("POST /api/upstream-sites/{id}/group-key-policy/refresh", handler)
+	sitePolicy := func(w http.ResponseWriter, r *http.Request) {
+		ctx := r.Context()
+		uid, aid, err := s.scope(r)
+		if err != nil {
+			httpjson.WriteError(w, 401, "未登录")
+			return
+		}
+		site, err := s.ownedSite(ctx, uid, aid, r.PathValue("id"))
+		if err != nil {
+			httpjson.WriteError(w, 404, "上游不存在")
+			return
+		}
+		if r.Method == http.MethodPut {
+			var policy GroupKeyPolicy
+			if httpjson.Decode(r, &policy) != nil {
+				httpjson.WriteError(w, 400, "无效白名单")
+				return
+			}
+			policy, err = p.SaveGroup(ctx, uid, aid, site.ID, "", policy)
+			if err != nil {
+				httpjson.WriteError(w, 400, err.Error())
+				return
+			}
+			httpjson.Write(w, 200, policy)
+			return
+		}
+		policy, err := p.Group(ctx, uid, aid, site.ID, "")
+		if err != nil {
+			httpjson.WriteError(w, 500, "无法读取站点白名单")
+			return
+		}
+		httpjson.Write(w, 200, policy)
+	}
+	mux.HandleFunc("GET /api/upstream-sites/{id}/site-key-policy", sitePolicy)
+	mux.HandleFunc("PUT /api/upstream-sites/{id}/site-key-policy", sitePolicy)
 }

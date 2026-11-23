@@ -7,13 +7,16 @@ import GroupModelStatus from '../components/GroupModelStatus.vue'
 import GroupKeyPolicy from '../components/GroupKeyPolicy.vue'
 import GroupAPIAddress from '../components/GroupAPIAddress.vue'
 import GroupBindingList from '../components/GroupBindingList.vue'
+import UpstreamWhitelistDialog from '../components/upstream/UpstreamWhitelistDialog.vue'
+import OperationProgress from '../components/OperationProgress.vue'
+import { keyJobMessage, previewKeyRotation, rotateKeys } from '../api/keyRotation'
 import ModelHealthExplorer from '../components/ModelHealthExplorer.vue'
 import { operationJSON, followJob, checkedOperation,type OperationJob } from '../api/operations'
 import type { UpstreamGroupInfo as PreviewGroup } from '../types/upstream'
 
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { Search, Plus, CheckCircle2, XCircle, X, Loader2, AlertCircle, Trash2, Edit2, LayoutGrid, List, RefreshCw, Settings2, LogIn } from 'lucide-vue-next'
+import { Search, Plus, CheckCircle2, XCircle, X, Loader2, AlertCircle, Trash2, Edit2, LayoutGrid, List, RefreshCw, Settings2, LogIn, Shield, KeyRound } from 'lucide-vue-next'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Tooltip } from '@/components/ui/tooltip'
@@ -335,6 +338,43 @@ const groupConnections = (site: UpstreamSite, group: UpstreamGroupInfo) => realC
 )
 
 const groupConnection = (site: UpstreamSite, group: UpstreamGroupInfo) => groupConnections(site, group)[0]
+const whitelistSite = ref<UpstreamSite | null>(null)
+const rotatingSite = ref('')
+const keyActionMessage = ref('')
+const keyActionError = ref('')
+const connectionIdsForSite = (siteId: string) => realConnections.value
+  .filter(connection => connection.upstreamSiteId === siteId && connection.adminAccountId && connection.upstreamKeyId)
+  .map(connection => connection.id)
+
+async function rotateSite(site: UpstreamSite) {
+  if (rotatingSite.value) return
+  keyActionMessage.value = ''
+  keyActionError.value = ''
+  rotatingSite.value = site.id
+  try {
+    await loadGroupConnections()
+    if (!connectionsLoaded.value) throw new Error('本站绑定读取失败，请重试')
+    const connectionIds = connectionIdsForSite(site.id)
+    if (!connectionIds.length) throw new Error('本站没有可轮换的绑定 Key')
+    const targets = { connectionIds }
+    const preview = await previewKeyRotation(targets)
+    if (!preview.keys) throw new Error('本站没有可轮换的绑定 Key')
+    const skipped = preview.skipped ? `，${preview.skipped} 条记录将跳过` : ''
+    if (!window.confirm(`轮换 ${site.name} 的 ${preview.keys} 个已绑定 Key${skipped}？系统会核验转发账号后撤销旧 Key。`)) return
+    keyActionMessage.value = `${site.name} 的 Key 正在轮换…`
+    const job = await rotateKeys(targets, preview.version)
+    const taskSkipped = job.items.filter(item => item.result?.skipped).length
+    keyActionMessage.value = `${site.name} 已轮换 ${job.total - job.failed - taskSkipped} 个 Key，${job.failed} 个失败，${preview.skipped + taskSkipped} 个跳过`
+    keyActionError.value = keyJobMessage(job)
+    await loadGroupConnections()
+    window.dispatchEvent(new Event('transithub:key-policy'))
+  } catch (error) {
+    keyActionMessage.value = ''
+    keyActionError.value = error instanceof Error ? error.message : String(error)
+  } finally {
+    rotatingSite.value = ''
+  }
+}
 const chosenGroupConnections = computed(() => groupActionSite.value && groupActionGroup.value ? groupConnections(groupActionSite.value, groupActionGroup.value) : [])
 const occupiedGroupIds = computed(() => new Set(chosenGroupConnections.value.flatMap(connection => connection.ownGroupIds ?? [])))
 const unusedOwnGroups = computed(() => adminPlatform.value === 'sub2api'
@@ -534,7 +574,11 @@ onBeforeUnmount(() => {
 
 <template>
   <DomainAllowlist v-if="domainsOpen" @close="domainsOpen=false" />
+  <UpstreamWhitelistDialog v-if="whitelistSite" :site-id="whitelistSite.id" :name="whitelistSite.name" :platform="whitelistSite.platform" :connection-ids="connectionIdsForSite(whitelistSite.id)" @close="whitelistSite = null" />
   <div class="space-y-6">
+    <OperationProgress :kinds="['key_security']" @completed="loadGroupConnections" />
+    <p v-if="keyActionMessage" role="status" class="text-sm text-muted-foreground">{{ keyActionMessage }}</p>
+    <p v-if="keyActionError" role="alert" class="whitespace-pre-line text-sm text-destructive">{{ keyActionError }}</p>
     <!-- Top Action Bar -->
     <div class="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
       <div class="flex flex-col gap-3 w-full sm:w-auto">
@@ -701,12 +745,14 @@ onBeforeUnmount(() => {
           </Button>
 
           <!-- Card Actions (Edit/Delete) -->
-          <div class="flex items-center justify-between gap-3 pt-4 mt-2 border-t border-border/40">
+          <div class="flex flex-wrap items-center justify-between gap-3 pt-4 mt-2 border-t border-border/40">
             <div class="min-w-0 text-left text-[11px] leading-5 text-muted-foreground">
               <span class="block truncate">{{ t('admin.upstream.fields.lastUpdated') }}</span>
               <span class="block truncate font-medium text-foreground/80">{{ lastUpdatedDisplay(site) }}</span>
             </div>
             <div class="flex shrink-0 items-center justify-end gap-2">
+              <Tooltip text="设置白名单"><button type="button" aria-label="设置白名单" class="grid h-8 w-8 place-items-center rounded-lg border border-border/60 text-cyan-700 hover:bg-cyan-500/10 dark:text-cyan-300" @click="whitelistSite = site"><Shield class="h-4 w-4" /></button></Tooltip>
+              <Tooltip text="一键轮换 Key"><button type="button" aria-label="一键轮换 Key" class="grid h-8 w-8 place-items-center rounded-lg border border-border/60 text-orange-700 hover:bg-orange-500/10 disabled:opacity-50 dark:text-orange-300" :disabled="!!rotatingSite || !connectionIdsForSite(site.id).length" @click="rotateSite(site)"><Loader2 v-if="rotatingSite === site.id" class="h-4 w-4 animate-spin" /><KeyRound v-else class="h-4 w-4" /></button></Tooltip>
               <Tooltip :text="syncingSiteIds.has(site.id) ? t('admin.upstream.action.syncing') : t('admin.upstream.action.sync')">
                 <button
                   type="button"
@@ -904,6 +950,8 @@ onBeforeUnmount(() => {
                       <Settings2 class="w-4 h-4" />
                     </button>
                   </Tooltip>
+                  <Tooltip text="设置白名单"><button type="button" aria-label="设置白名单" class="rounded-md p-1.5 text-cyan-700 hover:bg-cyan-500/10 dark:text-cyan-300" @click="whitelistSite = site"><Shield class="h-4 w-4" /></button></Tooltip>
+                  <Tooltip text="一键轮换 Key"><button type="button" aria-label="一键轮换 Key" class="rounded-md p-1.5 text-orange-700 hover:bg-orange-500/10 disabled:opacity-50 dark:text-orange-300" :disabled="!!rotatingSite || !connectionIdsForSite(site.id).length" @click="rotateSite(site)"><Loader2 v-if="rotatingSite === site.id" class="h-4 w-4 animate-spin" /><KeyRound v-else class="h-4 w-4" /></button></Tooltip>
                   <Tooltip :text="t('admin.upstream.action.edit')">
                     <button
                       class="p-1.5 rounded-md text-muted-foreground hover:bg-primary/10 hover:text-primary transition-colors"
@@ -1019,7 +1067,7 @@ onBeforeUnmount(() => {
         ></div>
 
         <!-- Modal Content -->
-        <div class="relative bg-card border border-border/60 rounded-[2rem] shadow-2xl w-full max-w-4xl overflow-hidden animate-in fade-in zoom-in-95 duration-200">
+        <div role="dialog" aria-modal="true" aria-label="查看可用分组" class="relative bg-card border border-border/60 rounded-[2rem] shadow-2xl w-full max-w-4xl overflow-hidden animate-in fade-in zoom-in-95 duration-200">
           <div class="absolute top-0 left-0 right-0 h-1 bg-gradient-to-r from-primary via-accent to-primary" />
 
           <div class="flex shrink-0 items-center justify-between px-6 py-5 border-b border-border/40">
@@ -1027,7 +1075,7 @@ onBeforeUnmount(() => {
               {{ t('admin.upstream.fields.availableGroups') }}
               <span class="text-muted-foreground ml-2 text-sm font-medium">{{ selectedSiteForGroups?.name }}</span>
             </h3>
-            <button @click="closeGroupsModal" class="text-muted-foreground hover:text-foreground transition-colors p-1 rounded-md hover:bg-surface-elevated">
+            <button type="button" aria-label="关闭可用分组" @click="closeGroupsModal" class="text-muted-foreground hover:text-foreground transition-colors p-1 rounded-md hover:bg-surface-elevated">
               <X class="w-5 h-5" />
             </button>
           </div>
@@ -1046,16 +1094,12 @@ onBeforeUnmount(() => {
                 <div
                   v-for="group in groups"
                   :key="group.id || group.name"
-                  role="button" tabindex="0"
-                  :aria-disabled="!connectionsLoaded"
-                  @keydown.enter.self="selectedSiteForGroups && openGroupAction(selectedSiteForGroups, group)"
                   :class="[
                     'flex min-w-0 flex-col items-stretch gap-1 rounded-xl border p-3 text-left transition-colors group',
                     groupConnection(selectedSiteForGroups!, group)
                       ? 'border-signal/50 bg-signal/10 hover:bg-signal/15'
                       : 'border-border/60 bg-surface/50 hover:bg-surface hover:border-primary/50'
                   ]"
-                  @click="selectedSiteForGroups && openGroupAction(selectedSiteForGroups, group)"
                 >
                   <span class="text-sm font-medium text-foreground truncate w-full group-hover:text-primary transition-colors">{{ group.name }}</span>
 
@@ -1081,7 +1125,13 @@ onBeforeUnmount(() => {
 
                   <GroupModelStatus upstream-only v-if="selectedSiteForGroups" :site-id="selectedSiteForGroups.id" :group-id="group.id" :group-name="group.name" :multiplier="group.multiplier==null?null:group.multiplier*(selectedSiteForGroups?.rechargeRate??1)" :rule-id="groupConnection(selectedSiteForGroups!,group)?.id" compact summary class="mt-3 w-full text-left" />
                   <GroupKeyPolicy v-if="selectedSiteForGroups" :site-id="selectedSiteForGroups.id" :group-id="group.id" :group-name="group.name" />
-                  <span class="mt-1 text-xs text-primary">{{groupConnection(selectedSiteForGroups!,group)?'管理对接':'对接分组'}} ›</span>
+                  <button
+                    type="button"
+                    :aria-label="`${group.name} · ${groupConnection(selectedSiteForGroups!,group) ? '管理对接' : '对接分组'}`"
+                    :disabled="!connectionsLoaded"
+                    class="mt-1 rounded-md border border-primary/20 px-2 py-1.5 text-left text-xs font-medium text-primary hover:bg-primary/10 disabled:opacity-50"
+                    @click="selectedSiteForGroups && openGroupAction(selectedSiteForGroups, group)"
+                  >{{ groupConnection(selectedSiteForGroups!,group) ? '管理对接' : '对接分组' }} ›</button>
                 </div>
               </div>
             </div>

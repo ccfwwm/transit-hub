@@ -6,6 +6,7 @@ import { Input } from '@/components/ui/input'
 import { followJob, operationJSON, type OperationJob } from '../api/operations'
 import OperationProgress from '../components/OperationProgress.vue'
 import UpstreamKeyDetail from '../components/upstream/UpstreamKeyDetail.vue'
+import UpstreamWhitelistDialog from '../components/upstream/UpstreamWhitelistDialog.vue'
 import UpstreamKeyMigration from '../components/upstream/UpstreamKeyMigration.vue'
 import KeyUsageSummary from '../components/upstream/KeyUsageSummary.vue'
 import { keyJobMessage } from '../api/keyRotation'
@@ -19,6 +20,7 @@ const connectionFilter = ref('')
 const statusFilter = ref('')
 const search = ref('')
 const selected = ref<KeyEntry | null>(null)
+const whitelistKey = ref<KeyEntry | null>(null)
 const creating = ref(false)
 const openRotation = ref(false)
 function openKey(key: KeyEntry, rotate = false) {
@@ -194,7 +196,7 @@ function quota(key: KeyEntry) {
               <td>{{ quota(key) }}<p class="mt-1 text-xs text-muted-foreground">{{ date(key.config.expires_at as string || key.config.expired_time as number) }}</p></td>
               <td><KeyUsageSummary :usage="usage[keyID(key)]" :loading="usageLoading" :lifetime="key.used" :unit="usageUnit(key)" /></td>
               <td class="tabular-nums text-muted-foreground">{{ date(key.lastUsed) }}</td>
-              <td><div class="flex flex-wrap gap-1"><Button v-if="key.bindings.length" variant="secondary" size="sm" :disabled="cleaning" @click="openKey(key, true)">轮换 Key</Button><Button variant="ghost" size="sm" @click="openKey(key)">详情</Button></div></td>
+              <td><div class="flex flex-wrap gap-1"><Button variant="ghost" size="sm" :disabled="cleaning" @click="whitelistKey = key">白名单</Button><Button v-if="key.bindings.length" variant="secondary" size="sm" :disabled="cleaning" @click="openKey(key, true)">轮换 Key</Button><Button variant="ghost" size="sm" @click="openKey(key)">详情</Button></div></td>
             </tr>
             <tr v-if="!items.length"><td colspan="9" class="py-14 text-center text-muted-foreground">{{ busy && !ready ? '读取 Key 清单…' : '当前筛选没有 Key' }}</td></tr>
           </tbody>
@@ -209,7 +211,7 @@ function quota(key: KeyEntry) {
             <p class="mt-1 text-xs text-foreground">{{ statusLabel(key) }} · {{ quota(key) }}<span v-if="independentlyManaged(key)"> · 未对接</span></p>
             <KeyUsageSummary class="mt-1" :usage="usage[keyID(key)]" :loading="usageLoading" :lifetime="key.used" :unit="usageUnit(key)" />
           </div>
-          <div class="flex shrink-0 flex-col gap-1"><Button variant="ghost" size="sm" @click="openKey(key)">详情</Button><Button v-if="key.bindings.length" variant="secondary" size="sm" :disabled="cleaning" @click="openKey(key, true)">轮换</Button></div>
+          <div class="flex shrink-0 flex-col gap-1"><Button variant="ghost" size="sm" @click="openKey(key)">详情</Button><Button variant="ghost" size="sm" :disabled="cleaning" @click="whitelistKey = key">白名单</Button><Button v-if="key.bindings.length" variant="secondary" size="sm" :disabled="cleaning" @click="openKey(key, true)">轮换</Button></div>
         </li>
         <li v-if="!items.length" class="p-6 text-center text-sm text-muted-foreground">{{ busy && !ready ? '读取 Key 清单…' : '当前筛选没有 Key' }}</li>
       </ul>
@@ -219,6 +221,7 @@ function quota(key: KeyEntry) {
       </footer>
     </section>
     <UpstreamKeyDetail v-if="creating || selected" :entry="selected" :start-rotation="openRotation" :overview="selected ? usage[keyID(selected)] : undefined" :inventory="inventory" :initial-site="siteFilter" @close="selected = null; creating = false; openRotation = false" @changed="load" @migrate="(site, binding) => { selected = null; showMigration(site, binding) }" />
+    <UpstreamWhitelistDialog v-if="whitelistKey && sites[whitelistKey.siteId]" :entry="whitelistKey" :site-id="whitelistKey.siteId" :name="whitelistKey.name" :platform="sites[whitelistKey.siteId]!.platform" :connection-ids="[...new Set(whitelistKey.bindings.map(binding => binding.id))]" @close="whitelistKey = null" @changed="load" />
     <Teleport to="body">
       <div v-if="cleanupTargets.length" class="fixed inset-0 z-[110] flex items-center justify-center bg-black/50 p-4" @click.self="cleanupTargets = []">
         <section role="dialog" aria-modal="true" aria-labelledby="cleanup-title" class="w-full max-w-lg rounded-xl border border-border bg-card p-5 shadow-xl">

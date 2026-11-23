@@ -125,13 +125,13 @@ func TestSecurityScopeRejectsUnboundStaleAndForeignKeys(t *testing.T) {
 			svc.SetAdminAccountResolver(realConnectAccounts{id: "w"})
 			mux := http.NewServeMux()
 			k.Register(mux)
-			rotationRequest := func(body string) *httptest.ResponseRecorder {
-				r := httptest.NewRequest("POST", "/api/my-sites/key-security/rotate", bytes.NewBufferString(body))
+			securityRequest := func(action, body string) *httptest.ResponseRecorder {
+				r := httptest.NewRequest("POST", "/api/my-sites/key-security/"+action, bytes.NewBufferString(body))
 				w := httptest.NewRecorder()
 				mux.ServeHTTP(w, r.WithContext(authctx.WithUserID(ctx, "u")))
 				return w
 			}
-			preview := rotationRequest(`{"ruleIds":["r1","r2","missing","wrong"],"preview":true}`)
+			preview := securityRequest("rotate", `{"ruleIds":["r1","r2","missing","wrong"],"preview":true}`)
 			var plan struct {
 				Keys, Skipped int
 				Version       string
@@ -140,9 +140,19 @@ func TestSecurityScopeRejectsUnboundStaleAndForeignKeys(t *testing.T) {
 				t.Fatalf("incorrect deduplicated rotation preview: %d %s", preview.Code, preview.Body.String())
 			}
 			for _, input := range []string{`{"ruleIds":[]}`, `{"connectionIds":[]}`, `{"ruleIds":["r1"],"version":"old"}`} {
-				if response := rotationRequest(input); response.Code != 400 {
+				if response := securityRequest("rotate", input); response.Code != 400 {
 					t.Fatalf("unexpected rotation submission for %s: %d", input, response.Code)
 				}
+			}
+			for _, body := range []string{`{}`, `{"ruleIds":[]}`, `{"ruleIds":["wrong"]}`} {
+				if response := securityRequest("whitelist", body); response.Code != 400 {
+					t.Fatalf("empty or foreign scope accepted: %d", response.Code)
+				}
+			}
+			response := securityRequest("whitelist", `{"ruleIds":["r1","r2","missing","wrong"]}`)
+			var whitelistJob jobs.Job
+			if response.Code != 202 || json.Unmarshal(response.Body.Bytes(), &whitelistJob) != nil || whitelistJob.Total != 1 || whitelistJob.Items[0].ID != "s/7" {
+				t.Fatalf("whitelist sync included unrelated or duplicate Key: %d %s", response.Code, response.Body.String())
 			}
 			manager, err := NewKeyManagement(ctx, db, svc, j)
 			if err != nil {

@@ -287,6 +287,12 @@ func (k *KeySecurity) runTarget(ctx context.Context, uid, aid, id string, raw js
 	if e != nil && !errors.Is(e, pgx.ErrNoRows) {
 		return out, e
 	}
+	if t.Action == "whitelist" && existing {
+		if r.Phase != "done" && r.Phase != "cancelled" {
+			return out, fmt.Errorf("此 Key 有未完成的轮换，请先完成轮换")
+		}
+		existing = false
+	}
 	if existing && (r.Phase == "done" || r.Phase == "cancelled") {
 		return k.rotate(ctx, uid, aid, *site, t)
 	}
@@ -905,8 +911,8 @@ func (k *KeySecurity) Register(mux *http.ServeMux) {
 			return
 		}
 		if req.RuleIDs != nil {
-			if action != "rotate" || req.ConnectionIDs != nil {
-				httpjson.WriteError(w, 400, "无效轮换目标")
+			if (action != "rotate" && action != "whitelist") || req.ConnectionIDs != nil {
+				httpjson.WriteError(w, 400, "无效操作目标")
 				return
 			}
 			e = k.db.QueryRow(r.Context(), `SELECT coalesce(array_agg(DISTINCT connection_id),'{}') FROM channel_monitor_rules
@@ -917,7 +923,7 @@ func (k *KeySecurity) Register(mux *http.ServeMux) {
 			}
 		}
 		if req.ConnectionIDs != nil && len(req.ConnectionIDs) == 0 && !req.Preview {
-			httpjson.WriteError(w, 400, "请选择轮换目标")
+			httpjson.WriteError(w, 400, "请选择操作目标")
 			return
 		}
 		if req.RuleIDs == nil && len(req.ConnectionIDs) > 0 {
@@ -979,6 +985,19 @@ func (k *KeySecurity) Register(mux *http.ServeMux) {
 				}
 			} else {
 				job, e = k.submit(r.Context(), uid, aid, "audit")
+			}
+		case "whitelist":
+			if len(req.ConnectionIDs) == 0 {
+				httpjson.WriteError(w, 400, "请选择白名单同步目标")
+				return
+			}
+			var items []jobs.Item
+			items, e = k.targets(r.Context(), uid, aid, "whitelist", req.ConnectionIDs)
+			if e == nil && len(items) == 0 {
+				e = fmt.Errorf("所选记录没有可同步的绑定 Key")
+			}
+			if e == nil {
+				job, e = k.jobs.Submit(r.Context(), uid, aid, "key_security", items)
 			}
 		case "rotate":
 			if req.ConnectionIDs != nil {

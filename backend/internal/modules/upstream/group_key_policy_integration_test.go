@@ -66,10 +66,21 @@ func TestGroupKeyPolicyIsolationAndReadback(t *testing.T) {
 	if e != nil || !a.Inherited || a.AllowedIPs[0] != DefaultMonitorIP {
 		t.Fatal(a, e)
 	}
+	sitePolicy, e := p.SaveGroup(ctx, "u", "w", "s", "", GroupKeyPolicy{KeyPolicy: KeyPolicy{AllowedIPs: []string{"192.0.2.2"}}})
+	if e != nil || sitePolicy.Inherited || sitePolicy.Version != 1 {
+		t.Fatal(sitePolicy, e)
+	}
+	inherited, e := p.Group(ctx, "u", "w", "s", "a")
+	if e != nil || !inherited.Inherited || inherited.Version != 0 || !reflect.DeepEqual(inherited.AllowedIPs, []string{"192.0.2.2"}) {
+		t.Fatal("group failed to inherit site policy", inherited, e)
+	}
 	a.Inherited = false
 	a.AllowedIPs = []string{"2001:db8::1", "192.0.2.0/24"}
 	a, e = p.SaveGroup(ctx, "u", "w", "s", "a", a)
 	if e != nil {
+		t.Fatal(e)
+	}
+	if _, e = p.SaveGroup(ctx, "u", "w", "s", "", GroupKeyPolicy{Inherited: true, KeyPolicy: KeyPolicy{Version: sitePolicy.Version}}); e != nil {
 		t.Fatal(e)
 	}
 	if _, e = p.SaveGroup(ctx, "u", "w", "s", "a", GroupKeyPolicy{KeyPolicy: KeyPolicy{Version: 0}, Inherited: true}); e == nil {
