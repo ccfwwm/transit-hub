@@ -62,6 +62,14 @@ func TestKeySecurityRotationResumesAndPreservesConsumer(t *testing.T) {
 			creates, deletes, updates := 0, 0, 0
 			failAccountWrite, failDelete := true, true
 			currentKey := "fixture-old-secret-0123456789"
+			accountName := "legacy account"
+			targetName := "foxrouter-图片分组-0.15x-006"
+			ordinal := 6
+			if platform == upstream.PlatformNewAPI {
+				targetName = "foxrouter-图片分组-0.15x-001"
+				ordinal = 1
+			}
+			rate := 0.15
 			credentials := map[string]any{"api_key": currentKey, "base_url": "https://dc.example.test", "pool_mode": true, "tier_id": "keep"}
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				w.Header().Set("Content-Type", "application/json")
@@ -91,6 +99,11 @@ func TestKeySecurityRotationResumesAndPreservesConsumer(t *testing.T) {
 						if len(m) != 1 {
 							t.Error("changed non-credential settings")
 						}
+						if name, ok := m["name"].(string); ok {
+							accountName = name
+							reply(nil)
+							return
+						}
 						c := m["credentials"].(map[string]any)
 						if c["base_url"] != credentials["base_url"] || c["pool_mode"] != true || c["tier_id"] != "keep" {
 							t.Error("lost credentials")
@@ -98,7 +111,11 @@ func TestKeySecurityRotationResumesAndPreservesConsumer(t *testing.T) {
 						currentKey = c["api_key"].(string)
 						updates++
 					}
-					reply(map[string]any{"id": float64(2211), "type": "apikey", "platform": "deepseek", "credentials": map[string]any{"api_key": "***", "base_url": credentials["base_url"]}, "schedulable": false, "priority": 17})
+					reply(map[string]any{"id": float64(2211), "name": accountName, "type": "apikey", "platform": "deepseek", "group_ids": []int{9}, "credentials": map[string]any{"api_key": "***", "base_url": credentials["base_url"]}, "schedulable": false, "priority": 17})
+					return
+				}
+				if path == "/api/v1/admin/accounts" {
+					reply(map[string]any{"items": []map[string]any{{"id": 2211, "name": accountName}}, "total": 1})
 					return
 				}
 				isCollection := path == "/api/v1/keys" || path == "/api/token/"
@@ -176,11 +193,11 @@ func TestKeySecurityRotationResumesAndPreservesConsumer(t *testing.T) {
 			defer server.Close()
 			client := upstream.NewPlatformService(upstream.NewHTTPClient(server.Client()))
 			session := upstream.Session{Platform: upstream.PlatformSub2API, BaseURL: server.URL, AccessToken: "fixture-admin"}
-			if e := repo.Save(ctx, State{UserID: "u", AdminAccountID: "w", Session: session}); e != nil {
+			if e := repo.Save(ctx, State{UserID: "u", AdminAccountID: "w", Session: session, OwnGroups: []GroupOption{{ID: "9", Name: "图片分组"}}}); e != nil {
 				t.Fatal(e)
 			}
 			upSession := upstream.Session{Platform: platform, BaseURL: server.URL, AccessToken: "fixture-upstream", UserID: "1"}
-			site := &upstream.Site{ID: "s", UserID: "u", AdminAccountID: "w", Platform: platform, Session: &upSession}
+			site := &upstream.Site{ID: "s", UserID: "u", AdminAccountID: "w", BaseURL: "https://api.foxrouter.com", Platform: platform, Session: &upSession}
 			svc := NewService(repo, client, realConnectLookup{site: site})
 			if e := svc.EnsureSchema(ctx); e != nil {
 				t.Fatal(e)
@@ -197,6 +214,7 @@ func TestKeySecurityRotationResumesAndPreservesConsumer(t *testing.T) {
 			if platform == upstream.PlatformNewAPI {
 				group = "pro"
 			}
+			site.Metrics.Groups = []upstream.GroupInfo{{ID: group, Multiplier: &rate}}
 			c := RealConnection{ID: "c", UserID: "u", WorkspaceAdminAccountID: "w", UpstreamSiteID: "s", UpstreamGroupID: group, UpstreamKeyID: "7", UpstreamKey: "fixture-old-secret-0123456789", AdminAccountID: "2211", OwnGroupIDs: []string{"9"}, CreatedAt: time.Now().Format(time.RFC3339), UpstreamAPIURL: "https://dc.example.test"}
 			if e := repo.SaveRealConnection(ctx, c); e != nil {
 				t.Fatal(e)
@@ -204,6 +222,14 @@ func TestKeySecurityRotationResumesAndPreservesConsumer(t *testing.T) {
 			j := jobs.New(db)
 			if e := j.EnsureSchema(ctx); e != nil {
 				t.Fatal(e)
+			}
+			if _, e := NewKeyManagement(ctx, db, svc, j); e != nil {
+				t.Fatal(e)
+			}
+			if platform == upstream.PlatformSub2API {
+				if _, e := db.Exec(ctx, `INSERT INTO managed_binding_names VALUES('u','w','c','9','foxrouter',6,'old-applied-name')`); e != nil {
+					t.Fatal(e)
+				}
 			}
 			enc := base64.StdEncoding.EncodeToString(make([]byte, 32))
 			k, e := NewKeySecurity(db, svc, p, j, enc)
@@ -260,6 +286,18 @@ func TestKeySecurityRotationResumesAndPreservesConsumer(t *testing.T) {
 				t.Fatal("completed retry mutated key")
 			}
 			newRecord := inventory["8"]
+			if newRecord["name"] != targetName || accountName != targetName {
+				t.Fatalf("unexpected names upstream=%q forwarding=%q", newRecord["name"], accountName)
+			}
+			var applied string
+			var number int
+			if e := db.QueryRow(ctx, `SELECT applied_name,ordinal FROM managed_binding_names WHERE connection_id='c'`).Scan(&applied, &number); e != nil || applied != targetName || number != ordinal {
+				t.Fatalf("unexpected naming reservation %q %d %v", applied, number, e)
+			}
+			saved, e = repo.GetRealConnection(ctx, "c", "u", "w")
+			if e != nil || saved.AdminAccountName != targetName {
+				t.Fatal("local forwarding name was not updated", e)
+			}
 			if platform == upstream.PlatformSub2API {
 				if newRecord["status"] != "inactive" || newRecord["quota"] != float64(77) || newRecord["rate_limit_1d"] != float64(5) {
 					t.Fatal("old restrictions lost", newRecord)

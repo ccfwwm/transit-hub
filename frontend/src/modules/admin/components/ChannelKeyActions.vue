@@ -10,7 +10,7 @@ async function run(action: 'sync' | 'rotate') {
   try {
     const job = await followJob(await operationJSON<OperationJob>(`/my-sites/key-security/${action}`, { method: 'POST', body: JSON.stringify({ connectionIds: [props.connectionId] }) }))
     if (job.failed) throw new Error(job.items.find(v => v.error)?.error || '操作失败，可在任务进度中重试')
-    message.value = action === 'rotate' ? 'Key 已轮换' : '白名单已校对'
+    message.value = action === 'rotate' ? job.items[0]?.result?.message || 'Key 已轮换' : '白名单已校对'
     window.dispatchEvent(new Event('transithub:key-policy'))
   } catch (e: any) { error.value = true; message.value = e.message } finally { busy.value = false }
 }

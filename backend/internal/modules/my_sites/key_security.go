@@ -48,6 +48,7 @@ type securityTarget struct {
 type rotationState struct {
 	ID, Site, OldID, NewID, NewSecret, OldSecret, Phase string
 	Config                                              map[string]any
+	Naming                                              rotationNaming
 }
 
 func NewKeySecurity(db *pgxpool.Pool, s *Service, p *upstream.KeyPolicies, j *jobs.Service, secret string) (*KeySecurity, error) {
@@ -84,6 +85,7 @@ func NewKeySecurity(db *pgxpool.Pool, s *Service, p *upstream.KeyPolicies, j *jo
 	if _, e = db.Exec(context.Background(), `ALTER TABLE key_security_policies ADD COLUMN IF NOT EXISTS last_discovery timestamptz;
 	 ALTER TABLE key_security_policies ADD COLUMN IF NOT EXISTS audit_interval_minutes int NOT NULL DEFAULT 5;
 	 ALTER TABLE key_security_rotations ADD COLUMN IF NOT EXISTS group_id text NOT NULL DEFAULT '';
+	 ALTER TABLE key_security_rotations ADD COLUMN IF NOT EXISTS naming jsonb NOT NULL DEFAULT '{}';
 	 UPDATE key_security_rotations r SET group_id=coalesce((SELECT c.upstream_group_id FROM real_connections c WHERE c.user_id=r.user_id AND c.workspace_admin_account_id=r.admin_account_id AND c.upstream_site_id=r.site_id AND c.upstream_key_id IN(r.old_key_id,r.new_key_id) LIMIT 1),'') WHERE r.group_id='';`); e != nil {
 		return nil, e
 	}
@@ -402,12 +404,15 @@ func randomSecuritySecret() (string, error) {
 }
 func (k *KeySecurity) loadRotation(ctx context.Context, uid, aid string, t securityTarget) (rotationState, error) {
 	var r rotationState
-	var raw []byte
-	e := k.db.QueryRow(ctx, `SELECT id,site_id,old_key_id,new_key_id,old_secret,new_secret,config,phase FROM key_security_rotations WHERE user_id=$1 AND admin_account_id=$2 AND site_id=$3 AND old_key_id=$4`, uid, aid, t.SiteID, t.KeyID).Scan(&r.ID, &r.Site, &r.OldID, &r.NewID, &r.OldSecret, &r.NewSecret, &raw, &r.Phase)
+	var raw, naming []byte
+	e := k.db.QueryRow(ctx, `SELECT id,site_id,old_key_id,new_key_id,old_secret,new_secret,config,phase,naming FROM key_security_rotations WHERE user_id=$1 AND admin_account_id=$2 AND site_id=$3 AND old_key_id=$4`, uid, aid, t.SiteID, t.KeyID).Scan(&r.ID, &r.Site, &r.OldID, &r.NewID, &r.OldSecret, &r.NewSecret, &raw, &r.Phase, &naming)
 	if e != nil {
 		return r, e
 	}
 	if e = json.Unmarshal(raw, &r.Config); e != nil {
+		return r, e
+	}
+	if e = json.Unmarshal(naming, &r.Naming); e != nil {
 		return r, e
 	}
 	if r.Phase == "done" || r.Phase == "cancelled" {
@@ -505,16 +510,17 @@ func (k *KeySecurity) rotate(ctx context.Context, uid, aid string, site upstream
 			return out, e
 		}
 		raw, _ := json.Marshal(config)
-		_, e = k.db.Exec(ctx, `INSERT INTO key_security_rotations(id,user_id,admin_account_id,site_id,old_key_id,old_secret,new_secret,config,group_id) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9)`, rid, uid, aid, site.ID, t.KeyID, oldEnc, newEnc, raw, t.GroupID)
+		naming := rotationNaming{PreviousName: keyString(record["name"])}
+		_, e = k.db.Exec(ctx, `INSERT INTO key_security_rotations(id,user_id,admin_account_id,site_id,old_key_id,old_secret,new_secret,config,group_id,naming) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`, rid, uid, aid, site.ID, t.KeyID, oldEnc, newEnc, raw, t.GroupID, naming)
 		if e != nil {
 			return out, e
 		}
-		r = rotationState{ID: rid, Site: site.ID, OldID: t.KeyID, OldSecret: old, NewSecret: secret, Config: config, Phase: "prepared"}
+		r = rotationState{ID: rid, Site: site.ID, OldID: t.KeyID, OldSecret: old, NewSecret: secret, Config: config, Phase: "prepared", Naming: naming}
 	} else if e != nil {
 		return out, e
 	}
 	if r.Phase == "done" {
-		return jobs.Outcome{Value: map[string]any{"message": "Key 已轮换，旧 Key 已撤销", "oldKeyId": r.OldID, "newKeyId": r.NewID}}, nil
+		return rotationResult(r), nil
 	}
 	if r.Phase == "cancelled" {
 		return out, fmt.Errorf("原账号或凭据已移除，已停止此旧绑定轮换；请重新同步绑定")
@@ -592,12 +598,15 @@ func (k *KeySecurity) rotate(ctx context.Context, uid, aid string, site upstream
 			return out, e
 		}
 		name, _ := r.Config["name"].(string)
+		if r.Naming.PreviousName == "" {
+			r.Naming.PreviousName = keyString(record["name"])
+		}
 		r.Config, e = upstream.SecurityCloneConfig(site.Platform, record, name, ips)
 		if e != nil {
 			return out, e
 		}
 		cfg, _ := json.Marshal(r.Config)
-		if _, e = k.db.Exec(ctx, `UPDATE key_security_rotations SET config=$2,updated_at=now() WHERE id=$1`, r.ID, cfg); e != nil {
+		if _, e = k.db.Exec(ctx, `UPDATE key_security_rotations SET config=$2,naming=$3,updated_at=now() WHERE id=$1`, r.ID, cfg, r.Naming); e != nil {
 			return out, e
 		}
 		r.NewID, r.NewSecret, e = k.sites.platformService.CreateSecurityKey(ctx, *site.Session, r.Config, r.NewSecret)
@@ -682,28 +691,42 @@ func (k *KeySecurity) rotate(ctx context.Context, uid, aid string, site upstream
 	}
 	if r.Phase == "switched" {
 		// Recheck every current consumer before revocation, including after restart.
-		conns, e := k.sites.connRepository.ListRealConnections(ctx, uid, aid)
+		manager := k.sites.keyManagement
+		if manager != nil {
+			unlock, err := manager.lockOperation(ctx, "key-security|"+site.ID+"|"+r.NewID)
+			if err != nil {
+				return jobs.Outcome{Pending: true, Delay: 5 * time.Second}, nil
+			}
+			defer unlock()
+		}
+		conns, e := k.boundConsumers(ctx, uid, aid, site.ID, []string{r.NewID})
 		if e != nil {
 			return out, e
 		}
-		count := 0
+		var account upstream.Sub2APIAdminAccountStatus
 		for _, c := range conns {
-			if c.UpstreamSiteID == site.ID && c.UpstreamKeyID == r.NewID {
-				count++
-				a, e := k.sites.platformService.FetchForwardingAccount(ctx, session, c.AdminAccountID)
-				if e != nil || !upstream.SameMonitorKey(site.Platform, a.APIKey, r.NewSecret) {
-					return out, fmt.Errorf("新 Key 渠道回读不一致，旧 Key 尚未撤销")
-				}
+			account, e = k.sites.platformService.FetchForwardingAccount(ctx, session, c.AdminAccountID)
+			if e != nil || !upstream.SameMonitorKey(site.Platform, account.APIKey, r.NewSecret) {
+				return out, fmt.Errorf("新 Key 渠道回读不一致，旧 Key 尚未撤销")
 			}
 		}
-		if count == 0 {
+		if len(conns) == 0 {
 			return out, fmt.Errorf("新 Key 绑定不存在，旧 Key 尚未撤销")
+		}
+		if manager != nil {
+			defer manager.invalidate(&site)
+			if e = manager.prepareRotationNaming(ctx, uid, aid, &site, session, conns, account, &r); e != nil {
+				return out, e
+			}
+			if e = manager.renameRotatedAccount(ctx, session, conns, account, r.Naming); e != nil {
+				return out, e
+			}
 		}
 		if e = k.sites.platformService.DeleteSecurityKey(ctx, *site.Session, r.OldID); e != nil {
 			return out, e
 		}
-		if k.sites.keyManagement != nil {
-			if e = k.sites.keyManagement.finishManagedRotation(ctx, uid, aid, &site, r); e != nil {
+		if manager != nil {
+			if e = manager.finishManagedRotation(ctx, uid, aid, &site, conns, r); e != nil {
 				return out, e
 			}
 		}
@@ -716,9 +739,8 @@ func (k *KeySecurity) rotate(ctx context.Context, uid, aid string, site upstream
 			return out, e
 		}
 	}
-	message := "Key 已轮换，渠道已回读，旧 Key 已撤销"
-	k.event(ctx, uid, aid, t, "done", message)
-	return jobs.Outcome{Value: map[string]any{"message": message, "oldKeyId": r.OldID, "newKeyId": r.NewID}}, nil
+	k.event(ctx, uid, aid, t, "done", rotationMessage(r))
+	return rotationResult(r), nil
 }
 
 // Inventory is read only to reconcile bindings. Only current bound consumers

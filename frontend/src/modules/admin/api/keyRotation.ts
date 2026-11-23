@@ -17,6 +17,6 @@ export async function rotateKeys(targets: RotationTargets, version: string) {
 }
 
 export function keyJobMessage(job: OperationJob) {
-  return job.items.filter(item => item.error || item.result?.skipped)
+  return job.items.filter(item => item.error || item.result?.skipped || item.result?.namingWarning)
     .map(item => `${item.id} · ${item.error || item.result.message}`).join('\n')
 }

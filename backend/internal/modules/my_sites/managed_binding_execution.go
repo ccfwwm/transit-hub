@@ -133,6 +133,10 @@ func (m *KeyManagement) renameBinding(ctx context.Context, conn RealConnection, 
 	if err != nil || detail.Name != target.Name {
 		return fmt.Errorf("自有账号名称回读不一致")
 	}
+	return m.recordBindingName(ctx, conn, target)
+}
+
+func (m *KeyManagement) recordBindingName(ctx context.Context, conn RealConnection, target bindingTarget) error {
 	tx, err := m.db.Begin(ctx)
 	if err != nil {
 		return err
@@ -506,26 +510,4 @@ func (m *KeyManagement) pendingKeySplit(ctx context.Context, uid, aid, site, id 
 	var pending bool
 	err := m.db.QueryRow(ctx, "SELECT EXISTS(SELECT 1 FROM managed_binding_progress p LEFT JOIN real_connections c ON c.id=p.operation_id AND c.user_id=p.user_id AND c.workspace_admin_account_id=p.workspace_id WHERE p.user_id=$1 AND p.workspace_id=$2 AND p.site_id=$3 AND (p.key_id=$4 OR c.upstream_key_id=$4) AND p.step NOT IN('','done'))", uid, aid, site, id).Scan(&pending)
 	return pending, err
-}
-
-func (m *KeyManagement) finishManagedRotation(ctx context.Context, uid, aid string, site *upstream.Site, r rotationState) error {
-	var name string
-	err := m.db.QueryRow(ctx, "SELECT coalesce(min(n.applied_name),'') FROM managed_binding_names n JOIN real_connections c ON c.id=n.connection_id AND c.user_id=n.user_id AND c.workspace_admin_account_id=n.workspace_id WHERE n.user_id=$1 AND n.workspace_id=$2 AND c.upstream_site_id=$3 AND c.upstream_key_id=$4 AND n.applied_name<>''", uid, aid, site.ID, r.NewID).Scan(&name)
-	if err != nil {
-		return err
-	}
-	if name == "" {
-		return nil
-	}
-	if err = m.alias(ctx, uid, aid, site.ID, r.NewID, keyString(r.Config["name"])); err != nil {
-		return err
-	}
-	if _, err = m.db.Exec(ctx, "INSERT INTO managed_key_lineage(user_id,workspace_id,site_id,previous_id,successor_id) VALUES($1,$2,$3,$4,$5) ON CONFLICT DO NOTHING", uid, aid, site.ID, r.OldID, r.NewID); err != nil {
-		return err
-	}
-	if err = m.platform.RenameManagedKey(ctx, *site.Session, r.NewID, name); err != nil {
-		return err
-	}
-	m.invalidate(site)
-	return nil
 }

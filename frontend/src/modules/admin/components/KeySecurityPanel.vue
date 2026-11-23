@@ -38,8 +38,9 @@ async function run(action: 'sync-all' | 'sync' | 'rotate') {
     const results = await Promise.all(children.map(async id => followJob(await operationJSON<OperationJob>(`/channel-monitor/operations/${encodeURIComponent(id)}`))))
     const failed = job.failed + results.reduce((n, v) => n + v.failed, 0)
     const count = children.length ? results.reduce((n, v) => n + v.total, 0) : job.total
+    const namingPending = [job, ...results].flatMap(v => v.items).filter(v => v.result?.namingWarning).length
     if (failed) error.value = `${failed} 项失败，请在任务进度中查看并重试`
-    message.value = `已处理 ${count} 个目标${failed ? `，${failed} 项失败` : ''}${discoveryWarning ? `。${discoveryWarning}` : ''}`
+    message.value = `已处理 ${count} 个目标${failed ? `，${failed} 项失败` : ''}${namingPending ? `，${namingPending} 个命名待处理` : ''}${discoveryWarning ? `。${discoveryWarning}` : ''}`
     await load(); window.dispatchEvent(new Event('transithub:key-policy'))
   } catch (e: any) { error.value = e.message; message.value = '' } finally { busy.value = false }
 }

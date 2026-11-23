@@ -148,7 +148,7 @@ async function rotate() {
         message.value = ''
         throw new Error(keyJobMessage(job) || '轮换未完成，请在任务进度中查看')
       }
-      message.value = 'Key 已轮换'
+      message.value = job.items[0]?.result?.message || 'Key 已轮换'
     } finally {
       if (confirmRotation.value) rotationSubmitted.value = false
     }
