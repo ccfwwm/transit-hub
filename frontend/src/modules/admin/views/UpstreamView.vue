@@ -11,6 +11,7 @@ import UpstreamWhitelistDialog from '../components/upstream/UpstreamWhitelistDia
 import OperationProgress from '../components/OperationProgress.vue'
 import { keyJobMessage, previewKeyRotation, rotateKeys } from '../api/keyRotation'
 import ModelHealthExplorer from '../components/ModelHealthExplorer.vue'
+import ModelTestDialog from '../components/ModelTestDialog.vue'
 import { operationJSON, followJob, checkedOperation,type OperationJob } from '../api/operations'
 import type { UpstreamGroupInfo as PreviewGroup } from '../types/upstream'
 
@@ -198,6 +199,7 @@ watch(()=>[newSiteForm.value.monitorProfile,newSiteForm.value.apiUrl],()=>{previ
 const previewBusy = ref(false)
 const previewError = ref('')
 const healthSite = ref<UpstreamSite | null>(null)
+const testingSite = ref<UpstreamSite | null>(null)
 const handleAddSite = async () => {
   if(previewBusy.value)return
   if (!editingSiteId.value && !preview.value) {
@@ -574,9 +576,10 @@ onBeforeUnmount(() => {
 
 <template>
   <DomainAllowlist v-if="domainsOpen" @close="domainsOpen=false" />
+  <ModelTestDialog v-if="testingSite" :site-id="testingSite.id" :groups="testingSite.metrics.groups" :label="testingSite.name" @close="testingSite = null" />
   <UpstreamWhitelistDialog v-if="whitelistSite" :site-id="whitelistSite.id" :name="whitelistSite.name" :platform="whitelistSite.platform" :connection-ids="connectionIdsForSite(whitelistSite.id)" @close="whitelistSite = null" />
   <div class="space-y-6">
-    <OperationProgress :kinds="['key_security']" @completed="loadGroupConnections" />
+    <OperationProgress :kinds="['key_security', 'manual_upstream_model']" @completed="loadGroupConnections" />
     <p v-if="keyActionMessage" role="status" class="text-sm text-muted-foreground">{{ keyActionMessage }}</p>
     <p v-if="keyActionError" role="alert" class="whitespace-pre-line text-sm text-destructive">{{ keyActionError }}</p>
     <!-- Top Action Bar -->
@@ -752,6 +755,7 @@ onBeforeUnmount(() => {
             </div>
             <div class="flex shrink-0 items-center justify-end gap-2">
               <Tooltip text="设置白名单"><button type="button" aria-label="设置白名单" class="grid h-8 w-8 place-items-center rounded-lg border border-border/60 text-cyan-700 hover:bg-cyan-500/10 dark:text-cyan-300" @click="whitelistSite = site"><Shield class="h-4 w-4" /></button></Tooltip>
+              <Button v-if="site.metrics.groups.length" size="sm" variant="ghost" class="!h-8 !px-2 text-xs whitespace-nowrap" @click="testingSite = site">实际测试</Button>
               <Tooltip text="一键轮换 Key"><button type="button" aria-label="一键轮换 Key" class="grid h-8 w-8 place-items-center rounded-lg border border-border/60 text-orange-700 hover:bg-orange-500/10 disabled:opacity-50 dark:text-orange-300" :disabled="!!rotatingSite || !connectionIdsForSite(site.id).length" @click="rotateSite(site)"><Loader2 v-if="rotatingSite === site.id" class="h-4 w-4 animate-spin" /><KeyRound v-else class="h-4 w-4" /></button></Tooltip>
               <Tooltip :text="syncingSiteIds.has(site.id) ? t('admin.upstream.action.syncing') : t('admin.upstream.action.sync')">
                 <button
@@ -951,6 +955,7 @@ onBeforeUnmount(() => {
                     </button>
                   </Tooltip>
                   <Tooltip text="设置白名单"><button type="button" aria-label="设置白名单" class="rounded-md p-1.5 text-cyan-700 hover:bg-cyan-500/10 dark:text-cyan-300" @click="whitelistSite = site"><Shield class="h-4 w-4" /></button></Tooltip>
+                  <Button v-if="site.metrics.groups.length" size="sm" variant="ghost" class="!h-8 !px-2 text-xs whitespace-nowrap" @click="testingSite = site">实际测试</Button>
                   <Tooltip text="一键轮换 Key"><button type="button" aria-label="一键轮换 Key" class="rounded-md p-1.5 text-orange-700 hover:bg-orange-500/10 disabled:opacity-50 dark:text-orange-300" :disabled="!!rotatingSite || !connectionIdsForSite(site.id).length" @click="rotateSite(site)"><Loader2 v-if="rotatingSite === site.id" class="h-4 w-4 animate-spin" /><KeyRound v-else class="h-4 w-4" /></button></Tooltip>
                   <Tooltip :text="t('admin.upstream.action.edit')">
                     <button
@@ -1236,7 +1241,7 @@ onBeforeUnmount(() => {
             </div>
           </template>
           </div>
-          <GroupModelStatus v-if="groupActionSite && groupActionGroup" inline selectable upstream-only summary class="min-w-0 border-t border-border/50 pt-4 lg:border-l lg:border-t-0 lg:pl-5 lg:pt-0" :site-id="groupActionSite.id" :group-id="groupActionGroup.id" :group-name="groupActionGroup.name" :multiplier="groupActionGroup.multiplier == null ? null : groupActionGroup.multiplier * (groupActionSite.rechargeRate ?? 1)" :rule-id="actionConnection?.id" @select-model="groupActionTestModel = $event" />
+          <GroupModelStatus v-if="groupActionSite && groupActionGroup" inline selectable upstream-only summary class="min-w-0 border-t border-border/50 pt-4 lg:border-l lg:border-t-0 lg:pl-5 lg:pt-0" :site-id="groupActionSite.id" :group-id="groupActionGroup.id" :group-name="groupActionGroup.name" :model-id="groupActionTestModel" :multiplier="groupActionGroup.multiplier == null ? null : groupActionGroup.multiplier * (groupActionSite.rechargeRate ?? 1)" :rule-id="actionConnection?.id" @select-model="groupActionTestModel = $event" />
           </div>
         </div>
       </div>

@@ -193,6 +193,7 @@ func (s *HealthService) Register(mux *http.ServeMux, j *jobs.Service, policies *
 	j.Register("health_probe", func(ctx context.Context, uid, aid, id string, _ json.RawMessage) (jobs.Outcome, error) {
 		return s.runPreviewProbe(ctx, uid, aid, id, policies)
 	})
+	s.registerManualModelTest(mux, j, policies)
 	mux.HandleFunc("GET /api/upstream-sites/{id}/model-health", func(w http.ResponseWriter, r *http.Request) {
 		uid, aid, e := s.scope(r)
 		if e != nil {

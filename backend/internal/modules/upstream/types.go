@@ -329,6 +329,7 @@ type BalanceBreakdownItem struct {
 }
 
 type APIKeyProbeOptions struct {
+	VerifyOutput    bool
 	Recover         bool
 	IdempotencyKey  string
 	BaseURL         string

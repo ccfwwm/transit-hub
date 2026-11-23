@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import PrimaryModelPicker from '../components/PrimaryModelPicker.vue'
 import GroupModelStatus from '../components/GroupModelStatus.vue'
+import ModelTestDialog from '../components/ModelTestDialog.vue'
 import MonitorBindingSync from '../components/MonitorBindingSync.vue'
 import OperationProgress from '../components/OperationProgress.vue'
 import StatusSourceControl from '../components/StatusSourceControl.vue'
@@ -76,6 +77,7 @@ const { t, locale } = useI18n()
 const isLoading = ref(false)
 const isRefreshing = ref(false)
 const activeActionKeys = ref<string[]>([])
+const testingChannel = ref<ChannelMonitorChannel | null>(null)
 const errorKey = ref('')
 const syncingHealth=ref(false)
 const healthSyncMessage=ref('')
@@ -873,6 +875,7 @@ const dispatchBadge = (channel:ChannelMonitorChannel) => {
 
 <template>
   <div class="min-h-[calc(100vh-8rem)] flex flex-col gap-4">
+    <ModelTestDialog v-if="testingChannel" :site-id="testingChannel.siteId" :group-id="testingChannel.upstreamGroupId" :connection-id="testingChannel.connectionId" :initial-model="testingChannel.effectiveTestModelId" :label="testingChannel.adminAccountName" @close="testingChannel = null" />
     <p v-if="healthSyncMessage" class="text-xs text-muted-foreground">{{healthSyncMessage}}</p>
 
     <div class="grid grid-cols-3 gap-3 md:grid-cols-6">
@@ -972,7 +975,7 @@ const dispatchBadge = (channel:ChannelMonitorChannel) => {
       </Button>
     </div>
 
-    <OperationProgress :kinds="['key_security']" @completed="loadChannels()" />
+    <OperationProgress :kinds="['key_security', 'manual_upstream_model']" @completed="loadChannels()" />
     <p v-if="rotationMessage" role="status" class="text-sm text-muted-foreground">{{ rotationMessage }}</p>
     <p v-if="whitelistMessage" role="status" class="text-sm text-muted-foreground">{{ whitelistMessage }}</p>
     <div v-if="errorKey" class="whitespace-pre-line rounded-xl border border-warning/20 bg-warning/10 p-3 text-sm text-warning">
@@ -1209,6 +1212,7 @@ const dispatchBadge = (channel:ChannelMonitorChannel) => {
                 <td class="px-2 py-2 align-top">
                   <div class="flex flex-wrap justify-end gap-1">
                     <ChannelKeyActions :whitelist-enabled="channel.keyWhitelistEnabled" :connection-id="channel.connectionId" :disabled="isChannelBusy(channel)" />
+                    <Button type="button" variant="secondary" size="sm" class="!h-7 !rounded-md !px-1.5 !text-xs whitespace-nowrap" @click="testingChannel = channel">实际测试</Button>
                     <Button variant="secondary" size="sm" class="!h-7 !rounded-md !px-2 !text-xs !font-medium whitespace-nowrap !bg-blue-500/10 !text-blue-600" :disabled="isChannelBusy(channel)" @click="runAction(()=>syncChannelStatus(channel),{actionKey:channelActionKey(channel,'sync-status')})">同步状态</Button>
                     <Button variant="secondary" size="sm" class="!h-7 !rounded-md !px-2 !text-xs !font-medium whitespace-nowrap !bg-indigo-500/10 !text-indigo-600" :disabled="isChannelBusy(channel)" @click="openGroupEditor(channel)">修改分组</Button>
                     <Button variant="secondary" size="sm" class="!h-7 !rounded-md !px-2 !text-xs !font-medium whitespace-nowrap !bg-amber-500/10 !text-amber-700" :disabled="isChannelBusy(channel)||(!channel.supported&&!channel.repairAvailable)" @click="syncAndTakeOverChannel(channel)">同步接管</Button>

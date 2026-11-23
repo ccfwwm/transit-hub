@@ -4,6 +4,7 @@ import PrimaryModelPicker from '../components/PrimaryModelPicker.vue'
 import { computed, ref, watch } from 'vue'
 import GroupAPIAddress from '../components/GroupAPIAddress.vue'
 import GroupBindingList from '../components/GroupBindingList.vue'
+import ModelTestDialog from '../components/ModelTestDialog.vue'
 import { useI18n } from 'vue-i18n'
 import { useRouter } from 'vue-router'
 import { AlertCircle, ArrowUpDown, Edit3, History, Link2, Loader2, Megaphone, RefreshCw, Search, X } from 'lucide-vue-next'
@@ -46,6 +47,7 @@ const selectedRate = ref<GroupRate | null>(null)
 const isHistoryOpen = ref(false)
 const editingRate = ref<GroupRate | null>(null)
 const connectingRate = ref<GroupRate | null>(null)
+const testingRate = ref<GroupRate | null>(null)
 const editingConnectionId = ref('')
 const editTypeValue = ref('')
 const connectOwnGroups = ref<string[]>([])
@@ -733,6 +735,7 @@ const historyRowKey = (row: GroupRateHistoryRow, index: number): string => (
               <td class="px-4 py-2.5 text-muted-foreground">{{ formatDateTime(rate.updatedAt) }}</td>
               <td class="px-4 py-2.5 text-right">
                 <div v-if="!rate.deleted" class="flex justify-end gap-2">
+                  <Button v-if="rate.groupId" variant="ghost" size="sm" class="whitespace-nowrap" @click="testingRate = rate">实际测试</Button>
                   <Button
                     v-if="isRealConnected(rate)"
                     variant="secondary"
@@ -1067,7 +1070,7 @@ const historyRowKey = (row: GroupRateHistoryRow, index: number): string => (
           </div>
 
               </div>
-              <div class="min-w-0 border-t border-border/50 pt-4 lg:border-l lg:border-t-0 lg:pl-6 lg:pt-0">          <GroupModelStatus v-if="connectingRate" inline upstream-only summary selectable :site-id="connectingRate.siteId" :group-id="connectingRate.groupId" :group-name="connectingRate.groupName" :multiplier="connectingRate.currentMultiplier" @select-model="connectTestModel = $event" /></div>
+              <div class="min-w-0 border-t border-border/50 pt-4 lg:border-l lg:border-t-0 lg:pl-6 lg:pt-0"><GroupModelStatus inline upstream-only summary selectable :site-id="connectingRate.siteId" :group-id="connectingRate.groupId" :group-name="connectingRate.groupName" :multiplier="connectingRate.currentMultiplier" :rule-id="editingConnection?.id" :model-id="connectTestModel" @select-model="connectTestModel = $event" /></div>
             </div>
           </div>
           <div class="flex shrink-0 justify-end gap-2 border-t border-border/50 bg-card px-6 py-4">
@@ -1086,6 +1089,7 @@ const historyRowKey = (row: GroupRateHistoryRow, index: number): string => (
       </div>
     </div>
 
+    <ModelTestDialog v-if="testingRate" :site-id="testingRate.siteId" :group-id="testingRate.groupId" :label="testingRate.groupName" @close="testingRate = null" />
     <div v-if="disconnectingConnection" class="fixed inset-0 z-50 flex items-center justify-center bg-background/80 p-4 backdrop-blur-sm">
       <div class="w-full max-w-md overflow-hidden rounded-2xl border border-border/50 bg-card shadow-xl">
         <div class="flex items-start justify-between gap-4 border-b border-border/50 p-6">

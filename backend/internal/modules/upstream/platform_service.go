@@ -2550,9 +2550,24 @@ func (s *PlatformService) ProbeAPIKey(ctx context.Context, options APIKeyProbeOp
 	if status < http.StatusOK || status >= http.StatusMultipleChoices {
 		return APIKeyProbeResult{
 			Inconclusive: status == 400 || status == 401 || status == 403 || status == 404 || status == 422,
-			Success:      false, Message: apiProbeErrorMessage(status, data),
+			Success:      false, Message: apiProbeErrorMessage(status, data, apiKey),
 			LatencyMS: latency, Model: modelID,
 		}, nil
+	}
+	if options.VerifyOutput {
+		var output map[string]any
+		if json.Unmarshal(data, &output) != nil {
+			return APIKeyProbeResult{Model: modelID, Message: "上游返回的内容无法验证为模型输出", LatencyMS: latency}, nil
+		}
+		if output["success"] == false || output["error"] != nil || output["status"] == "failed" {
+			return APIKeyProbeResult{Model: modelID, Message: apiProbeErrorMessage(status, data, apiKey), LatencyMS: latency}, nil
+		}
+		for _, field := range []string{"output", "choices", "candidates", "content"} {
+			if items, ok := output[field].([]any); ok && len(items) != 0 {
+				return APIKeyProbeResult{Success: true, Message: "上游返回了模型生成结果", LatencyMS: latency, Model: modelID}, nil
+			}
+		}
+		return APIKeyProbeResult{Model: modelID, Message: "上游响应没有模型输出", LatencyMS: latency}, nil
 	}
 	return APIKeyProbeResult{Success: true, Message: "上游 Key 直连检测通过", LatencyMS: latency, Model: modelID}, nil
 }
@@ -2631,7 +2646,7 @@ func (s *PlatformService) sendAPIKeyProbe(ctx context.Context, endpoint string, 
 	return response.StatusCode, data, nil
 }
 
-func apiProbeErrorMessage(status int, data []byte) string {
+func apiProbeErrorMessage(status int, data []byte, credential string) string {
 	message := ""
 	var payload map[string]any
 	if json.Unmarshal(data, &payload) == nil {
@@ -2646,6 +2661,9 @@ func apiProbeErrorMessage(status int, data []byte) string {
 	}
 	if message == "" {
 		message = strings.TrimSpace(string(data))
+	}
+	if credential != "" {
+		message = strings.ReplaceAll(message, credential, "[已隐藏]")
 	}
 	if len(message) > 200 {
 		message = message[:200]

@@ -1,12 +1,14 @@
 <script setup lang="ts">
 import StatusSourceControl from './StatusSourceControl.vue'
 import ModelStatusStrip from './ModelStatusStrip.vue'
+import ModelTestDialog from './ModelTestDialog.vue'
 import type {StatusPoint} from './ModelStatusStrip.vue'
 import { ref, watch } from 'vue'
 import { operationJSON, followJob, type OperationJob } from '../api/operations'
 export interface HealthRow {timeline?:StatusPoint[];latencyMs?:number|null;availability?:number|null;throughput?:number|null;id: string; model: string; groupId: string; groupName: string; source: string; scope: string; status: string; checkedAt: string | null; fresh: boolean; usable: boolean; message: string}
 export interface HealthPage {items: HealthRow[]; total: number; page: number; pageSize: number; capabilities: {source: string; status: string; message: string}[]}
-const props = defineProps<{ siteId?: string; previewId?: string; groups?: {id: string; name: string;multiplier?:number|null}[] }>()
+const props = defineProps<{ siteId?: string; previewId?: string; groups?: {id: string; name: string;multiplier?:number|null;platform?:string|null}[] }>()
+const testing = ref<{ groupId?: string; model?: string }>()
 const mapping=ref<HealthRow|null>(null),mappedGroup=ref(''),mappedModel=ref('')
 const page = ref(1), search = ref(''), status = ref('all'), groupId = ref('')
 const loading = ref(false), error = ref('')
@@ -38,7 +40,7 @@ async function saveMapping(){if(!mapping.value||!props.siteId)return;try{await o
 </script>
 <template>
   <section class="space-y-3 rounded-xl border border-border/50 bg-surface p-4">
-    <div class="flex flex-wrap items-center justify-between gap-2"><h3 class="font-semibold">上游模型状态</h3><button type="button" class="text-sm text-primary" :disabled="loading" @click="refresh">{{ loading ? '读取中…' : '重新同步' }}</button></div>
+    <div class="flex flex-wrap items-center justify-between gap-2"><h3 class="font-semibold">上游模型状态</h3><div class="flex gap-3"><button v-if="groups?.length" type="button" class="rounded-md border border-primary/30 px-2 py-1 text-sm text-primary" @click="testing = { groupId: groupId || undefined }">实际测试</button><button type="button" class="text-sm text-primary" :disabled="loading" @click="refresh">{{ loading ? '读取中…' : '重新同步' }}</button></div></div>
     <StatusSourceControl />
     <div class="flex flex-wrap gap-2 text-sm"><input v-model="search" class="min-w-40 rounded border border-border/50 bg-background px-2 py-1" placeholder="搜索模型或分组" /><select v-model="groupId" class="rounded border border-border/50 bg-background px-2 py-1"><option value="">全部分组</option><option v-for="group in groups" :key="group.id" :value="group.id">{{ group.name }}</option></select><select v-model="status" class="rounded border border-border/50 bg-background px-2 py-1"><option value="all">全部状态</option><option v-for="(label, value) in labels" :key="value" :value="value">{{ label }}</option></select></div>
     <p v-if="error" class="text-sm text-red-500">{{ error }}</p>
@@ -47,5 +49,6 @@ async function saveMapping(){if(!mapping.value||!props.siteId)return;try{await o
     <div class="flex justify-between text-xs"><span>共 {{ data.total }} 项</span><div class="flex gap-3"><button type="button" :disabled="page <= 1" @click="page--">上一页</button><span>{{ page }}</span><button type="button" :disabled="page * 25 >= data.total" @click="page++">下一页</button></div></div>
     <details v-if="data.capabilities.length" class="text-xs text-muted-foreground"><summary>接口能力</summary><div v-for="cap in data.capabilities" :key="cap.source">{{ sources[cap.source] || cap.source }} · {{ cap.status }} · {{ cap.message }}</div></details>
 
+    <ModelTestDialog v-if="testing" :site-id="siteId" :preview-id="previewId" :group-id="testing.groupId" :groups="groups" :initial-model="testing.model" @close="testing = undefined" />
   </section>
 </template>

@@ -2,6 +2,7 @@
 import { computed, ref, watch } from 'vue'
 import { X } from 'lucide-vue-next'
 import { Button } from '@/components/ui/button'
+import ModelTestDialog from '../ModelTestDialog.vue'
 import { operationJSON } from '../../api/operations'
 import { keyJobMessage, previewKeyRotation, rotateKeys } from '../../api/keyRotation'
 import { realConnect, realDisconnect } from '../../api/mySites'
@@ -24,9 +25,7 @@ const usage = ref<KeyUsage | null>(null)
 const error = ref('')
 const message = ref('')
 const busy = ref(false)
-const models = ref<string[]>([])
-const model = ref('')
-const modelPlatform = ref('openai')
+const testing = ref(false)
 const confirmAction = ref('')
 const confirmRotation = ref(Boolean(props.startRotation))
 const rotationSubmitted = ref(false)
@@ -116,13 +115,6 @@ async function save() {
     } else { changed.value.clear(); message.value = '配置已保存' }
   })
 }
-const test = (execute = false) => action(async () => {
-  const result = await operationJSON<{ models?: string[]; Success?: boolean; Message?: string }>(base.value + '/test', {
-    method: 'POST', body: JSON.stringify({ execute, model: model.value, modelPlatform: modelPlatform.value }),
-  })
-  if (execute) message.value = result.Success ? '模型调用成功' : (result.Message || '模型调用未成功')
-  else { models.value = result.models || []; message.value = '已读取 ' + models.value.length + ' 个模型' }
-})
 const remove = (connection?: string) => action(async () => {
   if (connection) await realDisconnect({ connectionId: connection, mode: 'full' })
   else await operationJSON(base.value, { method: 'DELETE' })
@@ -218,8 +210,7 @@ const maxUsage = computed(() => Math.max(1, ...(usage.value?.trend.map(point => 
           </template>
         </section>
         <section v-if="tab === 'test'" class="mt-4 space-y-3">
-          <Button variant="secondary" :disabled="busy" @click="test()">读取可用模型</Button>
-          <div class="flex flex-wrap items-end gap-2"><label>模型<input v-model="model" list="key-test-models" /><datalist id="key-test-models"><option v-for="item in models" :key="item" :value="item" /></datalist></label><label>协议<select v-model="modelPlatform"><option>openai</option><option>anthropic</option><option>gemini</option><option>grok</option></select></label><Button :disabled="busy || !model" @click="test(true)">实际调用模型（可能计费）</Button></div>
+          <Button :disabled="busy" @click="testing = true">实际测试</Button>
         </section>
         <section v-if="tab === 'binding' && entry" class="mt-4 space-y-3">
           <div v-if="bound" class="space-y-3 rounded-lg border border-border bg-surface p-3">
@@ -249,6 +240,7 @@ const maxUsage = computed(() => Math.max(1, ...(usage.value?.trend.map(point => 
       </section>
     </div>
   </Teleport>
+  <ModelTestDialog v-if="testing && entry" :site-id="entry.siteId" :group-id="entry.groupId" :key-id="entry.id" :label="entry.name" @close="testing = false" />
 </template>
 
 <style scoped>
