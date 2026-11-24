@@ -1138,7 +1138,7 @@ const dispatchBadge = (channel:ChannelMonitorChannel) => {
             <colgroup>
               <col class="w-7" /><col /><col class="w-[11%]" /><col class="w-[56px]" /><col class="w-[47px]" />
               <col class="w-[86px]" /><col class="w-[50px]" /><col class="w-[89px]" /><col class="w-[108px]" />
-              <col class="w-[51px]" /><col class="w-[312px]" />
+              <col class="w-[51px]" /><col class="w-[328px]" />
             </colgroup>
             <thead class="sticky top-0 bg-surface-elevated text-xs text-muted-foreground">
               <tr>
