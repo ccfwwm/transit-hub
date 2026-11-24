@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { Button } from '@/components/ui/button'
-import { followJob, operationJSON, type OperationJob } from '../api/operations'
+import { followJob, operationJSON, operationJobs, type OperationJob } from '../api/operations'
 
 const props = defineProps<{
   siteId?: string
@@ -11,6 +11,7 @@ const props = defineProps<{
   connectionId?: string
   keyId?: string
   initialModel?: string
+  initialMode?: string
   label?: string
 }>()
 const emit = defineEmits<{ close: [] }>()
@@ -20,8 +21,16 @@ const target = computed(() => props.previewId
 const group = ref(props.groupId || props.groups?.[0]?.id || '')
 const key = ref(props.keyId ?? '')
 const model = ref(props.initialModel ?? '')
-const mode = ref('auto')
+const mode = ref(['image', 'audio', 'video'].includes(props.initialMode ?? '') ? props.initialMode! : 'auto')
 const platform = ref('')
+const adapter = ref('')
+const seconds = ref<number | string>('')
+const jobID = ref('')
+const protocols: Record<string, { id: string; name: string }[]> = {
+  image: [{ id: 'openai_image', name: 'OpenAI 图片' }, { id: 'gemini_image', name: 'Gemini 图片' }, { id: 'sub2api_async_image', name: 'Sub2API 异步生图' }],
+  video: [{ id: 'openai_video', name: 'OpenAI 视频任务' }, { id: 'newapi_video', name: 'New API 视频任务' }, { id: 'v6k_video_gateway', name: 'V6K 视频网关' }],
+  audio: [{ id: 'sub2api_audio', name: 'Sub2API 异步音频' }, { id: 'sub2api_speech', name: 'Sub2API 异步语音' }, { id: 'newapi_suno', name: 'New API Suno 音乐' }, { id: 'openai_tts', name: 'OpenAI 语音' }, { id: 'openai_transcription', name: 'OpenAI 转写' }, { id: 'audio_chat', name: '音频对话' }],
+}
 const loading = ref(false)
 const busy = ref(false)
 const keys = ref<{id: string; name: string}[]>([])
@@ -29,8 +38,10 @@ const models = ref<string[]>([])
 const reportedModels = ref<string[]>([])
 const warning = ref('')
 const error = ref('')
-type TestResult = { Success: boolean; Inconclusive?: boolean; Message: string; Model: string; LatencyMS: number; TaskID?: string; models?: string[] }
+type TestResult = { Success: boolean; Inconclusive?: boolean; Message: string; Model: string; LatencyMS: number; TaskID?: string; Pending?: boolean; models?: string[] }
 const result = ref<TestResult>()
+const pendingResult = computed<TestResult | undefined>(() => operationJobs.value.find(job => job.id === jobID.value)?.items[0]?.result)
+watch(mode, () => { adapter.value = ''; seconds.value = '' })
 const fixedKey = Boolean(props.connectionId || props.keyId)
 const ready = computed(() => (fixedKey || Boolean(group.value)) && !!model.value.trim())
 let controller: AbortController | undefined
@@ -86,9 +97,12 @@ async function runTest(catalogOnly = false) {
   busy.value = true
   error.value = ''
   result.value = undefined
+  jobID.value = ''
   try {
-    const payload = { groupId: group.value, keyId: key.value, connectionId: props.connectionId, model: model.value.trim(), mode: mode.value, platform: platform.value, catalogOnly }
-    const job = await followJob(await operationJSON<OperationJob>(target.value, { method: 'POST', body: JSON.stringify(payload) }))
+    const payload = { groupId: group.value, keyId: key.value, connectionId: props.connectionId, model: model.value.trim(), mode: catalogOnly ? 'text' : mode.value, platform: platform.value, adapter: catalogOnly ? '' : adapter.value, seconds: !catalogOnly && mode.value === 'video' ? Number(seconds.value) || 0 : 0, catalogOnly }
+    const submitted = await operationJSON<OperationJob>(target.value, { method: 'POST', body: JSON.stringify(payload) })
+    jobID.value = submitted.id
+    const job = await followJob(submitted)
     const item = job.items[0]
     if (job.failed || !item?.result) throw new Error(item?.error || '测试任务未完成')
     const output: TestResult = item.result
@@ -141,11 +155,18 @@ async function runTest(catalogOnly = false) {
         </div>
         <div class="grid gap-3 sm:grid-cols-2">
           <label class="block space-y-1 text-sm"><span>测试类型</span><select v-model="mode" :disabled="busy" class="block w-full rounded-lg border border-border bg-background px-3 py-2"><option value="auto">自动识别</option><option value="text">文本</option><option value="image">生图</option><option value="video">视频</option><option value="audio">音频</option></select></label>
-          <label class="block space-y-1 text-sm"><span>调用协议</span><select v-model="platform" :disabled="busy" class="block w-full rounded-lg border border-border bg-background px-3 py-2"><option value="">沿用分组</option><option value="openai">OpenAI 兼容</option><option value="anthropic">Anthropic</option><option value="gemini">Gemini</option><option value="grok">Grok</option></select></label>
+          <label v-if="protocols[mode]" class="block space-y-1 text-sm"><span>媒体接口</span><select v-model="adapter" :disabled="busy" class="block w-full rounded-lg border border-border bg-background px-3 py-2"><option value="">按模型预设</option><option v-for="protocol in protocols[mode]" :key="protocol.id" :value="protocol.id">{{ protocol.name }}</option></select></label>
+          <label v-else class="block space-y-1 text-sm"><span>调用协议</span><select v-model="platform" :disabled="busy" class="block w-full rounded-lg border border-border bg-background px-3 py-2"><option value="">沿用分组</option><option value="openai">OpenAI 兼容</option><option value="anthropic">Anthropic</option><option value="gemini">Gemini</option><option value="grok">Grok</option></select></label>
         </div>
+        <label v-if="mode === 'video'" class="block space-y-1 text-sm">
+          <span>视频时长（秒）</span>
+          <input v-model="seconds" type="number" min="1" max="300" :disabled="busy" placeholder="留空使用预设时长" class="block w-full rounded-lg border border-border bg-background px-3 py-2" />
+        </label>
+        <p v-if="busy && pendingResult?.TaskID" role="status" class="break-words text-sm text-muted-foreground">已提交上游任务 {{ pendingResult.TaskID }}，正在等待生成结果。</p>
         <p v-if="result" role="status" class="break-words rounded-lg border border-border bg-surface p-3 text-sm" :class="result.Success ? 'text-emerald-600' : 'text-warning'">
           <span class="block font-medium">{{ result.Success ? '调用成功' : result.Inconclusive ? '调用待确认' : '调用失败' }} · {{ result.Model }}</span>
           <span>{{ result.Message }}<template v-if="result.LatencyMS"> · {{ result.LatencyMS }} ms</template></span>
+          <span v-if="result.TaskID" class="block">上游任务 {{ result.TaskID }}</span>
         </p>
         <p v-if="error" role="alert" class="break-words text-sm text-destructive">{{ error }}</p>
         <div class="flex flex-wrap items-center justify-end gap-3">

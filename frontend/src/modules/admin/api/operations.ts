@@ -2,8 +2,14 @@ import { ref } from 'vue'
 import { getAccessToken, handleAuthExpired } from '@/modules/auth/api/auth'
 
 export interface OperationItem { id: string; status: string; result: any; error: string }
-export interface OperationJob { id: string; kind: string; status: string; total: number; completed: number; failed: number; items: OperationItem[] }
+export interface OperationJob { id: string; kind: string; status: string; total: number; completed: number; failed: number; items: OperationItem[]; createdAt?: string }
 export const operationJobs = ref<OperationJob[]>([])
+const polling = new Map<string, Promise<OperationJob>>()
+let workspaceRevision = 0
+export function resetOperationWorkspace() {
+  workspaceRevision++
+  operationJobs.value = []
+}
 const base = (import.meta.env.VITE_API_BASE_URL ?? '/api').replace(/\/$/, '')
 export async function operationJSON<T>(path: string, options: RequestInit = {}): Promise<T> {
   const response = await fetch(base + path, { ...options, headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${getAccessToken()}`, ...options.headers } })
@@ -15,16 +21,26 @@ export async function operationJSON<T>(path: string, options: RequestInit = {}):
 function track(job: OperationJob) {
   const at = operationJobs.value.findIndex(item => item.id === job.id)
   if (at >= 0) operationJobs.value[at] = job
-  else operationJobs.value = [job, ...operationJobs.value].slice(0, 12)
+  else operationJobs.value = [job, ...operationJobs.value].sort((a, b) => (b.createdAt || '').localeCompare(a.createdAt || '')).slice(0, 12)
 }
-export async function followJob(job: OperationJob): Promise<OperationJob> {
+export function followJob(job: OperationJob): Promise<OperationJob> {
+  const existing = polling.get(job.id)
+  if (existing) return existing
   track(job)
-  while (job.status === 'running') {
-    await new Promise(resolve => setTimeout(resolve, 1000))
-    job = await operationJSON<OperationJob>(`/channel-monitor/operations/${encodeURIComponent(job.id)}`)
-    track(job)
-  }
-  return job
+  const token = getAccessToken()
+  const revision = workspaceRevision
+  const promise = (async () => {
+    while (job.status === 'running') {
+      const waiting = job.items.some(item => item.status === 'waiting')
+      await new Promise(resolve => setTimeout(resolve, waiting ? 5000 : 1000))
+      if (getAccessToken() !== token) throw new Error('登录状态已变化')
+      job = await operationJSON<OperationJob>(`/channel-monitor/operations/${encodeURIComponent(job.id)}`)
+      if (getAccessToken() === token && workspaceRevision === revision) track(job)
+    }
+    return job
+  })().finally(() => polling.delete(job.id))
+  polling.set(job.id, promise)
+  return promise
 }
 export async function submitOperation(body: Record<string, unknown>): Promise<OperationJob> {
   const job = await operationJSON<OperationJob>('/channel-monitor/operations', { method: 'POST', body: JSON.stringify(body) })

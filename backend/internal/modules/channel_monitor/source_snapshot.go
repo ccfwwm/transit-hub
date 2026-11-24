@@ -95,6 +95,7 @@ func selectedModelSummary(models []upstream.ModelHealth, checks map[string]Manua
 	}
 	if check, ok := checks[model]; ok && check.CheckedAt != nil && (result.CheckedAt == nil || !result.CheckedAt.After(*check.CheckedAt)) {
 		result.Status, result.CheckedAt, result.Message, result.LatencyMS = check.Status, check.CheckedAt, check.Message, check.LatencyMS
+		result.Source, result.Scope = "manual", "group_model"
 		if check.Status == StatusHealthy || check.Status == StatusFailed {
 			points := append([]upstream.HealthPoint(nil), result.Timeline...)
 			points = append(points, upstream.HealthPoint{Status: check.Status, CheckedAt: check.CheckedAt, LatencyMS: check.LatencyMS})

@@ -119,11 +119,12 @@ type HealthMapping struct {
 	Model    string `json:"model"`
 }
 type HealthService struct {
-	AfterRefresh func(context.Context, string, string, string)
-	db           *pgxpool.Pool
-	sites        *Service
-	platform     *PlatformService
-	cipher       *SiteCredentialCipher
+	AfterRefresh        func(context.Context, string, string, string)
+	AfterBoundModelTest func(context.Context, BoundModelTest) error
+	db                  *pgxpool.Pool
+	sites               *Service
+	platform            *PlatformService
+	cipher              *SiteCredentialCipher
 }
 
 func NewHealthService(db *pgxpool.Pool, sites *Service, key string) (*HealthService, error) {

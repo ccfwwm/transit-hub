@@ -73,8 +73,8 @@ async function refresh(){if(busy.value)return;busy.value=true;error.value='';try
 </script>
 <template>
  <section class="min-w-0" @click.stop>
-  <button v-if="!inline" type="button" class="w-full min-w-0 rounded-lg border border-border/50 bg-background/70 px-2.5 py-2 text-left transition-colors hover:border-primary/40" aria-label="查看全部模型状态" @click="open">
-   <div class="mb-1.5 flex justify-end text-xs font-medium"><span :class="color(reportedStatus(summaryModel))" :title="summaryModel?.message">{{loading&&!summaryModel?'读取中':statusLabel(summaryModel)}}</span></div>
+  <button v-if="!inline" type="button" class="w-full min-w-0 rounded-md border border-border/50 bg-background/70 px-2 text-left transition-colors hover:border-primary/40" :class="compact ? 'py-1' : 'py-2'" aria-label="查看全部模型状态" @click="open">
+   <div class="mb-0.5 flex justify-end text-xs font-medium"><span :class="color(reportedStatus(summaryModel))" :title="summaryModel?.message">{{loading&&!summaryModel?'读取中':statusLabel(summaryModel)}}</span></div>
    <ModelStatusStrip :points="summaryModel?.timeline" :status="reportedStatus(summaryModel)" hide-details hide-metrics />
   </button>
   <Teleport to="body" :disabled="inline"><div v-if="opened" :class="inline ? '' : 'fixed inset-0 z-[150] flex items-center justify-center bg-black/30 p-4 backdrop-blur-sm'" @click.self="opened=false"><section :class="[inline ? 'w-full min-w-0' : 'flex max-h-[85vh] w-full max-w-5xl flex-col overflow-hidden rounded-2xl border border-border/60 bg-card shadow-xl']" :role="inline ? undefined : 'dialog'" :aria-modal="inline ? undefined : true" aria-label="全部模型状态">

@@ -303,6 +303,7 @@ func (s *Service) reconcileTargetDispatch(ctx context.Context, rule *Rule, conn 
 	}
 	byConn[conn.ID] = *rule
 	anyHealthy, allFailed, balanceBlocked, manualBlocked := false, true, false, false
+	recoverable := false
 	for _, c := range connections {
 		if c.AdminAccountID != conn.AdminAccountID {
 			continue
@@ -321,6 +322,10 @@ func (s *Service) reconcileTargetDispatch(ctx context.Context, rule *Rule, conn 
 		if r.ManualPaused || (!r.SchedulableManaged && r.AutoEnableBlocked) || r.SchedulableConflict {
 			manualBlocked = true
 		}
+		// The aggregate status can already be healthy while a rate or balance
+		// gate still owns the stop. Retain ownership until the account resumes.
+		recoverable = recoverable || (r.SchedulableManaged && r.LastAppliedSchedulable != nil && !*r.LastAppliedSchedulable &&
+			(r.AutoEnableBlocked || r.OriginalSchedulable != nil && *r.OriginalSchedulable || isMonitorDispatchPaused(r.LastStatus)))
 		ids := uniqueRuleIDs(c.OwnGroupIDs)
 		if len(ids) == 0 {
 			ids = []string{""}
@@ -353,11 +358,15 @@ func (s *Service) reconcileTargetDispatch(ctx context.Context, rule *Rule, conn 
 	desired := *account.Schedulable
 	if balanceBlocked || allFailed {
 		desired = false
-	} else if anyHealthy && ((rule.SchedulableManaged && rule.AutoEnableBlocked) || isMonitorDispatchPaused(rule.LastStatus)) {
+	} else if anyHealthy && recoverable {
 		desired = true
 	}
 	if desired {
-		if rate, e := s.store.GetRateRule(ctx, rule.UserID, rule.AdminAccountID); e == nil && rate != nil && rate.Enabled {
+		rate, e := s.store.GetRateRule(ctx, rule.UserID, rule.AdminAccountID)
+		if e != nil {
+			return e
+		}
+		if rate != nil && rate.Enabled {
 			rateRuleInput := *rule
 			rateRuleInput.LastStatus = StatusHealthy
 			row := s.buildRatePlanRow(ctx, conn, rateRuleInput, state, account, *rate)
@@ -374,6 +383,9 @@ func (s *Service) reconcileTargetDispatch(ctx context.Context, rule *Rule, conn 
 	}
 	if err = s.platform.SetSub2APIAdminAccountSchedulable(state.Session, conn.AdminAccountID, desired); err != nil {
 		return err
+	}
+	if !desired {
+		rule.AutoEnableBlocked = true
 	}
 	if !rule.SchedulableManaged {
 		rule.OriginalSchedulable = cloneBool(account.Schedulable)
@@ -398,6 +410,8 @@ func (s *Service) reconcileTargetDispatch(ctx context.Context, rule *Rule, conn 
 		other.DesiredSchedulable = schedulablePtr(desired)
 		if desired {
 			other.AutoEnableBlocked = false
+		} else {
+			other.AutoEnableBlocked = true
 		}
 		if err = s.store.UpdateRule(ctx, other); err != nil {
 			return err

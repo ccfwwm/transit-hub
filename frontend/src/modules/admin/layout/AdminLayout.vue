@@ -2,8 +2,10 @@
 import { computed, ref, watch, onMounted, onBeforeUnmount } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { navigationError } from '@/router'
-import { LayoutDashboard, Network, Settings, LogOut, Globe, Moon, Sun, Percent, Megaphone, ChevronDown, ArrowRightLeft, Activity, KeyRound } from 'lucide-vue-next'
-import { useDark, useToggle } from '@vueuse/core'
+import { LayoutDashboard, Network, Settings, LogOut, Globe, Moon, Sun, Percent, Megaphone, ChevronDown, ArrowRightLeft, Activity, KeyRound, PanelLeft } from 'lucide-vue-next'
+import { useDark, useStorage, useToggle } from '@vueuse/core'
+import OperationProgress from '../components/OperationProgress.vue'
+import { resetOperationWorkspace } from '../api/operations'
 import { useI18n } from 'vue-i18n'
 import { useAdminAccounts } from '../composables/useAdminAccounts'
 import { clearAccessToken } from '@/modules/auth/api/auth'
@@ -14,6 +16,7 @@ const route = useRoute()
 const router = useRouter()
 const content = ref<HTMLElement | null>(null)
 const refreshVersion = ref(0)
+const sidebarVisible = useStorage('transithub.sidebar.visible', true)
 const pageKey = computed(() => `${String(route.name)}:${refreshVersion.value}`)
 
 function selectMenu(event: MouseEvent, path: string, navigate: (event: MouseEvent) => Promise<unknown>) {
@@ -42,6 +45,9 @@ const toggleLocale = () => {
 }
 
 const { currentAccount, loadCurrentAccount } = useAdminAccounts()
+watch(() => currentAccount.value?.id, (value, previous) => {
+  if (previous && value !== previous) resetOperationWorkspace()
+})
 
 // 版本信息：开源版仅用于纯展示，不依赖授权/更新服务
 const versionInfo = ref<SystemVersionResponse | null>(null)
@@ -97,6 +103,7 @@ const menuItems = computed(() => [
 
 const handleLogout = () => {
   showUserMenu.value = false
+  resetOperationWorkspace()
   clearAccessToken()
   router.push('/login')
 }
@@ -105,7 +112,7 @@ const handleLogout = () => {
 <template>
   <div class="h-dvh w-full flex overflow-hidden bg-background text-foreground">
     <!-- Sidebar: 工作区选择页不显示 -->
-    <aside v-if="!isWorkspaceSelectionPage" class="w-14 shrink-0 border-r border-border/40 bg-surface-elevated flex flex-col md:w-64">
+    <aside v-if="!isWorkspaceSelectionPage && sidebarVisible" id="admin-sidebar" class="w-12 shrink-0 border-r border-border/40 bg-surface-elevated flex flex-col md:w-48">
       <div class="h-16 flex items-center justify-center px-2 md:justify-start md:px-6 border-b border-border/40">
         <div class="flex items-center gap-2">
           <div class="flex h-8 w-8 items-center justify-center rounded-lg bg-primary/10 border border-primary/20">
@@ -154,10 +161,14 @@ const handleLogout = () => {
     <!-- Main Content -->
     <div class="flex-1 flex flex-col min-w-0">
       <!-- Header: 工作区选择页不显示业务导航头 -->
-      <header v-if="!isWorkspaceSelectionPage" class="h-16 shrink-0 border-b border-border/40 bg-surface/50 backdrop-blur-md flex items-center justify-between gap-1 px-3 md:px-6 sticky top-0 z-10">
-        <h1 class="min-w-0 truncate text-base font-semibold md:text-lg">{{ route.path === '/admin' ? t('admin.menu.dashboard') : menuItems.find(m => m.path === route.path)?.name }}</h1>
+      <header v-if="!isWorkspaceSelectionPage" class="h-12 shrink-0 border-b border-border/40 bg-surface/50 backdrop-blur-md flex items-center justify-between gap-1 px-2 md:px-4 sticky top-0 z-10">
+        <div class="flex min-w-0 items-center gap-2">
+          <button type="button" class="rounded-md p-2 text-muted-foreground hover:bg-surface-elevated hover:text-foreground" aria-controls="admin-sidebar" :aria-expanded="sidebarVisible" :aria-label="sidebarVisible ? '收起导航栏' : '展开导航栏'" :title="sidebarVisible ? '收起导航栏' : '展开导航栏'" @click="sidebarVisible = !sidebarVisible"><PanelLeft class="size-4" /></button>
+          <h1 class="min-w-0 truncate text-base font-semibold">{{ route.path === '/admin' ? t('admin.menu.dashboard') : menuItems.find(m => m.path === route.path)?.name }}</h1>
+        </div>
 
         <div class="flex shrink-0 items-center gap-1 md:gap-4">
+          <OperationProgress :workspace-id="currentAccount?.id" />
           <div class="flex items-center gap-2">
             <!-- 版本号展示 -->
             <span
@@ -217,7 +228,7 @@ const handleLogout = () => {
       </header>
 
       <!-- Content Area -->
-      <main ref="content" class="flex-1 overflow-auto" :class="isWorkspaceSelectionPage ? '' : 'p-3 md:p-6'">
+      <main ref="content" class="flex-1 overflow-auto" :class="isWorkspaceSelectionPage ? '' : route.name === 'AdminStatusMonitor' ? 'p-2 md:p-3' : 'p-3 md:p-6'">
         <div v-if="navigationError" role="alert" class="mb-3 flex items-center gap-3 rounded-lg border border-warning/40 bg-warning/10 p-3 text-sm">
           <span>{{ t(navigationError.message) }}</span>
           <button type="button" class="font-medium text-primary" @click="retryNavigation">{{ t('admin.navigation.retry') }}</button>

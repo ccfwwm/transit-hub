@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"strings"
 	"testing"
 	"time"
@@ -31,7 +32,11 @@ func TestManualModelPreviewCreatesOneTemporaryKeyAndCleansUp(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer db.Close()
-	creates, invocations, deletes, catalogs := 0, 0, 0, 0
+	creates, invocations, deletes, catalogs, submissions, polls := 0, 0, 0, 0, 0, 0
+	audioFixture, err := os.ReadFile("../monitor_media/testdata/transcription.wav")
+	if err != nil {
+		t.Fatal(err)
+	}
 	const secret = "fixture-temporary-credential"
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -61,6 +66,19 @@ func TestManualModelPreviewCreatesOneTemporaryKeyAndCleansUp(t *testing.T) {
 				t.Error("probe did not use the selected model and credential")
 			}
 			_, _ = fmt.Fprint(w, `{"output":[{"content":[{"type":"output_text","text":"OK"}]}]}`)
+		case r.Method == http.MethodPost && r.URL.Path == "/suno/submit/music":
+			submissions++
+			_, _ = fmt.Fprint(w, `{"code":"success","data":"music-task"}`)
+		case r.Method == http.MethodGet && r.URL.Path == "/suno/fetch/music-task":
+			polls++
+			if polls == 1 {
+				_, _ = fmt.Fprint(w, `{"code":"success","data":{"id":42,"task_id":"music-task","status":"QUEUEING"}}`)
+				break
+			}
+			_, _ = fmt.Fprint(w, `{"code":"success","data":{"id":42,"task_id":"music-task","status":"SUCCESS","data":[{"audio_url":"/song.wav"},{"audio_url":"/alternate.wav"}]}}`)
+		case r.Method == http.MethodGet && r.URL.Path == "/song.wav":
+			w.Header().Set("Content-Type", "audio/wav")
+			_, _ = w.Write(audioFixture)
 		default:
 			t.Errorf("unexpected request %s %s", r.Method, r.URL.Path)
 			http.NotFound(w, r)
@@ -112,5 +130,34 @@ func TestManualModelPreviewCreatesOneTemporaryKeyAndCleansUp(t *testing.T) {
 	}
 	if creates != 2 || catalogs != 1 || invocations != 1 || deletes != 2 {
 		t.Fatalf("unexpected operation counts: create=%d catalog=%d invoke=%d delete=%d", creates, catalogs, invocations, deletes)
+	}
+	if _, err := exec.LookPath("ffprobe"); err != nil {
+		t.Skip("ffprobe unavailable")
+	}
+	id, err := randomID()
+	if err != nil {
+		t.Fatal(err)
+	}
+	task := manualModelTask{Selection: manualModelSelection{GroupID: "4", Model: "suno_music", Mode: "audio", Adapter: "newapi_suno"},
+		PreviewID: previewID, Phase: "new", StartedAt: time.Now(), Draft: &manualModelDraft{Session: session, SkipTLS: true}}
+	sealed, err := s.seal(task)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = db.Exec(ctx, `INSERT INTO upstream_preview_probes(id,preview_id,user_id,admin_account_id,encrypted) VALUES($1,$2,$3,$4,$5)`, id, previewID, uid, aid, sealed); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = db.Exec(ctx, `UPDATE upstream_health_previews SET expires_at=now()-interval '1 second' WHERE id=$1`, previewID); err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 3; i++ {
+		out, err := s.runManualModelTest(ctx, uid, aid, id, policies)
+		result, ok := out.Value.(manualModelResult)
+		if err != nil || !ok || result.TaskID != "music-task" || out.Pending != (i < 2) || result.Success != (i == 2) {
+			t.Fatalf("async test phase %d: %+v %v", i, out, err)
+		}
+	}
+	if creates != 3 || submissions != 1 || polls != 2 || deletes != 3 {
+		t.Fatal("the async test did not submit once, poll in place and clean up")
 	}
 }

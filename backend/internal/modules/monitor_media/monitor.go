@@ -70,6 +70,12 @@ func Resolve(o Options) (Capability, Request, error) {
 	if cap.Adapter == "openai_tts" || cap.Adapter == "sub2api_speech" {
 		p = map[string]any{"model": o.Model, "input": prompt, "voice": "alloy", "response_format": "mp3"}
 	}
+	if cap.Adapter == "newapi_suno" {
+		if o.Model != "suno_music" {
+			return cap, Request{}, fmt.Errorf("Suno 原生音乐接口的模型为 suno_music")
+		}
+		p = map[string]any{"gpt_description_prompt": "A short instrumental piano melody", "make_instrumental": true}
+	}
 	if o.Mode == "image" {
 		p["n"] = 1
 		size := o.Size

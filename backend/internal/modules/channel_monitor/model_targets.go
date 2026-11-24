@@ -265,9 +265,13 @@ func (s *Service) runRule(ctx context.Context, rule Rule, reason string) (Result
 					}
 				}
 				if !found {
-					check.Inconclusive = true
-					check.Message = "上游未提供该模型的有效状态"
-					target.LatencyMS = nil
+					if target.Source == "manual" && target.SourceCheckedAt != nil && time.Since(*target.SourceCheckedAt) < 10*time.Minute {
+						skipSample, source, observation = true, target.Source, target.SourceCheckedAt
+					} else {
+						check.Inconclusive = true
+						check.Message = "上游未提供该模型的有效状态"
+						target.LatencyMS = nil
+					}
 				}
 				if !skipSample {
 					switch {

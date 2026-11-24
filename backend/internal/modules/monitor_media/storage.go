@@ -176,7 +176,7 @@ func originURL(account Account, path string) (string, error) {
 		return "", fail(422, "invalid_origin", "Invalid channel origin")
 	}
 	// Configured origin may include a path prefix; never resolve task IDs as URLs.
-	if strings.HasPrefix(path, "/v1beta/") {
+	if strings.HasPrefix(path, "/v1beta/") || strings.HasPrefix(path, "/suno/") {
 		base.Path = strings.TrimSuffix(strings.TrimSuffix(strings.TrimRight(base.Path, "/"), "/v1beta"), "/v1")
 		base.RawPath = ""
 	}

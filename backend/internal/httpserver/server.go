@@ -158,6 +158,7 @@ func New(cfg config.Config, db *pgxpool.Pool, redisClient *redis.Client) *Server
 	channelMonitorService.SetSessionProvider(mySitesService)
 	channelMonitorService.SetBindingSync(mySitesService)
 	channelMonitorService.SetModelHealth(modelHealth)
+	modelHealth.AfterBoundModelTest = channelMonitorService.RecordBoundModelTest
 	channelMonitorService.SetAutomationShadow(cfg.MonitorShadow)
 	channelMonitorService.SetOperations(operationJobs, keyPolicies)
 	mySitesService.SetBindingMonitor(channelMonitorService)

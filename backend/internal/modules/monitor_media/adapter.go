@@ -247,6 +247,11 @@ func parseResult(p map[string]any, cap Capability) UpstreamResult {
 	if p["error"] != nil {
 		return UpstreamResult{Status: "failed"}
 	}
+	if cap.Adapter == "newapi_suno" && stringValue(p["code"]) == "success" {
+		if id, ok := p["data"].(string); ok && strings.TrimSpace(id) != "" {
+			return UpstreamResult{ID: id, Status: "in_progress", Accepted: true}
+		}
+	}
 	for _, field := range []string{"result", "output"} {
 		if nested, ok := p[field].(map[string]any); ok {
 			child := parseResult(nested, cap)
@@ -265,12 +270,19 @@ func parseResult(p map[string]any, cap Capability) UpstreamResult {
 		}
 	}
 
-	if inner, ok := p["data"].(map[string]any); ok && (inner["id"] != nil || inner["task_id"] != nil || inner["status"] != nil) {
-		return parseResult(inner, cap)
+	if inner, ok := p["data"].(map[string]any); ok && (inner["id"] != nil || inner["task_id"] != nil || inner["status"] != nil || inner["state"] != nil || inner["task_status"] != nil) {
+		child := parseResult(inner, cap)
+		if child.ID == "" {
+			child.ID = stringValue(p["task_id"])
+		}
+		if child.ID == "" {
+			child.ID = stringValue(p["id"])
+		}
+		return child
 	}
-	result := UpstreamResult{ID: stringValue(p["id"]), Status: "unknown", Quantities: map[string][]string{}}
+	result := UpstreamResult{ID: stringValue(p["task_id"]), Status: "unknown", Quantities: map[string][]string{}}
 	if result.ID == "" {
-		result.ID = stringValue(p["task_id"])
+		result.ID = stringValue(p["id"])
 	}
 	if result.ID == "" {
 		result.ID = stringValue(p["request_id"])
@@ -279,14 +291,17 @@ func parseResult(p map[string]any, cap Capability) UpstreamResult {
 	if status == "" {
 		status = strings.ToLower(stringValue(p["state"]))
 	}
+	if status == "" {
+		status = strings.ToLower(stringValue(p["task_status"]))
+	}
 	switch status {
-	case "queued", "pending", "submitting":
+	case "queued", "queueing", "pending", "submitting", "submitted", "accepted", "not_start":
 		result.Status = "in_progress"
 	case "running", "processing", "in_progress":
 		result.Status = "in_progress"
-	case "succeeded", "success", "completed":
+	case "succeeded", "success", "completed", "complete", "finished":
 		result.Status = "completed"
-	case "failed", "error", "cancelled", "canceled":
+	case "failed", "failure", "error", "cancelled", "canceled":
 		result.Status = "failed"
 	}
 	if cap.Adapter == "openai_transcription" && strings.TrimSpace(stringValue(p["text"])) != "" {
@@ -305,13 +320,13 @@ func parseResult(p map[string]any, cap Capability) UpstreamResult {
 		seen[raw] = true
 		result.Artifacts = append(result.Artifacts, Artifact{Key: fmt.Sprintf("%s%d", cap.MediaType, len(result.Artifacts)+1), Type: cap.MediaType, MIME: mime, Source: raw})
 	}
-	for _, field := range []string{"url", "download_url", "video_url", "audio_url"} {
+	for _, field := range []string{"url", "download_url", cap.MediaType + "_url", "content_url", "result_url"} {
 		add(stringValue(p[field]), "")
 	}
 	if value := stringValue(p["b64_json"]); value != "" {
 		add("data:image/png;base64,"+value, "image/png")
 	}
-	for _, field := range []string{"data", "images", "results", "videos", "artifacts", "content"} {
+	for _, field := range []string{"data", "images", "results", "videos", "audio", "audios", "artifacts", "content"} {
 		if item, ok := p[field].(map[string]any); ok {
 			if value := stringValue(item["b64_json"]); value != "" {
 				add("data:image/png;base64,"+value, "image/png")
@@ -378,13 +393,13 @@ func parseResult(p map[string]any, cap Capability) UpstreamResult {
 			}
 		}
 	}
-	if len(result.Artifacts) > 0 && result.Status != "failed" {
+	if len(result.Artifacts) > 0 && result.Status == "unknown" {
 		result.Status = "completed"
 	}
 	if result.Status == "completed" && len(result.Artifacts) == 0 && cap.MediaType == "video" && result.ID != "" && cap.Adapter != "ark_native" {
 		add("/v1/videos/"+url.PathEscape(result.ID)+"/content", "video/mp4")
 	}
-	if result.ID != "" && result.Status == "unknown" && (cap.MediaType != "image" || p["task_id"] != nil) {
+	if result.ID != "" && result.Status == "unknown" && (cap.MediaType != "image" || p["task_id"] != nil || cap.Adapter == "sub2api_async_image") {
 		result.Status = "in_progress"
 	}
 	if (result.Status == "in_progress" || result.Status == "queued") && result.ID == "" {

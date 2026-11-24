@@ -11,6 +11,9 @@ var presetJSON []byte
 // ModelPreset returns an independent copy: account overrides must never mutate
 // the shared catalog. A preset describes a protocol, not a verification result.
 func ModelPreset(model string) (Capability, bool) {
+	if model == "suno_music" {
+		return CapabilityDefaults(Capability{Model: model, MediaType: "audio", Adapter: "newapi_suno", Operations: []string{"audio"}}), true
+	}
 	for _, c := range omniVideoPresets() {
 		if c.Model == model {
 			return CapabilityDefaults(c), true

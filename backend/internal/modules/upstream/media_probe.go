@@ -79,7 +79,11 @@ func (s *PlatformService) probeMedia(ctx context.Context, o APIKeyProbeOptions) 
 			out.Message = "音频转写完成，返回有效文本"
 			break
 		}
-		if err = media.ValidateMonitorArtifacts(ctx, client, cap, result.Artifacts, account); err != nil {
+		artifacts := result.Artifacts
+		if cap.Adapter == "newapi_suno" && len(artifacts) > 1 {
+			artifacts = artifacts[:1]
+		}
+		if err = media.ValidateMonitorArtifacts(ctx, client, cap, artifacts, account); err != nil {
 			out.Message = "媒体产物校验失败：" + err.Error()
 			return out, nil
 		}

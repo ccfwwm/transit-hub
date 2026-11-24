@@ -80,6 +80,13 @@ func TestConfiguredManualFailureStopsAndRecoveryEnables(t *testing.T) {
 		t.Fatal("configured model failures did not stop dispatch")
 	}
 	rule, _ = repo.GetRule(ctx, conn.ID)
+	// Older rules can already have a healthy aggregate after a gate prevented
+	// recovery. The monitor still owns the disabled remote account.
+	rule.LastStatus = StatusHealthy
+	rule.AutoEnableBlocked = false
+	if e = repo.UpdateRule(ctx, *rule); e != nil {
+		t.Fatal(e)
+	}
 	v.Status = StatusHealthy
 	next = next.Add(time.Second)
 	v.CheckedAt = &next

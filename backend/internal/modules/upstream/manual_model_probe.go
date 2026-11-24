@@ -26,18 +26,35 @@ type manualModelSelection struct {
 	Platform     string `json:"platform"`
 	Mode         string `json:"mode"`
 	Adapter      string `json:"adapter"`
+	Seconds      int    `json:"seconds"`
 	CatalogOnly  bool   `json:"catalogOnly"`
 }
 
 type manualModelTask struct {
-	Selection manualModelSelection
-	SiteID    string
-	PreviewID string
-	Phase     string
-	KeyID     string
-	TaskID    string
-	Result    manualModelResult
-	StartedAt time.Time
+	Selection  manualModelSelection
+	SiteID     string
+	PreviewID  string
+	Phase      string
+	KeyID      string
+	TaskID     string
+	Result     manualModelResult
+	StartedAt  time.Time
+	FinishedAt time.Time
+	Probe      *APIKeyProbeOptions
+	Draft      *manualModelDraft
+}
+
+type manualModelDraft struct {
+	Session  Session
+	Settings SiteSettings
+	SkipTLS  bool
+}
+
+type BoundModelTest struct {
+	UserID, WorkspaceID, ConnectionID, SiteID, KeyID, ID string
+	Model, Mode, Adapter                                 string
+	LatencyMS                                            int
+	CheckedAt                                            time.Time
 }
 
 type manualModelResult struct {
@@ -177,6 +194,9 @@ func (s *HealthService) registerManualModelTest(mux *http.ServeMux, runner *jobs
 				httpjson.WriteError(w, 400, err.Error())
 				return
 			}
+			if endpoint.preview && site.ID == task.PreviewID {
+				task.Draft = &manualModelDraft{Session: *site.Session, Settings: site.Settings, SkipTLS: site.SkipTLSVerify}
+			}
 			id, err := randomID()
 			if err == nil {
 				task.Phase, task.StartedAt = "new", time.Now().UTC()
@@ -205,6 +225,9 @@ func (s *HealthService) registerManualModelTest(mux *http.ServeMux, runner *jobs
 
 func validateManualModelSelection(site *Site, selection *manualModelSelection) bool {
 	selection.Model = strings.TrimSpace(selection.Model)
+	if selection.Seconds < 0 || selection.Seconds > 300 {
+		return false
+	}
 	if !selection.CatalogOnly && (selection.Model == "" || len(selection.Model) > 200 || strings.ContainsAny(selection.Model, "\r\n\x00")) {
 		return false
 	}
@@ -259,7 +282,11 @@ func validateManualModelSelection(site *Site, selection *manualModelSelection) b
 			}
 		}
 	}
-	return true
+	if selection.CatalogOnly || selection.Mode == "text" {
+		return selection.Adapter == "" && selection.Seconds == 0
+	}
+	_, _, err := media.Resolve(media.Options{Model: selection.Model, Mode: selection.Mode, Adapter: selection.Adapter, Seconds: selection.Seconds})
+	return err == nil
 }
 
 func (s *HealthService) runManualModelTest(ctx context.Context, uid, aid, id string, policies *KeyPolicies) (jobs.Outcome, error) {
@@ -275,6 +302,12 @@ func (s *HealthService) runManualModelTest(ctx context.Context, uid, aid, id str
 		return jobs.Outcome{Value: task.Result}, nil
 	}
 	site, err := s.manualModelSite(ctx, uid, aid, task.SiteID, task.PreviewID)
+	if err != nil && task.Draft != nil && time.Since(task.StartedAt) < time.Hour {
+		draft := task.Draft
+		site = &Site{ID: task.PreviewID, BaseURL: draft.Session.BaseURL, Session: &draft.Session,
+			Platform: draft.Session.Platform, Settings: draft.Settings, SkipTLSVerify: draft.SkipTLS}
+		err = nil
+	}
 	if err != nil || site.Session == nil {
 		return jobs.Outcome{}, fmt.Errorf("上游未连接，请恢复连接后重试任务")
 	}
@@ -345,21 +378,27 @@ func (s *HealthService) runManualModelTest(ctx context.Context, uid, aid, id str
 	}
 	if task.Phase == "submitting" {
 		task.Result.APIKeyProbeResult = APIKeyProbeResult{Model: sel.Model, Inconclusive: true, Message: "上游受理结果待确认，请在上游查看调用记录"}
+		task.Probe = nil
 		if err = save("cleanup"); err != nil {
 			return jobs.Outcome{}, err
 		}
 	}
 	if task.Phase == "new" || task.Phase == "ready" || task.Phase == "polling" {
 		keyID, accountURL := task.KeyID, ""
-		if !temporary {
-			keyID, accountURL, err = s.manualConnection(ctx, uid, aid, site, sel)
-			if task.KeyID != "" && keyID != task.KeyID {
-				err = fmt.Errorf("测试期间绑定 Key 已变化")
-			}
-		}
 		var opts APIKeyProbeOptions
-		if err == nil {
-			opts, err = s.manualTestProbeOptions(ctx, site, sel, keyID, accountURL, task.TaskID, id)
+		if task.Phase == "polling" && task.Probe != nil {
+			opts = *task.Probe
+			opts.TaskID = task.TaskID
+		} else {
+			if !temporary {
+				keyID, accountURL, err = s.manualConnection(ctx, uid, aid, site, sel)
+				if task.KeyID != "" && keyID != task.KeyID {
+					err = fmt.Errorf("测试期间绑定 Key 已变化")
+				}
+			}
+			if err == nil {
+				opts, err = s.manualTestProbeOptions(ctx, site, sel, keyID, accountURL, task.TaskID, id)
+			}
 		}
 		if err != nil {
 			task.Result.APIKeyProbeResult = APIKeyProbeResult{Model: sel.Model, Message: err.Error(), Inconclusive: true}
@@ -374,6 +413,9 @@ func (s *HealthService) runManualModelTest(ctx context.Context, uid, aid, id str
 		} else {
 			if task.Phase != "polling" {
 				task.KeyID = keyID
+				if sel.Mode != "text" {
+					task.Probe = &opts
+				}
 				if err = save("submitting"); err != nil {
 					return jobs.Outcome{}, err
 				}
@@ -383,24 +425,41 @@ func (s *HealthService) runManualModelTest(ctx context.Context, uid, aid, id str
 			cancel()
 			result.Message = strings.ReplaceAll(result.Message, opts.APIKey, "[已隐藏]")
 			task.Result.APIKeyProbeResult = result
-			if result.TaskID != "" {
+			if task.TaskID == "" && result.TaskID != "" {
 				task.TaskID = result.TaskID
 			}
-			if task.TaskID != "" && (result.Pending || probeErr != nil) && time.Since(task.StartedAt) < 45*time.Minute {
+			task.Result.TaskID = task.TaskID
+			if task.TaskID != "" && (result.Pending || result.Uncertain || probeErr != nil) && time.Since(task.StartedAt) < 45*time.Minute {
 				if err = save("polling"); err != nil {
 					return jobs.Outcome{}, err
 				}
-				return jobs.Outcome{Pending: true, Delay: 8 * time.Second, Value: result}, nil
+				return jobs.Outcome{Pending: true, Delay: 8 * time.Second, Value: task.Result}, nil
 			}
 			if probeErr != nil || result.Pending || result.Uncertain {
 				task.Result.Inconclusive = true
-				if task.Result.Message == "" || result.Pending {
+				if task.Result.Message == "" || result.Pending || result.Uncertain {
 					task.Result.Message = "调用超时或协议不可用，请核对上游记录"
 				}
 			}
 		}
+		task.Probe = nil
 		if err = save("cleanup"); err != nil {
 			return jobs.Outcome{}, err
+		}
+	}
+	if task.Phase == "cleanup" && task.Result.Success && !sel.CatalogOnly && sel.ConnectionID != "" && s.AfterBoundModelTest != nil {
+		if task.FinishedAt.IsZero() {
+			task.FinishedAt = time.Now().UTC()
+			if err = save("cleanup"); err != nil {
+				return jobs.Outcome{}, err
+			}
+		}
+		err = s.AfterBoundModelTest(ctx, BoundModelTest{
+			UserID: uid, WorkspaceID: aid, ConnectionID: sel.ConnectionID, SiteID: site.ID, KeyID: task.KeyID, ID: id,
+			Model: sel.Model, Mode: sel.Mode, Adapter: sel.Adapter, LatencyMS: task.Result.LatencyMS, CheckedAt: task.FinishedAt,
+		})
+		if err != nil {
+			return jobs.Outcome{}, fmt.Errorf("模型调用成功，监控状态写入失败，可重试同步结果")
 		}
 	}
 	if task.Phase == "cleanup" && temporary && task.KeyID != "" {
@@ -416,6 +475,7 @@ func (s *HealthService) runManualModelTest(ctx context.Context, uid, aid, id str
 	}
 	task.Result.Model = sel.Model
 	task.Result.Pending = false
+	task.Probe, task.Draft = nil, nil
 	if err = save("done"); err != nil {
 		return jobs.Outcome{}, err
 	}
@@ -432,6 +492,6 @@ func (s *HealthService) manualTestProbeOptions(ctx context.Context, site *Site, 
 		return APIKeyProbeOptions{}, fmt.Errorf("无法读取测试 Key 凭据")
 	}
 	return APIKeyProbeOptions{BaseURL: EffectiveAPIURL(*site, SecurityKeyGroup(site.Platform, record), accountURL), APIKey: key,
-		Platform: sel.Platform, ModelID: sel.Model, Mode: sel.Mode, Adapter: sel.Adapter,
+		Platform: sel.Platform, ModelID: sel.Model, Mode: sel.Mode, Adapter: sel.Adapter, Seconds: sel.Seconds,
 		TaskID: taskID, IdempotencyKey: testID, InsecureSkipTLS: site.SkipTLSVerify || site.Session.InsecureSkipTLS, VerifyOutput: true}, nil
 }

@@ -172,6 +172,9 @@ func (r *Repository) readPage(ctx context.Context, uid, aid string, q ChannelPag
 	if q.RuleID != "" {
 		add(`rule_id=$%d`, q.RuleID)
 	}
+	if q.SiteID != "" {
+		add(`payload->>'siteId'=$%d`, q.SiteID)
+	}
 	if q.Search != "" {
 		add(`strpos(search_text,$%d)>0`, strings.ToLower(strings.TrimSpace(q.Search)))
 	}

@@ -12,11 +12,12 @@ var protocolKinds = map[string]string{
 	"gemini_image": "image",
 	"openai_video": "video", "newapi_video": "video",
 	"sub2api_audio": "audio", "sub2api_speech": "audio",
-	"openai_tts": "audio", "openai_transcription": "audio", "audio_chat": "audio",
+	"newapi_suno": "audio",
+	"openai_tts":  "audio", "openai_transcription": "audio", "audio_chat": "audio",
 }
 
 func ProtocolPresets() []Capability {
-	ids := []string{"openai_image", "gemini_image", "sub2api_async_image", "openai_video", "newapi_video", "sub2api_audio", "sub2api_speech", "openai_tts", "openai_transcription", "audio_chat"}
+	ids := []string{"openai_image", "gemini_image", "sub2api_async_image", "openai_video", "newapi_video", "sub2api_audio", "sub2api_speech", "newapi_suno", "openai_tts", "openai_transcription", "audio_chat"}
 	out := make([]Capability, 0, len(ids))
 	for _, id := range ids {
 		out = append(out, Capability{ID: "protocol:" + id, Model: "protocol:" + id, Adapter: id, MediaType: protocolKinds[id], Enabled: true, Status: "configured", Operations: []string{protocolKinds[id]}})
@@ -30,6 +31,8 @@ func submitPath(cap Capability, operation string) string {
 		return "/v1/images/generations/async"
 	case "sub2api_audio":
 		return "/v1/audio/generations"
+	case "newapi_suno":
+		return "/suno/submit/music"
 	case "sub2api_speech", "openai_tts":
 		return "/v1/audio/speech"
 	case "openai_transcription":
@@ -50,6 +53,8 @@ func queryPath(cap Capability, id string) string {
 		return "/v1/images/tasks/" + id
 	case "sub2api_audio", "sub2api_speech":
 		return "/v1/tasks/" + id
+	case "newapi_suno":
+		return "/suno/fetch/" + id
 	case "newapi_video":
 		return "/v1/video/generations/" + id
 	}

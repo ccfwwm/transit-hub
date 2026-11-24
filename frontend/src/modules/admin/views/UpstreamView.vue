@@ -8,7 +8,6 @@ import GroupKeyPolicy from '../components/GroupKeyPolicy.vue'
 import GroupAPIAddress from '../components/GroupAPIAddress.vue'
 import GroupBindingList from '../components/GroupBindingList.vue'
 import UpstreamWhitelistDialog from '../components/upstream/UpstreamWhitelistDialog.vue'
-import OperationProgress from '../components/OperationProgress.vue'
 import { keyJobMessage, previewKeyRotation, rotateKeys } from '../api/keyRotation'
 import ModelHealthExplorer from '../components/ModelHealthExplorer.vue'
 import ModelTestDialog from '../components/ModelTestDialog.vue'
@@ -579,7 +578,6 @@ onBeforeUnmount(() => {
   <ModelTestDialog v-if="testingSite" :site-id="testingSite.id" :groups="testingSite.metrics.groups" :label="testingSite.name" @close="testingSite = null" />
   <UpstreamWhitelistDialog v-if="whitelistSite" :site-id="whitelistSite.id" :name="whitelistSite.name" :platform="whitelistSite.platform" :connection-ids="connectionIdsForSite(whitelistSite.id)" @close="whitelistSite = null" />
   <div class="space-y-6">
-    <OperationProgress :kinds="['key_security', 'manual_upstream_model']" @completed="loadGroupConnections" />
     <p v-if="keyActionMessage" role="status" class="text-sm text-muted-foreground">{{ keyActionMessage }}</p>
     <p v-if="keyActionError" role="alert" class="whitespace-pre-line text-sm text-destructive">{{ keyActionError }}</p>
     <!-- Top Action Bar -->

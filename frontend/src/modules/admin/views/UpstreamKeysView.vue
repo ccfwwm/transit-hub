@@ -4,7 +4,6 @@ import { KeyRound, Plus, RefreshCw, Search, Trash2 } from 'lucide-vue-next'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { followJob, operationJSON, type OperationJob } from '../api/operations'
-import OperationProgress from '../components/OperationProgress.vue'
 import UpstreamKeyDetail from '../components/upstream/UpstreamKeyDetail.vue'
 import UpstreamWhitelistDialog from '../components/upstream/UpstreamWhitelistDialog.vue'
 import ModelTestDialog from '../components/ModelTestDialog.vue'
@@ -160,7 +159,6 @@ function quota(key: KeyEntry) {
       </div>
     </header>
     <p v-if="error" role="alert" class="rounded-lg bg-destructive/10 px-4 py-3 whitespace-pre-line text-sm text-destructive">{{ error }}</p>
-    <OperationProgress :kinds="['upstream_key_cleanup', 'key_security', 'manual_upstream_model']" @completed="load" />
     <p v-if="cleanupResult" role="status" class="text-sm text-muted-foreground">{{ cleanupResult }}</p>
     <details v-if="failures.length" class="rounded-lg border border-border bg-card px-4 py-3 text-sm">
       <summary class="cursor-pointer text-warning">{{ failures.length }} 个站点暂未返回 Key</summary>

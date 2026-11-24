@@ -36,8 +36,8 @@ func applyTargetToChannel(row *ChannelStatus, t TargetState) {
 }
 
 type ChannelPageQuery struct {
-	GroupID, GroupStatus, Status, Search, RuleID, Dispatch string
-	Page, PageSize                                         int
+	GroupID, GroupStatus, Status, Search, RuleID, Dispatch, SiteID string
+	Page, PageSize                                                 int
 }
 type ChannelPage struct {
 	SnapshotVersion int64           `json:"snapshotVersion"`
@@ -79,6 +79,9 @@ func (s *Service) channelPageFromSummary(ctx context.Context, overview SummaryRe
 	matches := []ChannelStatus{}
 	search := strings.ToLower(strings.TrimSpace(q.Search))
 	for _, row := range overview.Channels {
+		if q.SiteID != "" && row.SiteID != q.SiteID {
+			continue
+		}
 		if q.Dispatch != "" && q.Dispatch != "all" {
 			state := row.DispatchState
 			if state == "" {

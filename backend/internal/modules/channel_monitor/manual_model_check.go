@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"transithub/backend/internal/modules/jobs"
+	"transithub/backend/internal/modules/upstream"
 	"transithub/backend/internal/shared/httpjson"
 )
 
@@ -59,6 +60,50 @@ func (s *Service) manualModelCheck(context.Context, string, string, string, json
 	return jobs.Outcome{}, fmt.Errorf("主动检测已关闭，请在上游 Key 详情中手动测试")
 }
 
+func (s *Service) RecordBoundModelTest(ctx context.Context, result upstream.BoundModelTest) error {
+	repo := s.store.(*Repository)
+	conn, err := s.conns.GetRealConnection(ctx, result.ConnectionID, result.UserID, result.WorkspaceID)
+	if err != nil || conn == nil {
+		return err
+	}
+	rule, err := s.store.EnsureRuleForConnection(ctx, result.UserID, result.WorkspaceID, *conn)
+	if err != nil {
+		return err
+	}
+	unlock, err := s.lockRuleAccount(ctx, rule)
+	if err != nil {
+		return err
+	}
+	defer unlock()
+	conn, err = s.conns.GetRealConnection(ctx, result.ConnectionID, result.UserID, result.WorkspaceID)
+	if err != nil || conn == nil {
+		return err
+	}
+	if conn.UpstreamKeyID != result.KeyID || conn.UpstreamSiteID != result.SiteID {
+		return nil
+	}
+	latest, err := s.store.GetRule(ctx, rule.ID)
+	if err != nil || latest == nil {
+		return err
+	}
+	options := AccountTestOptions{ModelID: result.Model, Mode: result.Mode, Adapter: result.Adapter}
+	check := ManualModelCheck{Model: result.Model, Status: StatusHealthy, Message: "绑定 Key 实际调用成功",
+		CheckedAt: &result.CheckedAt, LatencyMS: &result.LatencyMS, JobID: result.ID, Options: options, Fingerprint: configFingerprint(*conn, options)}
+	payload, err := json.Marshal(check)
+	if err != nil {
+		return err
+	}
+	if _, err = repo.db.Exec(ctx, `INSERT INTO channel_monitor_manual_checks(rule_id,user_id,admin_account_id,model,payload,updated_at)
+		VALUES($1,$2,$3,$4,$5,$6) ON CONFLICT(rule_id,model) DO UPDATE SET payload=EXCLUDED.payload,updated_at=EXCLUDED.updated_at
+		WHERE channel_monitor_manual_checks.updated_at<=EXCLUDED.updated_at`, rule.ID, result.UserID, result.WorkspaceID, result.Model, payload, result.CheckedAt); err != nil {
+		return err
+	}
+	if err = s.applyConfiguredManualCheck(ctx, *latest, check); err != nil {
+		return err
+	}
+	return s.RefreshReadModel(ctx, result.UserID, result.WorkspaceID)
+}
+
 // A one-shot check only participates in automation when it tests the model
 // explicitly configured for that channel. Other catalog models are inspection.
 func (s *Service) applyConfiguredManualCheck(ctx context.Context, rule Rule, v ManualModelCheck) error {
@@ -95,7 +140,7 @@ func (s *Service) applyConfiguredManualCheck(ctx context.Context, rule Rule, v M
 	changed := false
 	for _, gid := range ids {
 		o := effectiveTestOptionsForGroup(rule, *conn, state, config, gid).options()
-		if o.ModelID != v.Model {
+		if o.ModelID != v.Model || v.Options.Mode != "" && normalizeTestMode(o.Mode) != normalizeTestMode(v.Options.Mode) {
 			continue
 		}
 		t := targetFor(rule, *conn, gid, state, config, all[rule.ID])
@@ -155,7 +200,7 @@ func (s *Service) applyConfiguredManualCheck(ctx context.Context, rule Rule, v M
 	if e = s.store.UpdateRule(ctx, rule); e != nil {
 		return e
 	}
-	return s.RefreshReadModel(ctx, rule.UserID, rule.AdminAccountID)
+	return nil
 }
 
 func (h *Handler) checkModel(w http.ResponseWriter, r *http.Request) {
