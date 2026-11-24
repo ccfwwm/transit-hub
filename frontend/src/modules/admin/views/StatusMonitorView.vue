@@ -896,6 +896,7 @@ const dispatchBadge = (channel:ChannelMonitorChannel) => {
       <div v-if="actionChannel" class="fixed inset-0 z-[155] grid place-items-center bg-black/25 p-3" @click.self="actionRuleID = ''" @keydown.esc.stop="actionRuleID = ''">
         <section role="dialog" aria-label="渠道操作" class="w-full max-w-sm space-y-3 rounded-lg border border-border bg-card p-4 shadow-xl">
           <header class="flex items-center justify-between gap-2"><h2 class="break-all text-sm font-semibold">{{ actionChannel.adminAccountName }}</h2><button type="button" class="shrink-0 px-1 text-xs text-muted-foreground" @click="actionRuleID = ''">关闭</button></header>
+          <GroupKeyPolicy :whitelist-enabled="actionChannel.keyWhitelistEnabled" :initial-policy="actionChannel.keyPolicy" :site-id="actionChannel.siteId" :group-id="actionChannel.upstreamGroupId" :group-name="actionChannel.upstreamGroupName" />
           <div class="flex flex-wrap gap-1.5">
                     <ChannelKeyActions :whitelist-enabled="actionChannel.keyWhitelistEnabled" :connection-id="actionChannel.connectionId" :disabled="isChannelBusy(actionChannel)" />
                     <Button variant="secondary" size="sm" class="!h-7 !rounded-md !px-2 !text-xs !font-medium whitespace-nowrap !bg-blue-500/10 !text-blue-600" :disabled="isChannelBusy(actionChannel)" @click="runChannelAction(channel => runAction(() => syncChannelStatus(channel), { actionKey: channelActionKey(channel, 'sync-status') }))">同步状态</Button>
@@ -919,26 +920,26 @@ const dispatchBadge = (channel:ChannelMonitorChannel) => {
     </div>
 
     <div class="flex flex-wrap items-center justify-between gap-2">
-      <div class="flex min-w-0 flex-wrap items-center gap-1.5">
-        <div class="relative w-52 max-w-full">
+      <div class="flex min-w-0 flex-wrap items-center gap-1">
+        <div class="relative w-40 max-w-full">
           <Search class="absolute left-2 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
           <input v-model="searchQuery" class="h-8 w-full rounded-md border border-border/50 bg-surface pl-8 pr-2 text-xs focus:border-primary" :placeholder="t('admin.channelMonitor.filters.search')" />
         </div>
-        <select v-model="selectedSite" aria-label="筛选上游" class="h-8 max-w-44 rounded-md border border-border/50 bg-surface px-2 text-xs">
+        <select v-model="selectedSite" aria-label="筛选上游" class="h-8 max-w-40 rounded-md border border-border/50 bg-surface px-2 text-xs">
           <option value="">全部上游</option>
           <option v-for="site in upstreamOptions" :key="site.id" :value="site.id">{{ site.name }}</option>
         </select>
-        <select v-model="selectedGroup" class="h-8 max-w-44 rounded-md border border-border/50 bg-surface px-2 text-xs focus:border-primary">
+        <select v-model="selectedGroup" class="h-8 max-w-40 rounded-md border border-border/50 bg-surface px-2 text-xs focus:border-primary">
           <option v-for="group in groupOptions" :key="group.id" :value="group.id">
             {{ group.name }}
           </option>
         </select>
-        <select v-model="groupStatusFilter" class="h-8 max-w-44 rounded-md border border-border/50 bg-surface px-2 text-xs focus:border-primary">
+        <select v-model="groupStatusFilter" class="h-8 max-w-40 rounded-md border border-border/50 bg-surface px-2 text-xs focus:border-primary">
           <option value="all">{{ t('admin.channelMonitor.groups.statusAll') }}</option>
           <option value="available">{{ t('admin.channelMonitor.groups.statusAvailable') }}</option>
           <option value="unavailable">{{ t('admin.channelMonitor.groups.statusUnavailable') }}</option>
         </select>
-        <select v-model="statusFilter" class="h-8 max-w-44 rounded-md border border-border/50 bg-surface px-2 text-xs focus:border-primary">
+        <select v-model="statusFilter" class="h-8 max-w-40 rounded-md border border-border/50 bg-surface px-2 text-xs focus:border-primary">
           <option value="all">{{ t('admin.channelMonitor.filters.allStatus') }}</option>
           <option value="healthy">{{ statusLabel('healthy') }}</option>
           <option value="failed">{{ statusLabel('failed') }}</option>
@@ -951,13 +952,9 @@ const dispatchBadge = (channel:ChannelMonitorChannel) => {
           <option value="dispatch_paused">{{ statusLabel('dispatch_paused') }}</option>
           <option value="unsupported">{{ statusLabel('unsupported') }}</option>
         </select>
+        <select v-model="dispatchFilter" aria-label="调度状态筛选" class="h-8 rounded-md border border-border/50 bg-surface px-2 text-xs"><option value="all">全部调度状态</option><option value="enabled">可调度</option><option value="paused">全部已停用</option><option value="manual">人工停用</option><option value="balance">余额停用</option><option value="rate">倍率限制</option><option value="auto">检测停用</option><option value="disabled">其他停用</option><option value="unknown">调度未知</option><option value="monitor">监控暂停</option></select>
       </div>
       <div class="flex flex-wrap items-center gap-2">
-        <MonitorBindingSync :groups="summary.groups" @done="loadSummary('silent')" />
-        <Button type="button" variant="secondary" size="sm" class="!h-8 gap-1.5" :disabled="isLoading || isBulkActionLoading || allRuleIds.length === 0" @click="openBulkEditor('all')">
-          <Settings2 class="h-4 w-4" />
-          {{ t('admin.channelMonitor.bulk.editAllRules') }}
-        </Button>
         <Button type="button" variant="secondary" size="sm" class="!h-8 gap-1.5" :disabled="syncingHealth" @click="syncCurrentHealth"><RefreshCw :class="['h-4 w-4',syncingHealth?'animate-spin':'']" />{{syncingHealth?'同步状态中…':'同步上游状态'}}</Button>
         <Button type="button" variant="secondary" size="sm" class="!h-8 gap-1.5" :disabled="isLoading || isRefreshing" @click="runAction(() => submitOperation({kind:'refresh'}))">
           <RefreshCw :class="['h-4 w-4', (isLoading || isRefreshing) ? 'animate-spin' : '']" />
@@ -966,14 +963,20 @@ const dispatchBadge = (channel:ChannelMonitorChannel) => {
       </div>
     </div>
 
-    <div class="flex flex-wrap items-center justify-between gap-1.5 rounded-md border border-border/40 bg-surface px-2 py-1">
-      <div class="flex flex-wrap items-center gap-3"><StatusSourceControl /><select v-model="dispatchFilter" aria-label="调度状态筛选" class="h-8 rounded-md border border-border/50 bg-surface px-2 text-xs"><option value="all">全部调度状态</option><option value="enabled">可调度</option><option value="paused">全部已停用</option><option value="manual">人工停用</option><option value="balance">余额停用</option><option value="rate">倍率限制</option><option value="auto">检测停用</option><option value="disabled">其他停用</option><option value="unknown">调度未知</option><option value="monitor">监控暂停</option></select></div>
-      <div class="flex flex-wrap items-center gap-2">
+    <details class="rounded-md border border-border/50 bg-surface px-2 py-1.5">
+      <summary class="cursor-pointer text-xs font-medium">监控与批量操作</summary>
+      <div class="mt-2 flex flex-wrap items-center gap-2 border-t border-border/40 pt-2">
+        <StatusSourceControl />
         <Button type="button" variant="secondary" size="sm" :disabled="!rotationFilterReady || !filteredRuleIds.length || isBulkActionLoading" @click="syncMonitorWhitelist('filtered')">同步当前筛选白名单（{{ filteredRuleIds.length }} 条）</Button>
         <Button type="button" variant="secondary" size="sm" :disabled="!rotationFilterReady || !filteredRuleIds.length || isBulkActionLoading" @click="rotateMonitorKeys('filtered')">轮换当前筛选 Key（{{ filteredRuleIds.length }} 条）</Button>
+        <MonitorBindingSync :groups="summary.groups" @done="loadSummary('silent')" />
+        <Button type="button" variant="secondary" size="sm" class="!h-8 gap-1.5" :disabled="isLoading || isBulkActionLoading || allRuleIds.length === 0" @click="openBulkEditor('all')">
+          <Settings2 class="h-4 w-4" />
+          {{ t('admin.channelMonitor.bulk.editAllRules') }}
+        </Button>
+        <KeyPolicyEditor :ids="rotationFilterReady ? selectedRuleIds.length ? selectedRuleIds : filteredRuleIds : []" />
       </div>
-      <KeyPolicyEditor :ids="rotationFilterReady ? selectedRuleIds.length ? selectedRuleIds : filteredRuleIds : []" />
-    </div>
+    </details>
 
     <div v-if="selectedCount > 0" class="flex flex-wrap items-center gap-1.5 rounded-md border border-border/50 bg-surface px-2 py-1">
       <span class="mr-2 text-sm font-medium text-foreground">{{ t('admin.channelMonitor.bulk.selected', { count: selectedCount }) }}</span>
@@ -1178,9 +1181,10 @@ const dispatchBadge = (channel:ChannelMonitorChannel) => {
                 <td class="px-1.5 py-1.5 align-middle">
                   <div class="min-w-0 space-y-1">
                     <div class="truncate font-medium" :class="channel.enabled?'text-foreground':'text-muted-foreground'" :title="channel.adminAccountName">{{channel.adminAccountName||channel.adminAccountId}}</div>
-                    <div class="truncate text-xs text-muted-foreground" :title="channel.upstreamGroupName">{{channel.siteName}} · {{channel.upstreamGroupName}}</div>
-                    <GroupKeyPolicy :whitelist-enabled="channel.keyWhitelistEnabled" :initial-policy="channel.keyPolicy" :site-id="channel.siteId" :group-id="channel.upstreamGroupId" :group-name="channel.upstreamGroupName" />
-                    <span v-if="channel.schedulableConflict||channel.priorityConflict" class="text-xs text-amber-600" :title="t('admin.channelMonitor.flags.manualOverrideHelp')">人工设置优先</span>
+                    <div class="flex min-w-0 items-center gap-1.5 text-xs text-muted-foreground">
+                      <span class="truncate" :title="channel.upstreamGroupName">{{ channel.siteName }} · {{ channel.upstreamGroupName }}</span>
+                      <ShieldAlert v-if="channel.schedulableConflict || channel.priorityConflict" class="size-3 shrink-0 text-amber-600" :aria-label="t('admin.channelMonitor.flags.manualOverrideHelp')" />
+                    </div>
                   </div>
                 </td>
                 <td class="px-1.5 py-1.5 align-middle">
