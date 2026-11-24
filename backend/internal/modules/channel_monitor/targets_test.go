@@ -354,14 +354,49 @@ func TestMediaQueueAdmissionNeverWaitsForGeneration(t *testing.T) {
 
 func TestQueuedMediaDoesNotSubmitAfterActiveSwitchOff(t *testing.T) {
 	ctx, s, store, p := targetFixture()
-	store.testModelConfig.StatusSource = "upstream"
 	conn := s.conns.connections[0]
 	site, _ := s.upstreams.GetSite(ctx, conn.UpstreamSiteID)
-	task := MediaTask{Key: "switch-off-task", RuleID: "conn-1", UserID: "user-1", AdminAccountID: "admin-1", Status: "submitting", CreatedAt: time.Now()}
+	store.testModelConfig.GroupModels = []TestModelGroupConfig{{GroupID: conn.OwnGroupIDs[0], ModelID: "test-video", Mode: "video", Adapter: "v6k_video_gateway", Seconds: 1}}
+	rule := store.mustRule(conn.ID)
+	rule.ActiveCheckEnabled = true
+	_ = store.UpdateRule(ctx, rule)
+	config, err := s.ensureTestModelConfig(ctx, rule.UserID, rule.AdminAccountID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	options := selectedModelConfigs(rule, conn, s.state(), config, conn.OwnGroupIDs[0])[0].options()
+	if options.Mode != "video" {
+		t.Fatalf("test fixture did not select video: %+v", options)
+	}
+	options.APIURL = upstream.EffectiveAPIURL(*site, conn.UpstreamGroupID, conn.UpstreamAPIURL)
+	task := MediaTask{Key: "switch-off-task", RuleID: rule.ID, UserID: rule.UserID, AdminAccountID: rule.AdminAccountID,
+		GroupID: conn.OwnGroupIDs[0], ConfigFingerprint: configFingerprint(conn, options),
+		ModelID: options.ModelID, Mode: options.Mode, Options: options, Status: "submitting", CreatedAt: time.Now()}
+	p.probe = func(o AccountTestOptions) (AccountTestResult, error) {
+		if o.TaskID == "" {
+			return AccountTestResult{Pending: true, TaskID: "accepted-task"}, nil
+		}
+		return AccountTestResult{Success: true, TaskID: o.TaskID}, nil
+	}
 	store.tasks[task.Key] = task
-	s.executeMedia(store, task, conn, *site, AccountTestOptions{ModelID: "gpt-image-2", Mode: "image"}, false)
+	s.executeMedia(store, task, conn, *site, options, false)
+	accepted, _ := store.GetMediaTask(ctx, task.Key)
+	if len(p.testOptions) != 1 || accepted.Status != "pending" || accepted.TaskID == "" {
+		t.Fatalf("active media submission did not record its task ID: %+v", accepted)
+	}
+
+	task.Key = "queued-after-acceptance"
+	store.tasks[task.Key] = task
+	rule.ActiveCheckEnabled = false
+	_ = store.UpdateRule(ctx, rule)
+	s.executeMedia(store, task, conn, *site, options, false)
 	saved, _ := store.GetMediaTask(ctx, task.Key)
-	if len(p.testOptions) != 0 || saved.Status != "blocked" {
+	if len(p.testOptions) != 1 || saved.Status != "blocked" {
 		t.Fatal("queued task made a paid submission after disabling active checks")
+	}
+	s.executeMedia(store, *accepted, conn, *site, options, true)
+	finished, _ := store.GetMediaTask(ctx, accepted.Key)
+	if len(p.testOptions) != 2 || p.testOptions[1].TaskID != accepted.TaskID || finished.Status != "success" {
+		t.Fatalf("accepted task lost its read-only polling path: %+v", finished)
 	}
 }

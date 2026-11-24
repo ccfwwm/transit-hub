@@ -36,7 +36,8 @@ func TestReadModelThousandBindingsMillionHistory(t *testing.T) {
 	}
 	base := SummaryResponse{Channels: []ChannelStatus{}, Groups: []GroupSummary{{GroupID: "perf", GroupName: "perf", Available: 1000}}, TestModelConfig: DefaultTestModelConfig("perf", "perf")}
 	for i := 0; i < 1000; i++ {
-		base.Channels = append(base.Channels, ChannelStatus{RuleID: fmt.Sprintf("perf-%04d", i), ConnectionID: fmt.Sprintf("perf-%04d", i), SiteName: "site", UpstreamGroupName: "pro", OwnGroupIDs: []string{"perf"}, OwnGroups: []string{"perf"}, Status: StatusHealthy, Enabled: true, DetectionGroupID: "perf", RecentResults: []Result{}})
+		balance, multiplier := float64(i), 0.25
+		base.Channels = append(base.Channels, ChannelStatus{RuleID: fmt.Sprintf("perf-%04d", i), ConnectionID: fmt.Sprintf("perf-%04d", i), SiteName: "site", UpstreamGroupName: "pro", OwnGroupIDs: []string{"perf"}, OwnGroups: []string{"perf"}, Status: StatusHealthy, Balance: &balance, UpstreamEffectiveMultiplier: &multiplier, Enabled: true, DetectionGroupID: "perf", RecentResults: []Result{}})
 	}
 	if e = r.publishSnapshot(ctx, "perf", "perf", base); e != nil {
 		t.Fatal(e)
@@ -90,5 +91,14 @@ func TestReadModelThousandBindingsMillionHistory(t *testing.T) {
 	page, e = r.readPage(ctx, "perf", "perf", ChannelPageQuery{GroupID: "perf", Status: StatusFailed})
 	if e != nil || page.Total != 0 {
 		t.Fatal("status filter not applied")
+	}
+	minimum, maximum, multiplier := 10.0, 49.0, 0.25
+	page, e = r.readPage(ctx, "perf", "perf", ChannelPageQuery{
+		GroupID: "perf", Search: "pro", ModelStatus: StatusHealthy, Page: 2,
+		Ranges: map[string]columnRange{"balance": {Min: &minimum, Max: &maximum}, "upstreamEffectiveMultiplier": {Max: &multiplier}},
+	})
+	if e != nil || page.Total != 40 || len(page.RuleIDs) != 40 || len(page.Channels) != 15 ||
+		page.RuleIDs[0] != "perf-0010" || page.RuleIDs[39] != "perf-0049" || page.Channels[0].RuleID != "perf-0035" {
+		t.Fatalf("column filters disagreed with pagination or bulk IDs: %v (total %d, IDs %v)", e, page.Total, page.RuleIDs)
 	}
 }

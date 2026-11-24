@@ -47,6 +47,7 @@ export interface ChannelMonitorChannel {
   checkSupported: boolean
   dispatchUnavailableReason: string
   manualPaused: boolean
+  activeCheckEnabled?: boolean
   schedulable: boolean | null
   schedulableManaged: boolean
   schedulableConflict: boolean

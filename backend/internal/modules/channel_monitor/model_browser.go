@@ -116,7 +116,8 @@ func (h *Handler) browseModels(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	id := r.PathValue("id")
-	if _, e = h.service.requireRule(r.Context(), id, uid, aid); e != nil {
+	rule, e := h.service.requireRule(r.Context(), id, uid, aid)
+	if e != nil {
 		writeMonitorError(w, e)
 		return
 	}
@@ -136,13 +137,24 @@ func (h *Handler) browseModels(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	out := modelBrowser{Items: []upstream.ModelHealth{}, References: []upstream.ModelHealth{}, Source: upstreamStatusSource}
-	if rule, err := h.service.requireRule(r.Context(), id, uid, aid); err == nil {
-		if state, err := h.service.states.Get(r.Context(), uid, aid); err == nil && config != nil {
-			gid := r.URL.Query().Get("monitorGroupId")
-			if gid == "" && len(conn.OwnGroupIDs) > 0 {
-				gid = conn.OwnGroupIDs[0]
+	gid := r.URL.Query().Get("monitorGroupId")
+	if gid == "" && len(conn.OwnGroupIDs) > 0 {
+		gid = conn.OwnGroupIDs[0]
+	}
+	if gid != "" && !containsString(conn.OwnGroupIDs, gid) {
+		httpjson.WriteError(w, 400, "分组不属于当前绑定")
+		return
+	}
+	var target TargetState
+	if state, err := h.service.states.Get(r.Context(), uid, aid); err == nil && config != nil {
+		out.MonitoredModel = effectiveTestOptionsForGroup(rule, *conn, state, *config, gid).ModelID
+		if rule.ActiveCheckEnabled && rule.Enabled && !rule.ManualPaused {
+			stored, err := repo.ruleTargetState(r.Context(), id, gid)
+			if err != nil {
+				writeMonitorError(w, err)
+				return
 			}
-			out.MonitoredModel = effectiveTestOptionsForGroup(rule, *conn, state, *config, gid).ModelID
+			target = targetFor(rule, *conn, gid, state, *config, map[string]TargetState{gid: stored})
 		}
 	}
 
@@ -204,6 +216,18 @@ func (h *Handler) browseModels(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	summary := selectedModelSummary(observations, out.ManualChecks, out.MonitoredModel, conn.UpstreamGroupID)
+	if target.Source == activeStatusSource && target.CheckedAt != nil && target.Model == out.MonitoredModel {
+		results, err := repo.ListRecentResults(r.Context(), rule.ID, 60)
+		if err != nil {
+			writeMonitorError(w, err)
+			return
+		}
+		summary = activeModelSummary(summary, target, results)
+		if summary.Source == activeStatusSource {
+			byModel[target.Model] = summary
+			out.Source = activeStatusSource
+		}
+	}
 	out.ModelSummary = &summary
 	if out.MonitoredModel != "" {
 		if _, exists := byModel[out.MonitoredModel]; !exists {

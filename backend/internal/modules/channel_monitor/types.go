@@ -57,6 +57,7 @@ type Rule struct {
 	OriginalPriority            *int       `json:"originalPriority"`
 	LastAppliedPriority         *int       `json:"lastAppliedPriority"`
 	PriorityConflict            bool       `json:"priorityConflict"`
+	ActiveCheckEnabled          bool       `json:"activeCheckEnabled"`
 	ManualPaused                bool       `json:"manualPaused"`
 	ConsecutiveFailures         int        `json:"consecutiveFailures"`
 	LastStatus                  string     `json:"lastStatus"`
@@ -192,6 +193,7 @@ type ChannelStatus struct {
 	ConnectionID                string                          `json:"connectionId"`
 	Enabled                     bool                            `json:"enabled"`
 	Supported                   bool                            `json:"supported"`
+	ActiveCheckEnabled          bool                            `json:"activeCheckEnabled"`
 	ManualPaused                bool                            `json:"manualPaused"`
 	Schedulable                 *bool                           `json:"schedulable"`
 	SchedulableManaged          bool                            `json:"schedulableManaged"`
@@ -244,6 +246,7 @@ type ChannelStatus struct {
 }
 
 type UpdateRuleRequest struct {
+	ActiveCheckEnabled              *bool    `json:"activeCheckEnabled"`
 	ResetUpstreamMultiplierOverride bool     `json:"resetUpstreamMultiplierOverride"`
 	Enabled                         *bool    `json:"enabled"`
 	CheckIntervalMinutes            *int     `json:"checkIntervalMinutes"`

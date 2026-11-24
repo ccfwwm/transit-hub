@@ -10,9 +10,10 @@ import { listUpstreamSites } from '../api/upstream'
 import GroupKeyPolicy from '../components/GroupKeyPolicy.vue'
 import KeyPolicyEditor from '../components/KeyPolicyEditor.vue'
 import ChannelKeyActions from '../components/ChannelKeyActions.vue'
+import WidthResizeHandle from '../components/WidthResizeHandle.vue'
 import { submitOperation, checkedOperation, operationJSON, followJob, type OperationJob } from '../api/operations'
-import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
-import { useMediaQuery } from '@vueuse/core'
+import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
+import { useElementSize, useMediaQuery, useStorage } from '@vueuse/core'
 import { useI18n } from 'vue-i18n'
 import {
   Activity,
@@ -21,6 +22,7 @@ import {
   CheckSquare2,
   CircleSlash,
   Clock3,
+  Filter,
   Gauge,
   Loader2,
   PauseCircle,
@@ -80,6 +82,7 @@ const isRefreshing = ref(false)
 const activeActionKeys = ref<string[]>([])
 const testingChannel = ref<ChannelMonitorChannel | null>(null)
 const errorKey = ref('')
+const activeCheckErrors = ref<Record<string, string>>({})
 const syncingHealth=ref(false)
 const healthSyncMessage=ref('')
 async function syncCurrentHealth(){
@@ -108,6 +111,146 @@ const upstreamOptions = ref<{ id: string; name: string }[]>([])
 const wideGroupSidebar = useMediaQuery('(min-width: 1024px)')
 const groupSidebarOverride = ref<boolean>()
 const showGroups = computed(() => groupSidebarOverride.value ?? wideGroupSidebar.value)
+const savedGroupWidth = useStorage<number | null>('transithub.monitor.group-width', null, undefined, {
+  serializer: { read: value => Number(value), write: value => String(value) },
+})
+const groupWidth = computed(() => savedGroupWidth.value == null || !Number.isFinite(savedGroupWidth.value)
+  ? (wideGroupSidebar.value ? 188 : 168)
+  : Math.max(148, Math.min(380, savedGroupWidth.value)))
+const tableScroll = ref<HTMLElement | null>(null)
+const { width: viewportWidth } = useElementSize(tableScroll)
+
+const columns = [
+  { key: 'selection', base: 30, wide: 36 },
+  { key: 'channel', base: 176, wide: 365 },
+  { key: 'model', base: 115, wide: 270 },
+  { key: 'upstreamEffectiveMultiplier', base: 66, wide: 106 },
+  { key: 'ownGroupMultiplier', base: 58, wide: 96 },
+  { key: 'accountPriority', base: 86, wide: 115 },
+  { key: 'accountRateMultiplier', base: 60, wide: 92 },
+  { key: 'group', base: 101, wide: 205 },
+  { key: 'dispatch', base: 112, wide: 145 },
+  { key: 'balance', base: 62, wide: 102 },
+  { key: 'actions', base: 328, wide: 355 },
+] as const
+type ColumnID = typeof columns[number]['key']
+type NumericColumn = 'upstreamEffectiveMultiplier' | 'ownGroupMultiplier' | 'accountPriority' | 'accountRateMultiplier' | 'balance'
+type FilterColumn = Exclude<ColumnID, 'selection' | 'actions'>
+type Range = { min?: number; max?: number }
+
+const columnLabels = computed<Record<ColumnID, string>>(() => ({
+  selection: '',
+  channel: t('admin.channelMonitor.channels.columns.channel'),
+  model: '模型状态',
+  upstreamEffectiveMultiplier: t('admin.channelMonitor.rateRule.upstreamRate'),
+  ownGroupMultiplier: t('admin.channelMonitor.rateRule.ownRate'),
+  accountPriority: t('admin.channelMonitor.rateRule.priority'),
+  accountRateMultiplier: t('admin.channelMonitor.rateRule.accountRate'),
+  group: t('admin.channelMonitor.channels.columns.group'),
+  dispatch: '调度状态',
+  balance: t('admin.channelMonitor.channels.columns.balance'),
+  actions: t('admin.channelMonitor.channels.columns.actions'),
+}))
+const columnOverrides = useStorage<Partial<Record<ColumnID, number>>>('transithub.monitor.column-widths', {})
+const baseTableWidth = columns.reduce((width, column) => width + column.base, 0)
+const wideTableWidth = columns.reduce((width, column) => width + column.wide, 0)
+const sizedColumns = computed(() => {
+  const proportion = Math.min(1, Math.max(0, (viewportWidth.value - baseTableWidth) / (wideTableWidth - baseTableWidth)))
+  return columns.map(column => {
+    const min = column.key === 'actions' ? 328 : Math.max(56, column.base - 20)
+    const max = column.wide + 200
+    const preferred = columnOverrides.value[column.key]
+    const width = typeof preferred === 'number' && Number.isFinite(preferred)
+      ? Math.max(min, Math.min(max, Math.round(preferred)))
+      : Math.round(column.base + proportion * (column.wide - column.base))
+    return { ...column, min, max, width }
+  })
+})
+const tableWidth = computed(() => sizedColumns.value.reduce((width, column) => width + column.width, 0))
+function resetColumnWidth(key: ColumnID) {
+  delete columnOverrides.value[key]
+}
+
+const columnFilters = ref<Partial<Record<NumericColumn, Range>>>({})
+const modelStatusFilter = ref('')
+const filterColumn = ref<FilterColumn>()
+const filterPanel = ref<HTMLFormElement | null>(null)
+const rangeDraft = ref<{ min: string | number; max: string | number }>({ min: '', max: '' })
+const rangeError = ref('')
+const textFilterDraft = ref('')
+const modelStates = [
+  ['healthy', '正常'], ['failed', '故障'], ['warning', '降级'], ['unknown', '未知'],
+  ['generating', '生成中'], ['config_error', '待配置'], ['unsupported', '未适配'],
+]
+const dispatchStates = [
+  ['all', '全部调度状态'], ['enabled', '可调度'], ['paused', '全部已停用'], ['manual', '人工停用'],
+  ['balance', '余额停用'], ['rate', '倍率限制'], ['auto', '检测停用'], ['disabled', '其他停用'],
+  ['unknown', '调度未知'], ['monitor', '监控暂停'],
+]
+
+function isNumericColumn(key: ColumnID): key is NumericColumn {
+  return key === 'upstreamEffectiveMultiplier' || key === 'ownGroupMultiplier' || key === 'accountPriority' || key === 'accountRateMultiplier' || key === 'balance'
+}
+
+function isColumnFiltered(key: FilterColumn) {
+  switch (key) {
+    case 'channel': return searchQuery.value.trim() !== ''
+    case 'model': return modelStatusFilter.value !== ''
+    case 'group': return selectedGroup.value !== 'all'
+    case 'dispatch': return dispatchFilter.value !== 'all'
+    default: return columnFilters.value[key] != null
+  }
+}
+
+async function openColumnFilter(column: FilterColumn) {
+  filterColumn.value = filterColumn.value === column ? undefined : column
+  if (filterColumn.value !== column) return
+  const range = isNumericColumn(column) ? columnFilters.value[column] : undefined
+  rangeDraft.value = { min: range?.min ?? '', max: range?.max ?? '' }
+  switch (column) {
+    case 'channel': textFilterDraft.value = searchQuery.value; break
+    case 'model': textFilterDraft.value = modelStatusFilter.value; break
+    case 'group': textFilterDraft.value = selectedGroup.value; break
+    case 'dispatch': textFilterDraft.value = dispatchFilter.value; break
+  }
+  rangeError.value = ''
+  await nextTick()
+  filterPanel.value?.querySelector<HTMLElement>('input, select')?.focus()
+}
+
+function applyColumnFilter() {
+  const key = filterColumn.value
+  switch (key) {
+    case 'channel': searchQuery.value = textFilterDraft.value; break
+    case 'model': modelStatusFilter.value = textFilterDraft.value; break
+    case 'group': selectedGroup.value = textFilterDraft.value; break
+    case 'dispatch': dispatchFilter.value = textFilterDraft.value; break
+  }
+  if (key && isNumericColumn(key)) {
+    const min = rangeDraft.value.min === '' ? undefined : Number(rangeDraft.value.min)
+    const max = rangeDraft.value.max === '' ? undefined : Number(rangeDraft.value.max)
+    if (min != null && max != null && min > max) {
+      rangeError.value = '最小值不能大于最大值'
+      return
+    }
+    if (min == null && max == null) delete columnFilters.value[key]
+    else columnFilters.value[key] = { min, max }
+  }
+  filterColumn.value = undefined
+}
+
+function clearColumnFilter() {
+  const key = filterColumn.value
+  if (!key) return
+  switch (key) {
+    case 'channel': searchQuery.value = ''; break
+    case 'model': modelStatusFilter.value = ''; break
+    case 'group': selectedGroup.value = 'all'; break
+    case 'dispatch': dispatchFilter.value = 'all'; break
+    default: delete columnFilters.value[key]
+  }
+  filterColumn.value = undefined
+}
 const rowActionClass = 'whitespace-nowrap !h-6 !rounded !px-1.5 !text-[11px] !font-medium'
 const page = ref(1)
 const pageSize = ref(25)
@@ -174,7 +317,13 @@ const channelTotal = ref(0)
 const filteredRuleIds = ref<string[]>([])
 const mediaPresets = ref<MediaPreset[]>([])
 
-const pageQuery = (): Record<string,string> => ({siteId: selectedSite.value, groupId: selectedGroup.value === 'all' ? '' : selectedGroup.value, groupStatus: groupStatusFilter.value, status: statusFilter.value, dispatch:dispatchFilter.value, q: debouncedSearch.value, page: String(page.value), pageSize: String(pageSize.value)})
+const rangeQuery = computed(() => Object.keys(columnFilters.value).length ? JSON.stringify(columnFilters.value) : '')
+const pageQuery = (): Record<string,string> => ({
+  siteId: selectedSite.value, groupId: selectedGroup.value === 'all' ? '' : selectedGroup.value,
+  groupStatus: groupStatusFilter.value, status: statusFilter.value, dispatch: dispatchFilter.value,
+  q: debouncedSearch.value, modelStatus: modelStatusFilter.value, ranges: rangeQuery.value,
+  page: String(page.value), pageSize: String(pageSize.value),
+})
 const loadChannels = async (poll=false) => {
   if(poll&&channelsReading.value)return
   channelsReading.value=true
@@ -279,7 +428,7 @@ const bulkEditorCount = computed(() => bulkEditorRuleIds.value.length)
 const isActionLoading = computed(() => activeActionKeys.value.length > 0)
 const isBulkActionLoading = computed(() => activeActionKeys.value.some(key => key.startsWith('bulk:') || key.startsWith('editor:') || key.startsWith('rate-rule:') || key.startsWith('test-model:')))
 watch(searchQuery, value => {clearTimeout(searchTimer); searchTimer = setTimeout(() => {debouncedSearch.value = value}, 250)})
-watch([debouncedSearch, statusFilter, dispatchFilter, groupStatusFilter, selectedGroup, selectedSite, pageSize], () => {if (page.value !== 1) page.value = 1; else void loadChannels()})
+watch([debouncedSearch, statusFilter, dispatchFilter, groupStatusFilter, selectedGroup, selectedSite, modelStatusFilter, rangeQuery, pageSize], () => {if (page.value !== 1) page.value = 1; else void loadChannels()})
 watch(page, () => {void loadChannels()})
 watch(groupStatusFilter, () => {if (selectedGroup.value !== 'all' && !visibleGroups.value.some(group => group.groupId === selectedGroup.value)) selectedGroup.value = 'all'})
 watch(pageCount, value => { if (page.value > value) page.value = value })
@@ -727,6 +876,18 @@ const setChannelPriority = (channel: ChannelMonitorChannel) => {
   return runAction(() => setChannelMonitorRulePriority(channel.ruleId, Math.round(priority), selectedGroupID.value || undefined), { actionKey: channelActionKey(channel, 'priority') })
 }
 
+const toggleChannelActiveCheck = async (channel: ChannelMonitorChannel) => {
+  activeCheckErrors.value[channel.ruleId] = ''
+  await runAction(async () => {
+    try {
+      await checkedOperation({ kind: 'update', ids: [channel.ruleId], settings: { activeCheckEnabled: !channel.activeCheckEnabled } })
+    } catch (error) {
+      activeCheckErrors.value[channel.ruleId] = error instanceof Error ? error.message : '主动检测设置失败'
+      throw error
+    }
+  }, { actionKey: channelActionKey(channel, 'active-check') })
+}
+
 const syncChannelStatus = async (channel:ChannelMonitorChannel) => {
  const job=await followJob(await operationJSON<OperationJob>(`/upstream-sites/${encodeURIComponent(channel.siteId)}/model-health/refresh`,{method:'POST'}))
  if(job.failed)throw new Error(job.items.find(i=>i.error)?.error||'状态同步失败')
@@ -936,7 +1097,9 @@ const dispatchBadge = (channel:ChannelMonitorChannel) => {
           <option value="dispatch_paused">{{ statusLabel('dispatch_paused') }}</option>
           <option value="unsupported">{{ statusLabel('unsupported') }}</option>
         </select>
-        <select v-model="dispatchFilter" aria-label="调度状态筛选" class="h-8 rounded-md border border-border/50 bg-surface px-2 text-xs"><option value="all">全部调度状态</option><option value="enabled">可调度</option><option value="paused">全部已停用</option><option value="manual">人工停用</option><option value="balance">余额停用</option><option value="rate">倍率限制</option><option value="auto">检测停用</option><option value="disabled">其他停用</option><option value="unknown">调度未知</option><option value="monitor">监控暂停</option></select>
+        <select v-model="dispatchFilter" aria-label="调度状态筛选" class="h-8 rounded-md border border-border/50 bg-surface px-2 text-xs">
+          <option v-for="[id, label] in dispatchStates" :key="id" :value="id">{{ label }}</option>
+        </select>
       </div>
       <div class="flex flex-wrap items-center gap-2">
         <Button type="button" variant="secondary" size="sm" class="!h-8 gap-1.5" :disabled="syncingHealth" @click="syncCurrentHealth"><RefreshCw :class="['h-4 w-4',syncingHealth?'animate-spin':'']" />{{syncingHealth?'同步状态中…':'同步上游状态'}}</Button>
@@ -1067,7 +1230,7 @@ const dispatchBadge = (channel:ChannelMonitorChannel) => {
       </div>
     </details>
 
-    <div class="grid min-h-0 flex-1 grid-cols-1 gap-2" :class="showGroups ? 'lg:grid-cols-[148px_minmax(0,1fr)] 2xl:grid-cols-[170px_minmax(0,1fr)]' : ''">
+    <div class="grid min-h-0 flex-1 grid-cols-[minmax(0,1fr)] gap-y-2" :class="showGroups ? 'lg:grid-cols-[var(--group-width)_0.625rem_minmax(0,1fr)]' : ''" :style="{ '--group-width': `${groupWidth}px` }">
       <section v-if="showGroups" id="monitor-group-sidebar" class="min-h-0 overflow-hidden rounded-md border border-border/50 bg-surface">
         <div class="flex items-center justify-between border-b border-border/50 px-2 py-1.5">
           <h2 class="text-xs font-semibold">{{ t('admin.channelMonitor.groups.title') }}</h2>
@@ -1080,7 +1243,7 @@ const dispatchBadge = (channel:ChannelMonitorChannel) => {
               <tr>
                 <th class="px-1.5 py-1.5 font-medium">{{ t('admin.channelMonitor.groups.columns.group') }}</th>
                 <th class="whitespace-nowrap px-1 py-1.5 font-medium">{{ t('admin.channelMonitor.groups.columns.available') }}</th>
-                <th class="px-1 py-1.5 font-medium">停检/停调</th>
+                <th class="whitespace-nowrap px-1 py-1.5 font-medium">停检/停调</th>
 
               </tr>
             </thead>
@@ -1111,8 +1274,9 @@ const dispatchBadge = (channel:ChannelMonitorChannel) => {
           </table>
         </div>
       </section>
+      <WidthResizeHandle v-if="showGroups && wideGroupSidebar" class="rounded" label="调整分组侧栏宽度" controls="monitor-group-sidebar" :width="groupWidth" :min="148" :max="380" @resize="savedGroupWidth = $event" @reset="savedGroupWidth = null" />
 
-      <section class="min-h-0 overflow-hidden rounded-lg border border-border/50 bg-surface">
+      <section class="min-h-0 min-w-0 overflow-hidden rounded-lg border border-border/50 bg-surface">
         <div class="flex items-center justify-between gap-2 border-b border-border/50 px-2 py-1">
           <div>
             <div class="flex items-center gap-2">
@@ -1121,38 +1285,62 @@ const dispatchBadge = (channel:ChannelMonitorChannel) => {
             </div>
             
           </div>
+          <div class="flex flex-wrap items-center justify-end gap-1">
+          <button v-if="Object.keys(columnOverrides).length" type="button" class="rounded px-2 py-1 text-xs text-muted-foreground hover:bg-surface-elevated hover:text-foreground" @click="columnOverrides = {}">恢复列宽</button>
           <button type="button" class="inline-flex items-center gap-2 rounded-lg px-2 py-1 text-xs text-muted-foreground hover:bg-surface-elevated hover:text-foreground" @click="toggleSelectAllVisible">
             <CheckSquare2 v-if="allVisibleSelected" class="h-4 w-4 text-primary" />
             <Square v-else class="h-4 w-4" />
             {{ t('admin.channelMonitor.actions.selectAll') }}
           </button>
+          </div>
         </div>
+
+        <form v-if="filterColumn" id="monitor-column-filter" ref="filterPanel" class="flex flex-wrap items-center gap-2 border-b border-border/50 px-2 py-1.5 text-xs" @submit.prevent="applyColumnFilter" @keydown.esc.stop="filterColumn = undefined">
+          <span class="font-medium">{{ columnLabels[filterColumn] }}</span>
+          <input v-if="filterColumn === 'channel'" v-model="textFilterDraft" type="search" class="h-7 rounded border border-border/50 bg-background px-2" aria-label="筛选渠道" :placeholder="t('admin.channelMonitor.filters.search')" />
+          <select v-else-if="filterColumn === 'model'" v-model="textFilterDraft" class="h-7 rounded border border-border/50 bg-background px-2" aria-label="筛选模型状态">
+            <option value="">全部模型状态</option>
+            <option v-for="[id, label] in modelStates" :key="id" :value="id">{{ label }}</option>
+          </select>
+          <select v-else-if="filterColumn === 'group'" v-model="textFilterDraft" class="h-7 rounded border border-border/50 bg-background px-2" aria-label="筛选我的分组">
+            <option v-for="group in groupOptions" :key="group.id" :value="group.id">{{ group.name }}</option>
+          </select>
+          <select v-else-if="filterColumn === 'dispatch'" v-model="textFilterDraft" class="h-7 rounded border border-border/50 bg-background px-2" aria-label="筛选调度状态">
+            <option v-for="[id, label] in dispatchStates" :key="id" :value="id">{{ label }}</option>
+          </select>
+          <template v-else>
+            <input v-model="rangeDraft.min" type="number" step="any" class="h-7 w-24 rounded border border-border/50 bg-background px-2" aria-label="最小值" placeholder="最小值" />
+            <span aria-hidden="true">至</span>
+            <input v-model="rangeDraft.max" type="number" step="any" class="h-7 w-24 rounded border border-border/50 bg-background px-2" aria-label="最大值" placeholder="最大值" />
+          </template>
+          <button type="submit" class="h-7 rounded bg-primary/10 px-2 text-primary">应用</button>
+          <button type="button" class="h-7 rounded px-2 text-muted-foreground hover:bg-surface-elevated" @click="clearColumnFilter">清除</button>
+          <span v-if="rangeError" role="alert" class="text-destructive">{{ rangeError }}</span>
+        </form>
 
         <div v-if="channelsLoading && !summary.channels.length" class="flex h-64 items-center justify-center text-muted-foreground">
           <Loader2 class="mr-2 h-5 w-5 animate-spin" />
           {{ t('admin.channelMonitor.loading') }}
         </div>
 
-        <div v-else class="max-h-[calc(100dvh-14rem)] min-h-36 overflow-auto">
-          <table data-monitor-table class="w-full min-w-[1060px] table-fixed text-left text-xs">
+        <div v-else ref="tableScroll" class="max-h-[calc(100dvh-14rem)] min-h-36 overflow-auto">
+          <table data-monitor-table class="table-fixed text-left text-xs" :style="{ width: `${tableWidth}px` }">
             <colgroup>
-              <col class="w-7" /><col /><col class="w-[11%]" /><col class="w-[56px]" /><col class="w-[47px]" />
-              <col class="w-[86px]" /><col class="w-[50px]" /><col class="w-[89px]" /><col class="w-[108px]" />
-              <col class="w-[51px]" /><col class="w-[328px]" />
+              <col v-for="column in sizedColumns" :key="column.key" :style="{ width: `${column.width}px` }" />
             </colgroup>
             <thead class="sticky top-0 bg-surface-elevated text-xs text-muted-foreground">
               <tr>
-                <th class="w-9 px-3 py-2 font-medium"></th>
-                <th class="px-2 py-2 font-medium">{{ t('admin.channelMonitor.channels.columns.channel') }}</th>
-                <th class="px-2 py-2 font-medium">模型状态</th>
-                <th class="px-2 py-2 font-medium">{{ t('admin.channelMonitor.rateRule.upstreamRate') }}</th>
-                <th class="px-2 py-2 font-medium">{{ t('admin.channelMonitor.rateRule.ownRate') }}</th>
-                <th class="px-2 py-2 font-medium">{{ t('admin.channelMonitor.rateRule.priority') }}</th>
-                <th class="px-2 py-2 font-medium">{{ t('admin.channelMonitor.rateRule.accountRate') }}</th>
-                <th class="px-2 py-2 font-medium">{{ t('admin.channelMonitor.channels.columns.group') }}</th>
-                <th class="px-2 py-2 font-medium">调度状态</th>
-                <th class="px-2 py-2 font-medium">{{ t('admin.channelMonitor.channels.columns.balance') }}</th>
-                <th class="px-2 py-2 font-medium">{{ t('admin.channelMonitor.channels.columns.actions') }}</th>
+                <th v-for="column in sizedColumns" :key="column.key" scope="col" class="relative py-1.5 text-[11px] font-medium" :data-column="column.key">
+                  <template v-if="column.key !== 'selection'">
+                    <div class="flex items-center gap-0.5 pl-1.5 pr-2">
+                      <span :title="columnLabels[column.key]">{{ columnLabels[column.key] }}</span>
+                      <button v-if="column.key !== 'actions'" type="button" :aria-label="'筛选' + columnLabels[column.key]" :aria-controls="filterColumn === column.key ? 'monitor-column-filter' : undefined" :aria-expanded="filterColumn === column.key" class="shrink-0 rounded p-0.5 hover:bg-primary/10" :class="isColumnFiltered(column.key) ? 'bg-primary/15 text-primary' : 'text-muted-foreground'" @click="openColumnFilter(column.key)">
+                        <Filter class="size-3" />
+                      </button>
+                    </div>
+                    <WidthResizeHandle class="absolute inset-y-0 right-0 w-2" :label="'调整' + columnLabels[column.key] + '列宽'" :width="column.width" :min="column.min" :max="column.max" @resize="columnOverrides[column.key] = $event" @reset="resetColumnWidth(column.key)" />
+                  </template>
+                </th>
               </tr>
             </thead>
             <tbody class="divide-y divide-border/40">
@@ -1178,7 +1366,10 @@ const dispatchBadge = (channel:ChannelMonitorChannel) => {
                   </div>
                 </td>
                 <td class="px-1.5 py-1.5 align-middle">
-                    <GroupModelStatus :preview="channelPreview(channel)" :key="channel.ruleId+':'+healthSyncVersion" :rule-id="channel.ruleId" :site-id="channel.siteId" :group-id="channel.upstreamGroupId" :group-name="channel.upstreamGroupName" :multiplier="channel.upstreamEffectiveMultiplier" :model-id="channel.effectiveTestModelId" :monitor-group-id="channel.detectionGroupId" compact />
+                    <GroupModelStatus :preview="channelPreview(channel)" :key="channel.ruleId+':'+healthSyncVersion" :rule-id="channel.ruleId" :site-id="channel.siteId" :group-id="channel.upstreamGroupId" :group-name="channel.upstreamGroupName" :multiplier="channel.upstreamEffectiveMultiplier" :model-id="channel.effectiveTestModelId" :monitor-group-id="channel.detectionGroupId"
+                      :active-check-enabled="!!channel.activeCheckEnabled" :active-check-busy="isChannelBusy(channel)"
+                      :active-check-error="activeCheckErrors[channel.ruleId]" compact @toggle-active-check="toggleChannelActiveCheck(channel)" />
+                      <Button v-if="channel.mediaTaskKey" variant="secondary" size="sm" :class="[rowActionClass, 'mt-1', '!bg-orange-500/10 !text-orange-700 dark:!text-orange-300']" aria-label="重置媒体任务" :disabled="isChannelBusy(channel)" @click="resetMedia(channel)">重置媒体</Button>
                 </td>
                 <td class="px-1.5 py-1.5 align-middle">
                   <div class="font-mono text-xs font-semibold text-foreground">{{ formatMultiplier(channel.upstreamEffectiveMultiplier) }}</div>
@@ -1217,7 +1408,7 @@ const dispatchBadge = (channel:ChannelMonitorChannel) => {
                   <div class="font-mono text-xs font-semibold text-foreground">{{ formatMultiplier(channel.accountRateMultiplier) }}</div>
                 </td>
                 <td class="px-1.5 py-1.5 align-middle">
-                  <div class="flex max-w-[140px] flex-wrap gap-1">
+                  <div class="flex flex-wrap gap-1">
                     <button v-for="group in channel.ownGroups" :key="group" type="button" :disabled="isChannelBusy(channel)" :aria-label="'修改绑定分组：'+group" class="rounded-md border border-border/50 bg-surface-elevated px-2 py-0.5 text-left text-xs font-medium text-muted-foreground hover:border-primary/40 hover:text-primary disabled:opacity-50" @click="openGroupEditor(channel)">{{group}}</button>
                   </div>
 
@@ -1245,7 +1436,11 @@ const dispatchBadge = (channel:ChannelMonitorChannel) => {
                       <Button variant="secondary" size="sm" :class="[rowActionClass, '!bg-indigo-500/10 !text-indigo-700 dark:!text-indigo-300']" :disabled="isChannelBusy(channel)" @click="openGroupEditor(channel)">修改分组</Button>
                       <Button variant="secondary" size="sm" :class="[rowActionClass, '!bg-amber-500/10 !text-amber-700 dark:!text-amber-300']" :disabled="isChannelBusy(channel) || (!channel.supported && !channel.repairAvailable)" @click="syncAndTakeOverChannel(channel)">同步接管</Button>
                       <Button variant="secondary" size="sm" :class="[rowActionClass, '!bg-violet-500/10 !text-violet-700 dark:!text-violet-300']" :disabled="isChannelBusy(channel)" @click="openEditor(channel)">规则设置</Button>
-                      <Button v-if="channel.mediaTaskKey" variant="secondary" size="sm" :class="[rowActionClass, '!bg-orange-500/10 !text-orange-700 dark:!text-orange-300']" aria-label="重置媒体任务" :disabled="isChannelBusy(channel)" @click="resetMedia(channel)">重置媒体</Button>
+                      <Button variant="secondary" size="sm"
+                        :class="[rowActionClass, channel.activeCheckEnabled ? '!bg-emerald-500/10 !text-emerald-700 dark:!text-emerald-300' : '!bg-slate-500/10 !text-muted-foreground']"
+                        :aria-pressed="!!channel.activeCheckEnabled" :disabled="isChannelBusy(channel)"
+                        title="按渠道配置的间隔实际调用检测模型，可能产生费用"
+                        @click="toggleChannelActiveCheck(channel)">{{ channel.activeCheckEnabled ? '主动检测开' : '主动检测关' }}</Button>
                       <Button variant="secondary" size="sm" :class="[rowActionClass, '!bg-red-500/10 !text-red-700 dark:!text-red-300']" :disabled="isChannelBusy(channel)" @click="openDisconnect(channel)">取消绑定</Button>
                     </div>
                   </div>

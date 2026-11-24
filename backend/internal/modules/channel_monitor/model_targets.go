@@ -10,7 +10,10 @@ import (
 	"transithub/backend/internal/modules/upstream"
 )
 
-const upstreamStatusSource = "upstream"
+const (
+	upstreamStatusSource = "upstream"
+	activeStatusSource   = "active"
+)
 
 func (s *Service) SetModelHealth(h modelHealthReader) { s.health = h }
 func (r *Repository) ensureModelTargets(ctx context.Context) error {
@@ -46,6 +49,10 @@ func (r *Repository) saveModel(ctx context.Context, t TargetState) error {
 	_, e = r.db.Exec(ctx, `INSERT INTO channel_monitor_model_states VALUES($1,$2,$3,$4,now()) ON CONFLICT(rule_id,group_id,fingerprint) DO UPDATE SET state_json=EXCLUDED.state_json,updated_at=now()`, t.RuleID, t.GroupID, t.Fingerprint, b)
 	return e
 }
+func (v TestModelGroupConfig) options() AccountTestOptions {
+	return AccountTestOptions{ModelID: v.ModelID, Mode: normalizeTestMode(v.Mode), Prompt: v.Prompt, Size: v.Size, Seconds: v.Seconds, Adapter: v.Adapter, PresetModel: v.PresetModel}
+}
+
 func selectedModelConfigs(rule Rule, conn my_sites.RealConnection, state *my_sites.State, config TestModelConfig, gid string) []TestModelGroupConfig {
 	if rule.TestModelID == "" {
 		out := []TestModelGroupConfig{}
@@ -126,13 +133,6 @@ func (s *Service) runRule(ctx context.Context, rule Rule, reason string) (Result
 	if !ok {
 		return s.runRuleSingle(ctx, rule, reason)
 	}
-	conn, e := s.conns.GetRealConnection(ctx, rule.ConnectionID, rule.UserID, rule.AdminAccountID)
-	if e != nil {
-		return Result{}, e
-	}
-	if conn == nil {
-		return Result{}, fmt.Errorf("绑定不存在")
-	}
 	unlock, e := s.lockRuleAccount(ctx, rule)
 	if e != nil {
 		return Result{}, e
@@ -140,10 +140,19 @@ func (s *Service) runRule(ctx context.Context, rule Rule, reason string) (Result
 	defer unlock()
 	if latest, err := s.store.GetRule(ctx, rule.ID); err != nil {
 		return Result{}, err
-	} else if latest != nil {
+	} else if latest == nil {
+		return Result{}, fmt.Errorf("监控规则不存在")
+	} else {
 		gid := rule.MonitorGroupID
 		rule = *latest
 		rule.MonitorGroupID = gid
+	}
+	conn, e := s.conns.GetRealConnection(ctx, rule.ConnectionID, rule.UserID, rule.AdminAccountID)
+	if e != nil {
+		return Result{}, e
+	}
+	if conn == nil {
+		return Result{}, fmt.Errorf("绑定不存在")
 	}
 	state, e := s.workspaceState(ctx, rule.UserID, rule.AdminAccountID)
 	if e != nil {
@@ -189,10 +198,15 @@ func (s *Service) runRule(ctx context.Context, rule Rule, reason string) (Result
 	}
 	results := []Result{}
 	next := time.Now().Add(time.Duration(rule.CheckIntervalMinutes) * time.Minute)
+	completionKey, _ := ctx.Value(completedMediaTaskContextKey{}).(string)
+	if rule.ActiveCheckEnabled && reason == "manual" && rule.NextCheckAt != nil {
+		next = *rule.NextCheckAt
+	}
 	for _, gid := range groups {
 		models := []TargetState{}
+		groupChecked := false
 		for _, selected := range selectedModelConfigs(rule, *conn, state, config, gid) {
-			o := AccountTestOptions{ModelID: selected.ModelID, Mode: normalizeTestMode(selected.Mode), Prompt: selected.Prompt, Size: selected.Size, Seconds: selected.Seconds, Adapter: selected.Adapter, PresetModel: selected.PresetModel}
+			o := selected.options()
 			fp := configFingerprint(*conn, o)
 			target, exists := stored[gid+"|"+fp]
 			if !exists {
@@ -212,20 +226,33 @@ func (s *Service) runRule(ctx context.Context, rule Rule, reason string) (Result
 					interval = 2
 				}
 			}
-			sameSource := target.Source != "active"
+			active := rule.ActiveCheckEnabled && rule.Enabled && !rule.ManualPaused
+			sameSource := (target.Source == activeStatusSource) == active
+			if completionKey != "" && (target.Status != StatusGenerating || target.MediaTaskKey != completionKey) {
+				if target.NextCheckAt != nil && target.NextCheckAt.Before(next) {
+					next = *target.NextCheckAt
+				}
+				models = append(models, target)
+				continue
+			}
+			if completionKey == "" && ((sameSource && target.NextCheckAt != nil && time.Now().Before(*target.NextCheckAt) && reason != "manual") ||
+				(active && target.Source == activeStatusSource && reason == "manual")) {
+				if target.NextCheckAt != nil && target.NextCheckAt.Before(next) {
+					next = *target.NextCheckAt
+				}
+				models = append(models, target)
+				continue
+			}
 			if !sameSource {
 				target.SourceCheckedAt, target.LatencyMS = nil, nil
 				target.ConsecutiveFailures = 0
 			}
-			if sameSource && target.NextCheckAt != nil && time.Now().Before(*target.NextCheckAt) && reason != "manual" {
-				models = append(models, target)
-				continue
-			}
 			started := time.Now()
 			check := AccountTestResult{}
-			observation := (*time.Time)(nil)
+			var observation *time.Time
 			source := upstreamStatusSource
 			skipSample := false
+			applyCheck := false
 			switch {
 			case rule.ManualPaused:
 				target.Status = StatusManualPaused
@@ -243,7 +270,41 @@ func (s *Service) runRule(ctx context.Context, rule Rule, reason string) (Result
 				target.Status = StatusBalancePaused
 				target.Message = "余额低于阈值"
 				target.ConsecutiveFailures = 0
+			case completionKey != "":
+				if !active {
+					models = append(models, target)
+					continue
+				}
+				task, err := repo.GetMediaTask(ctx, completionKey)
+				if err != nil {
+					return Result{}, err
+				}
+				if task == nil || task.ConfigFingerprint != fp || task.GroupID != gid {
+					models = append(models, target)
+					continue
+				}
+				applyCheck = true
+				check = taskResult(*task)
+				source = activeStatusSource
+				observation = &task.UpdatedAt
+			case active && reason == "scheduled":
+				applyCheck = true
+				source = activeStatusSource
+				var err error
+				if o.Mode == "image" || o.Mode == "audio" || o.Mode == "video" {
+					check, err = s.mediaCheck(ctx, rule, *conn, *site, target, o)
+				} else {
+					check, err = s.platform.ProbeUpstreamConnection(ctx, *site, *conn, o)
+				}
+				if err != nil {
+					check.Message = "主动检测请求失败"
+					check.Inconclusive = check.Inconclusive || o.Mode == "image" || o.Mode == "audio" || o.Mode == "video"
+				}
+				skipSample = check.Reused
+				checked := time.Now()
+				observation = &checked
 			default:
+				applyCheck = true
 				passive, found := upstream.ModelHealth{}, false
 				if s.health != nil {
 					passive, found = s.health.MatchConfigured(ctx, site.ID, conn.UpstreamGroupID, conn.UpstreamGroupName, o.ModelID)
@@ -273,23 +334,27 @@ func (s *Service) runRule(ctx context.Context, rule Rule, reason string) (Result
 						target.LatencyMS = nil
 					}
 				}
-				if !skipSample {
-					switch {
-					case check.Inconclusive:
-						target.Status = StatusUnknown
-						target.Message = check.Message
-						target.ConsecutiveFailures = 0
-					case check.Success:
-						target.Status = StatusHealthy
-						target.Message = check.Message
-						target.ConsecutiveFailures = 0
-						lat := check.LatencyMS
-						target.LatencyMS = &lat
-					default:
-						target.Status = StatusFailed
-						target.Message = check.Message
-						target.ConsecutiveFailures++
+			}
+			if applyCheck && !skipSample {
+				target.Message = check.Message
+				target.MediaTaskKey = check.MediaTaskKey
+				target.LatencyMS = nil
+				switch {
+				case check.Inconclusive:
+					target.Status = StatusUnknown
+					target.ConsecutiveFailures = 0
+				case check.Pending || check.Uncertain:
+					target.Status = StatusGenerating
+					target.ConsecutiveFailures = 0
+				case check.Success:
+					target.Status = StatusHealthy
+					target.ConsecutiveFailures = 0
+					if check.LatencyMS > 0 {
+						target.LatencyMS = &check.LatencyMS
 					}
+				default:
+					target.Status = StatusFailed
+					target.ConsecutiveFailures++
 				}
 			}
 			now := time.Now()
@@ -299,7 +364,7 @@ func (s *Service) runRule(ctx context.Context, rule Rule, reason string) (Result
 				next = due
 			}
 			target.Source = source
-			if observation != nil {
+			if observation != nil && !check.Reused {
 				target.SourceCheckedAt = observation
 			}
 			if !skipSample {
@@ -310,18 +375,28 @@ func (s *Service) runRule(ctx context.Context, rule Rule, reason string) (Result
 			}
 			models = append(models, target)
 			result := Result{ID: newResultID(), RuleID: rule.ID, ConnectionID: conn.ID, GroupID: gid, TaskID: check.TaskID, Model: o.ModelID, Status: target.Status, Success: target.Status == StatusHealthy, Message: target.Message, Action: reason, StartedAt: started, FinishedAt: now, CreatedAt: now, LatencyMS: target.LatencyMS}
+			if source == activeStatusSource {
+				result.Action = activeStatusSource
+			}
 			if !skipSample && target.Status != StatusGenerating {
 				if e = repo.AddResult(ctx, result); e != nil {
 					return Result{}, e
 				}
 			}
 			results = append(results, result)
+			groupChecked = true
+		}
+		if completionKey != "" && !groupChecked {
+			continue
 		}
 		agg := aggregateModels(rule, gid, models)
 		if e = repo.SaveTargetState(ctx, agg); e != nil {
 			return Result{}, e
 		}
 		all[rule.ID][gid] = agg
+	}
+	if completionKey != "" && len(results) == 0 {
+		return Result{}, nil
 	}
 	if e = s.reconcileTargetDispatch(ctx, &rule, *conn, state, config, all); e != nil {
 		return Result{}, e

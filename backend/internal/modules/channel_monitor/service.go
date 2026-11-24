@@ -268,12 +268,17 @@ func (s *Service) summaryInGroup(ctx context.Context, userID, groupID string, li
 	if light {
 		recentByRule = map[string][]Result{}
 	}
-	if batchStore, ok := s.store.(RecentResultsBatchStore); ok && !light {
+	if batchStore, ok := s.store.(RecentResultsBatchStore); ok {
 		ruleIDs := make([]string, 0, len(connections))
 		for _, conn := range connections {
-			ruleIDs = append(ruleIDs, rulesByConnection[conn.ID].ID)
+			rule := rulesByConnection[conn.ID]
+			if !light || rule.ActiveCheckEnabled && rule.Enabled && !rule.ManualPaused {
+				ruleIDs = append(ruleIDs, rule.ID)
+			}
 		}
-		recentByRule, _ = batchStore.ListRecentResultsForRules(ctx, ruleIDs, 60)
+		if histories, err := batchStore.ListRecentResultsForRules(ctx, ruleIDs, 60); err == nil {
+			recentByRule = histories
+		}
 	}
 	groupMap := map[string]*GroupSummary{}
 	if state != nil {
@@ -604,6 +609,9 @@ func (s *Service) UpdateRule(ctx context.Context, userID, ruleID string, req Upd
 	}
 	if req.Enabled != nil {
 		rule.Enabled = *req.Enabled
+	}
+	if req.ActiveCheckEnabled != nil {
+		rule.ActiveCheckEnabled = *req.ActiveCheckEnabled
 	}
 	if req.CheckIntervalMinutes != nil {
 		rule.CheckIntervalMinutes = clampInt(*req.CheckIntervalMinutes, 1, 24*60)
@@ -1965,6 +1973,7 @@ func (s *Service) channelStatusView(ctx context.Context, conn my_sites.RealConne
 		ConnectionID:                conn.ID,
 		Enabled:                     rule.Enabled,
 		ManualPaused:                rule.ManualPaused,
+		ActiveCheckEnabled:          rule.ActiveCheckEnabled,
 		SchedulableManaged:          rule.SchedulableManaged,
 		SchedulableConflict:         rule.SchedulableConflict,
 		AutoEnableBlocked:           rule.AutoEnableBlocked,

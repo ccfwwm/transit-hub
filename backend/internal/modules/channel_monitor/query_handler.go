@@ -2,7 +2,6 @@ package channel_monitor
 
 import (
 	"net/http"
-	"strconv"
 
 	media "transithub/backend/internal/modules/monitor_media"
 	"transithub/backend/internal/shared/authctx"
@@ -15,10 +14,12 @@ func (h *Handler) channels(w http.ResponseWriter, r *http.Request) {
 		httpjson.WriteError(w, http.StatusUnauthorized, "auth.errors.unauthorized")
 		return
 	}
-	q := r.URL.Query()
-	page, _ := strconv.Atoi(q.Get("page"))
-	size, _ := strconv.Atoi(q.Get("pageSize"))
-	response, err := h.service.ChannelPage(r.Context(), userID, ChannelPageQuery{Page: page, PageSize: size, GroupID: q.Get("groupId"), GroupStatus: q.Get("groupStatus"), Status: q.Get("status"), Dispatch: q.Get("dispatch"), Search: q.Get("q"), RuleID: q.Get("ruleId"), SiteID: q.Get("siteId")})
+	q, err := channelPageQuery(r.URL.Query())
+	if err != nil {
+		httpjson.WriteError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	response, err := h.service.ChannelPage(r.Context(), userID, q)
 	if err != nil {
 		writeMonitorError(w, err)
 		return

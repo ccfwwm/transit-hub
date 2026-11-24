@@ -37,6 +37,8 @@ func applyTargetToChannel(row *ChannelStatus, t TargetState) {
 
 type ChannelPageQuery struct {
 	GroupID, GroupStatus, Status, Search, RuleID, Dispatch, SiteID string
+	ModelStatus                                                    string
+	Ranges                                                         map[string]columnRange
 	Page, PageSize                                                 int
 }
 type ChannelPage struct {
@@ -50,6 +52,9 @@ type ChannelPage struct {
 }
 
 func (s *Service) ChannelPage(ctx context.Context, userID string, q ChannelPageQuery) (ChannelPage, error) {
+	if err := q.validateColumns(); err != nil {
+		return ChannelPage{}, err
+	}
 	if r, ok := s.store.(*Repository); ok {
 		aid, err := s.currentAdminAccountID(ctx, userID)
 		if err != nil {
@@ -79,7 +84,7 @@ func (s *Service) channelPageFromSummary(ctx context.Context, overview SummaryRe
 	matches := []ChannelStatus{}
 	search := strings.ToLower(strings.TrimSpace(q.Search))
 	for _, row := range overview.Channels {
-		if q.SiteID != "" && row.SiteID != q.SiteID {
+		if q.SiteID != "" && row.SiteID != q.SiteID || !q.matchesColumns(row) {
 			continue
 		}
 		if q.Dispatch != "" && q.Dispatch != "all" {

@@ -38,7 +38,7 @@ func TestModelTargetsKeepPartialChannelAndReuseEvidence(t *testing.T) {
 	if e = repo.EnsureSchema(ctx); e != nil {
 		t.Fatal(e)
 	}
-	_, _ = db.Exec(ctx, `DELETE FROM channel_monitor_model_states WHERE rule_id='model-integration';DELETE FROM channel_monitor_group_states WHERE rule_id='model-integration';DELETE FROM channel_monitor_rules WHERE id='model-integration'`)
+	_, _ = db.Exec(ctx, `DELETE FROM channel_monitor_results WHERE rule_id='model-integration';DELETE FROM channel_monitor_model_states WHERE rule_id='model-integration';DELETE FROM channel_monitor_group_states WHERE rule_id='model-integration';DELETE FROM channel_monitor_rules WHERE id='model-integration'`)
 	_, fixture, _, platform := targetFixture()
 	fixture.conns.connections[0].ID = "model-integration"
 	fixture.conns.connections[0].OwnGroupIDs = []string{"a"}
@@ -265,5 +265,53 @@ func TestModelTargetsKeepPartialChannelAndReuseEvidence(t *testing.T) {
 	}
 	if _, e = s.manualModelCheck(ctx, "user-1", "admin-1", rule.ID, nil); e == nil || len(platform.testOptions) != 0 {
 		t.Fatal("a persisted manual model check reached the upstream API")
+	}
+
+	// The default is still passive under the scheduler, even with no upstream report.
+	if _, e = s.runRule(ctx, *rule, "scheduled"); e != nil || len(platform.testOptions) != 0 {
+		t.Fatalf("default scheduler ran a model probe: %v", e)
+	}
+	platform.probe = func(options AccountTestOptions) (AccountTestResult, error) {
+		return AccountTestResult{Success: true, Model: options.ModelID, LatencyMS: 42, Message: "model responded"}, nil
+	}
+	ctx = context.WithValue(ctx, readWorkspaceKey{}, "admin-1")
+	saved, e := s.UpdateRule(ctx, "user-1", rule.ID, UpdateRuleRequest{ActiveCheckEnabled: boolPtr(true)})
+	if e != nil || !saved.ActiveCheckEnabled {
+		t.Fatalf("cannot enable active checks: %+v, %v", saved, e)
+	}
+	if _, e = s.runRule(ctx, *rule, "manual"); e != nil || len(platform.testOptions) != 0 {
+		t.Fatalf("sync triggered a paid probe: %v", e)
+	}
+	for i := 0; i < 2; i++ {
+		if _, e = s.runRule(ctx, *rule, "scheduled"); e != nil {
+			t.Fatal(e)
+		}
+	}
+	if len(platform.testOptions) != 1 || platform.testOptions[0].ModelID != "not-reported" {
+		t.Fatalf("active check ignored the selected model or interval: %+v", platform.testOptions)
+	}
+	if e = s.RefreshReadModel(ctx, "user-1", "admin-1"); e != nil {
+		t.Fatal(e)
+	}
+	page, e := repo.readPage(ctx, "user-1", "admin-1", ChannelPageQuery{GroupID: "a", RuleID: rule.ID, ModelStatus: StatusHealthy})
+	if e != nil || page.Total != 1 || len(page.Channels) != 1 {
+		t.Fatalf("active observation missing from filtered snapshot: %v, %+v", e, page)
+	}
+	row := page.Channels[0]
+	if !row.ActiveCheckEnabled || row.ModelSummary == nil || row.ModelSummary.Source != activeStatusSource || len(row.ModelSummary.Timeline) != 1 {
+		t.Fatalf("active evidence missing from compact row: %+v", row.ModelSummary)
+	}
+	response = httptest.NewRecorder()
+	h.browseModels(response, requestAll)
+	browser = modelBrowser{}
+	if response.Code != 200 || json.Unmarshal(response.Body.Bytes(), &browser) != nil ||
+		browser.ModelSummary == nil || browser.ModelSummary.Source != activeStatusSource || browser.ModelSummary.Status != StatusHealthy {
+		t.Fatalf("active model status missing from browser: %s", response.Body.String())
+	}
+	if saved, e = s.UpdateRule(ctx, "user-1", rule.ID, UpdateRuleRequest{ActiveCheckEnabled: boolPtr(false)}); e != nil || saved.ActiveCheckEnabled {
+		t.Fatalf("cannot disable active checks: %+v, %v", saved, e)
+	}
+	if _, e = s.runRule(ctx, *rule, "scheduled"); e != nil || len(platform.testOptions) != 1 {
+		t.Fatalf("scheduler probed after disabling active checks: %v", e)
 	}
 }

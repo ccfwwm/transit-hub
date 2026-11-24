@@ -77,6 +77,7 @@ func (r *Repository) EnsureSchema(ctx context.Context) error {
 	}
 	if _, err := r.db.Exec(ctx, `
 		ALTER TABLE channel_monitor_rules
+		ADD COLUMN IF NOT EXISTS active_check_enabled boolean NOT NULL DEFAULT false,
 		ADD COLUMN IF NOT EXISTS auto_enable_blocked boolean NOT NULL DEFAULT false,
 		ADD COLUMN IF NOT EXISTS upstream_multiplier_override double precision NULL,
 		ADD COLUMN IF NOT EXISTS allow_when_upstream_rate_gte_own boolean NOT NULL DEFAULT false,
@@ -346,7 +347,7 @@ func (r *Repository) ListRulesForWorkspace(ctx context.Context, userID, adminAcc
 			last_applied_priority, priority_conflict, manual_paused, consecutive_failures,
 			last_status, last_message, last_latency_ms, last_checked_at, next_check_at, created_at, updated_at,
 			allow_when_upstream_rate_gte_own,
-			COALESCE(test_model_id, '') AS test_model_id
+			COALESCE(test_model_id, '') AS test_model_id, active_check_enabled
 		FROM channel_monitor_rules
 		WHERE user_id = $1 AND admin_account_id = $2
 		ORDER BY created_at ASC
@@ -365,7 +366,7 @@ func (r *Repository) GetRule(ctx context.Context, id string) (*Rule, error) {
 			last_applied_priority, priority_conflict, manual_paused, consecutive_failures,
 			last_status, last_message, last_latency_ms, last_checked_at, next_check_at, created_at, updated_at,
 			allow_when_upstream_rate_gte_own,
-			COALESCE(test_model_id, '') AS test_model_id
+			COALESCE(test_model_id, '') AS test_model_id, active_check_enabled
 		FROM channel_monitor_rules
 		WHERE id = $1
 	`, id)
@@ -407,13 +408,14 @@ func (r *Repository) UpdateRule(ctx context.Context, rule Rule) error {
 			last_checked_at = $21,
 			next_check_at = $22,
 			updated_at = now(),
-			test_model_id = NULLIF($23, '')
+			test_model_id = NULLIF($23, ''),
+			active_check_enabled = $24
 		WHERE id = $1
 	`, rule.ID, rule.Enabled, rule.CheckIntervalMinutes, rule.FailureThreshold, rule.BalanceThreshold,
 		rule.DesiredSchedulable, rule.SchedulableManaged, rule.OriginalSchedulable, rule.LastAppliedSchedulable, rule.SchedulableConflict, rule.AutoEnableBlocked,
 		rule.PriorityManaged, rule.OriginalPriority, rule.LastAppliedPriority, rule.PriorityConflict,
 		rule.ManualPaused, rule.ConsecutiveFailures, rule.LastStatus, rule.LastMessage, rule.LastLatencyMS,
-		rule.LastCheckedAt, rule.NextCheckAt, strings.TrimSpace(rule.TestModelID))
+		rule.LastCheckedAt, rule.NextCheckAt, strings.TrimSpace(rule.TestModelID), rule.ActiveCheckEnabled)
 	return err
 }
 
@@ -527,7 +529,7 @@ func (r *Repository) ListDueRules(ctx context.Context, limit int) ([]Rule, error
 			last_applied_priority, priority_conflict, manual_paused, consecutive_failures,
 			last_status, last_message, last_latency_ms, last_checked_at, next_check_at, created_at, updated_at,
 			allow_when_upstream_rate_gte_own,
-			COALESCE(test_model_id, '') AS test_model_id
+			COALESCE(test_model_id, '') AS test_model_id, active_check_enabled
 		FROM channel_monitor_rules
 		WHERE enabled = true AND (next_check_at IS NULL OR next_check_at <= now())
 			AND EXISTS (
@@ -742,7 +744,7 @@ func scanRules(rows pgx.Rows) ([]Rule, error) {
 			&rule.PriorityManaged, &rule.OriginalPriority, &rule.LastAppliedPriority, &rule.PriorityConflict,
 			&rule.ManualPaused, &rule.ConsecutiveFailures, &rule.LastStatus, &rule.LastMessage,
 			&rule.LastLatencyMS, &rule.LastCheckedAt, &rule.NextCheckAt, &rule.CreatedAt, &rule.UpdatedAt,
-			&rule.AllowWhenUpstreamRateGteOwn, &rule.TestModelID,
+			&rule.AllowWhenUpstreamRateGteOwn, &rule.TestModelID, &rule.ActiveCheckEnabled,
 		); err != nil {
 			return nil, err
 		}

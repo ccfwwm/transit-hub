@@ -24,7 +24,7 @@ func (s *Service) mediaCheck(ctx context.Context, rule Rule, conn my_sites.RealC
 	if !ok {
 		return AccountTestResult{}, fmt.Errorf("媒体任务持久化不可用，未执行生成")
 	}
-	key := rule.ID + "|" + target.Fingerprint
+	key := rule.ID + "|" + target.GroupID + "|" + target.Fingerprint
 	task, err := store.GetMediaTask(ctx, key)
 	if err != nil {
 		return AccountTestResult{}, err
@@ -161,21 +161,24 @@ func (s *Service) executeMedia(store DurableMediaStore, task MediaTask, conn my_
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	o.IdempotencyKey = task.Key + "|" + task.CreatedAt.UTC().Format(time.RFC3339Nano)
-	if poll && task.TaskID == "" {
-		o.Recover = true
-	}
 	defer cancel()
-	// Old monitor jobs may have accepted a media task before active checks
-	// were disabled. Only poll a recorded task ID and never submit new work.
-	if !poll || task.TaskID == "" {
-		task.Status = "blocked"
-		task.Message = "主动检测已关闭"
-		task.UpdatedAt = time.Now()
-		_ = store.SaveMediaTask(ctx, task)
-		return
-	}
 	if poll {
+		if task.TaskID == "" {
+			// An ambiguous submission must be reconciled before another POST.
+			return
+		}
 		o.TaskID = task.TaskID
+	} else {
+		current, currentSite, err := s.authorizeMediaSubmission(ctx, store, task)
+		if err != nil {
+			log.Printf("[channel-monitor] revalidate media submission failed rule_id=%s", task.RuleID)
+			return
+		}
+		if current == nil {
+			s.completeMediaTask(task)
+			return
+		}
+		conn, site = *current, *currentSite
 	}
 	result, err := s.platform.ProbeUpstreamConnection(ctx, site, conn, o)
 	if result.TaskID != "" {
@@ -228,9 +231,64 @@ func (s *Service) executeMedia(store DurableMediaStore, task MediaTask, conn my_
 	}
 }
 
-// Finish manually started checks even when periodic monitoring is disabled.
-// The normal account lock and fingerprint check prevent a late result from
-// replacing a newer configuration or consuming the same outcome twice.
+// Recheck authorization after queueing. A worker that passes this gate is
+// already in flight, while work waiting in the queue observes a saved disable.
+func (s *Service) authorizeMediaSubmission(ctx context.Context, store DurableMediaStore, task MediaTask) (*my_sites.RealConnection, *upstream.Site, error) {
+	scope := Rule{ID: task.RuleID, ConnectionID: task.RuleID, UserID: task.UserID, AdminAccountID: task.AdminAccountID}
+	unlock, err := s.lockRuleAccount(ctx, scope)
+	if err != nil {
+		return nil, nil, err
+	}
+	defer unlock()
+	stored, err := store.GetMediaTask(ctx, task.Key)
+	if err != nil || stored == nil || stored.Status != "submitting" || !stored.CreatedAt.Equal(task.CreatedAt) {
+		return nil, nil, err
+	}
+	block := func(message string) (*my_sites.RealConnection, *upstream.Site, error) {
+		stored.Status, stored.Message, stored.UpdatedAt = "blocked", message, time.Now()
+		return nil, nil, store.SaveMediaTask(ctx, *stored)
+	}
+	rule, err := s.store.GetRule(ctx, task.RuleID)
+	if err != nil {
+		return nil, nil, err
+	}
+	if task.Options.OneShot || rule == nil || !rule.ActiveCheckEnabled || !rule.Enabled || rule.ManualPaused {
+		return block("主动检测已关闭或暂停")
+	}
+	conn, err := s.conns.GetRealConnection(ctx, rule.ConnectionID, task.UserID, task.AdminAccountID)
+	if err != nil {
+		return nil, nil, err
+	}
+	if conn == nil || (task.GroupID != "" || len(conn.OwnGroupIDs) != 0) && !containsString(conn.OwnGroupIDs, task.GroupID) ||
+		configFingerprint(*conn, task.Options) != task.ConfigFingerprint {
+		return block("绑定或 Key 已变更，请重新检测")
+	}
+	state, err := s.workspaceState(ctx, task.UserID, task.AdminAccountID)
+	if err != nil {
+		return nil, nil, err
+	}
+	config, err := s.ensureTestModelConfig(ctx, task.UserID, task.AdminAccountID)
+	if err != nil {
+		return nil, nil, err
+	}
+	selected := selectedModelConfigs(*rule, *conn, state, config, task.GroupID)[0]
+	if configFingerprint(*conn, selected.options()) != task.ConfigFingerprint {
+		return block("检测模型或参数已变更")
+	}
+	site, err := s.upstreams.GetSite(ctx, conn.UpstreamSiteID)
+	if err != nil {
+		return nil, nil, err
+	}
+	if site == nil || upstream.EffectiveAPIURL(*site, conn.UpstreamGroupID, conn.UpstreamAPIURL) != task.Options.APIURL {
+		return block("上游接口地址已变更")
+	}
+	if balance := convertedBalance(site); balance != nil && *balance < rule.BalanceThreshold {
+		return block("余额低于阈值")
+	}
+	return conn, site, nil
+}
+
+// Apply the terminal result only to the target that queued the task.
 func (s *Service) completeMediaTask(task MediaTask) {
 	if task.Options.OneShot {
 		return

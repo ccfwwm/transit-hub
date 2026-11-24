@@ -89,6 +89,12 @@ func (r *Repository) publishSnapshot(ctx context.Context, uid, aid string, base 
 				row.Status = StatusManualPaused
 			}
 			if selected, ok := row.ModelSummaries[row.EffectiveTestModelID]; ok {
+				for _, target := range row.GroupStates {
+					if target.GroupID == row.DetectionGroupID && activeTargetVisible(row, target) {
+						selected = activeModelSummary(selected, target, row.RecentResults)
+						break
+					}
+				}
 				row.ModelSummary = &selected
 			}
 			row.RecentResults = []Result{}
@@ -177,6 +183,21 @@ func (r *Repository) readPage(ctx context.Context, uid, aid string, q ChannelPag
 	}
 	if q.Search != "" {
 		add(`strpos(search_text,$%d)>0`, strings.ToLower(strings.TrimSpace(q.Search)))
+	}
+	if q.ModelStatus != "" {
+		add(`(CASE WHEN payload #>> '{modelSummary,scope}'='channel_reference' AND payload #>> '{modelSummary,fresh}'='false' THEN 'unknown'
+			WHEN coalesce(payload #>> '{modelSummary,status}',status)='auto_paused' THEN 'failed'
+			ELSE coalesce(nullif(coalesce(payload #>> '{modelSummary,status}',status),''),'unknown') END)=$%d`, q.ModelStatus)
+	}
+	for _, column := range rangeColumns {
+		limits := q.Ranges[column]
+		number := "(payload->>'" + column + "')::double precision"
+		if limits.Min != nil {
+			add(number+" >= $%d", *limits.Min)
+		}
+		if limits.Max != nil {
+			add(number+" <= $%d", *limits.Max)
+		}
 	}
 	if q.Status == "monitor_paused" {
 		where += " AND NOT enabled"

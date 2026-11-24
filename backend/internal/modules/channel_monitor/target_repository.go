@@ -3,8 +3,9 @@ package channel_monitor
 import (
 	"context"
 	"encoding/json"
-	"github.com/jackc/pgx/v5"
 	"time"
+
+	"github.com/jackc/pgx/v5"
 )
 
 type TargetStore interface {
@@ -55,6 +56,20 @@ func (r *Repository) ListTargetStates(ctx context.Context, userID, adminID strin
 		result[state.RuleID][state.GroupID] = state
 	}
 	return result, rows.Err()
+}
+
+func (r *Repository) ruleTargetState(ctx context.Context, ruleID, groupID string) (TargetState, error) {
+	var state TargetState
+	var raw []byte
+	err := r.db.QueryRow(ctx, `SELECT state_json FROM channel_monitor_group_states WHERE rule_id=$1 AND group_id=$2`, ruleID, groupID).Scan(&raw)
+	if err == pgx.ErrNoRows {
+		return state, nil
+	}
+	if err != nil {
+		return state, err
+	}
+	err = json.Unmarshal(raw, &state)
+	return state, err
 }
 
 func (r *Repository) SaveTargetState(ctx context.Context, state TargetState) error {

@@ -11,15 +11,15 @@ import (
 // The read snapshot uses the selected display source. This never modifies the
 // rule's dispatch evidence or promotes a reference report into automation.
 func (s *Service) applyStatusSource(ctx context.Context, uid, aid string, base *SummaryResponse) error {
-	if s.health == nil {
-		return nil
-	}
 	cache := map[string][]upstream.ModelHealth{}
 	for i := range base.Channels {
 		row := &base.Channels[i]
+		if s.health == nil && !row.ActiveCheckEnabled {
+			continue
+		}
 		key := row.SiteID + "|" + row.UpstreamGroupID
 		models, exists := cache[key]
-		if !exists {
+		if !exists && s.health != nil {
 			q := url.Values{"groupId": {row.UpstreamGroupID}, "groupName": {row.UpstreamGroupName}, "pageSize": {"100"}}
 			for page := 1; page <= 100; page++ {
 				q.Set("page", strconv.Itoa(page))
@@ -50,7 +50,16 @@ func (s *Service) applyStatusSource(ctx context.Context, uid, aid string, base *
 		}
 		row.Status = selectedStatusWithManual(models, checks, row.EffectiveTestModelID)
 		for j := range row.GroupStates {
-			row.GroupStates[j].Status = selectedStatusWithManual(models, checks, row.GroupStates[j].Model)
+			target := &row.GroupStates[j]
+			if activeTargetVisible(*row, *target) {
+				summary := activeModelSummary(row.ModelSummaries[target.Model], *target, nil)
+				target.Status = summary.Status
+			} else {
+				target.Status = selectedStatusWithManual(models, checks, target.Model)
+			}
+			if target.GroupID == row.DetectionGroupID {
+				row.Status = target.Status
+			}
 		}
 
 	}
@@ -71,6 +80,31 @@ func (s *Service) applyStatusSource(ctx context.Context, uid, aid string, base *
 		group.DispatchPaused = total.DispatchPaused
 	}
 	return nil
+}
+
+func activeTargetVisible(row ChannelStatus, target TargetState) bool {
+	return row.ActiveCheckEnabled && row.Enabled && !row.ManualPaused &&
+		target.Source == activeStatusSource && target.CheckedAt != nil
+}
+
+func activeModelSummary(passive upstream.ModelHealth, target TargetState, results []Result) upstream.ModelHealth {
+	if passive.Source == "manual" && passive.CheckedAt != nil && passive.CheckedAt.After(*target.CheckedAt) {
+		return passive
+	}
+	summary := upstream.ModelHealth{
+		ID: target.Model, Model: target.Model, GroupID: passive.GroupID, GroupName: passive.GroupName,
+		Source: activeStatusSource, Scope: "group_model", Status: target.Status, Mode: target.Mode,
+		CheckedAt: target.CheckedAt, Message: target.Message, LatencyMS: target.LatencyMS, Fresh: true,
+		Timeline: []upstream.HealthPoint{},
+	}
+	for i := len(results) - 1; i >= 0; i-- {
+		sample := results[i]
+		if sample.GroupID == target.GroupID && sample.Model == target.Model && sample.Action == activeStatusSource &&
+			(sample.Status == StatusHealthy || sample.Status == StatusFailed) {
+			summary.Timeline = append(summary.Timeline, upstream.HealthPoint{Status: sample.Status, CheckedAt: &sample.FinishedAt, LatencyMS: sample.LatencyMS})
+		}
+	}
+	return summary
 }
 
 // Preserve the latest observation separately from history; a failed old point

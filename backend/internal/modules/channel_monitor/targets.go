@@ -33,7 +33,7 @@ func targetFor(rule Rule, conn my_sites.RealConnection, groupID string, state *m
 		valid := len(configs) == len(target.Models)
 		for _, selected := range configs {
 			matched := false
-			fp := configFingerprint(conn, AccountTestOptions{ModelID: selected.ModelID, Mode: normalizeTestMode(selected.Mode), Prompt: selected.Prompt, Size: selected.Size, Seconds: selected.Seconds, Adapter: selected.Adapter, PresetModel: selected.PresetModel})
+			fp := configFingerprint(conn, selected.options())
 			for _, model := range target.Models {
 				if model.Fingerprint == fp {
 					matched = true
@@ -332,6 +332,10 @@ func (s *Service) reconcileTargetDispatch(ctx context.Context, rule *Rule, conn 
 		}
 		for _, id := range ids {
 			t := targetFor(r, c, id, state, config, all[r.ID])
+			if t.Source == activeStatusSource && !r.ActiveCheckEnabled {
+				allFailed = false
+				continue
+			}
 			if t.Status == StatusHealthy {
 				anyHealthy = true
 			}

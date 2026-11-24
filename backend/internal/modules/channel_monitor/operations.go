@@ -277,8 +277,12 @@ func (h *Handler) pageHistory(w http.ResponseWriter, r *http.Request) {
 		writeMonitorError(w, e)
 		return
 	}
-	q := r.URL.Query()
-	res, e := h.service.ChannelPage(r.Context(), uid, ChannelPageQuery{Page: intQuery(q.Get("page"), 1), PageSize: intQuery(q.Get("pageSize"), 25), GroupID: q.Get("groupId"), GroupStatus: q.Get("groupStatus"), Status: q.Get("status"), Dispatch: q.Get("dispatch"), Search: q.Get("q"), SiteID: q.Get("siteId")})
+	q, e := channelPageQuery(r.URL.Query())
+	if e != nil {
+		httpjson.WriteError(w, http.StatusBadRequest, e.Error())
+		return
+	}
+	res, e := h.service.ChannelPage(r.Context(), uid, q)
 	if e != nil {
 		writeMonitorError(w, e)
 		return

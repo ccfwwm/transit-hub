@@ -1,14 +1,13 @@
 <script setup lang="ts">
 import { computed, onUnmounted, ref, watch } from 'vue'
 import ModelStatusStrip,{type StatusPoint} from './ModelStatusStrip.vue'
-import StatusSourceControl from './StatusSourceControl.vue'
 import ModelTestDialog from './ModelTestDialog.vue'
 import { operationJSON,followJob,type OperationJob } from '../api/operations'
 export interface ModelRow {mode?:string;id:string;model:string;status:string;source:string;scope?:string;groupId?:string;groupName?:string;fresh?:boolean;usable?:boolean;checkedAt?:string|null;latencyMs?:number|null;pingMs?:number|null;availability?:number|null;throughput?:number|null;timeline?:StatusPoint[];message?:string}
 interface ManualCheck {status:string;message:string;checkedAt?:string;startedAt:string;jobId:string}
 interface ModelPage {monitoredModel?:string;modelSummary?:ModelRow;manualChecks?:Record<string,ManualCheck>;reportedTotal?:number;items:ModelRow[];references?:ModelRow[];total:number;multiplier?:number|null;catalogUpdatedAt?:string|null;catalogError?:string}
-const props=defineProps<{preview?:ModelRow;upstreamOnly?:boolean;inline?:boolean;selectable?:boolean;siteId:string;groupId?:string;groupName?:string;ruleId?:string;compact?:boolean;summary?:boolean;multiplier?:number|null;modelId?:string;monitorGroupId?:string}>()
-const emit=defineEmits<{selectModel:[model:string]}>()
+const props=defineProps<{preview?:ModelRow;upstreamOnly?:boolean;inline?:boolean;selectable?:boolean;siteId:string;groupId?:string;groupName?:string;ruleId?:string;compact?:boolean;summary?:boolean;multiplier?:number|null;modelId?:string;monitorGroupId?:string;activeCheckEnabled?:boolean;activeCheckBusy?:boolean;activeCheckError?:string}>()
+const emit=defineEmits<{selectModel:[model:string];toggleActiveCheck:[]}>()
 const testingModel = ref<{ model?: string }>()
 const data=ref<ModelPage>({items:[],total:0}),opened=ref(!!props.inline),loading=ref(false),busy=ref(false),error=ref(''),search=ref(''),filter=ref('all'),page=ref(1)
 const labels:Record<string,string>={auto_paused:'故障',healthy:'正常',failed:'故障',warning:'降级',unknown:'未报告',generating:'生成中',config_error:'待配置',balance_paused:'余额不足',manual_paused:'已停检',unsupported:'未适配'}
@@ -48,6 +47,7 @@ const references=computed(()=>(data.value.references||[]).filter(m=>!search.valu
 const filtered=computed(()=>data.value.items.filter(m=>(!search.value||m.model.toLowerCase().includes(search.value.toLowerCase()))&&(filter.value==='all'||currentStatus(m)===filter.value)).sort((a,b)=>Number(a.source==='catalog')-Number(b.source==='catalog')||a.model.localeCompare(b.model)))
 const visible=computed(()=>filtered.value.slice((page.value-1)*25,page.value*25))
 watch([search,filter],()=>{page.value=1})
+watch(() => props.activeCheckEnabled, () => { if (opened.value) void load() })
 let controller:AbortController|undefined
 async function load(){
  if(props.preview&&!opened.value)return
@@ -79,9 +79,16 @@ async function refresh(){if(busy.value)return;busy.value=true;error.value='';try
   </button>
   <Teleport to="body" :disabled="inline"><div v-if="opened" :class="inline ? '' : 'fixed inset-0 z-[150] flex items-center justify-center bg-black/30 p-4 backdrop-blur-sm'" @click.self="opened=false"><section :class="[inline ? 'w-full min-w-0' : 'flex max-h-[85vh] w-full max-w-5xl flex-col overflow-hidden rounded-2xl border border-border/60 bg-card shadow-xl']" :role="inline ? undefined : 'dialog'" :aria-modal="inline ? undefined : true" aria-label="全部模型状态">
    <header :class="['flex items-start justify-between gap-4 border-b border-border/50',inline?'pb-3':'px-5 py-4']"><div class="min-w-0"><h3 class="text-base font-semibold">全部模型状态 <span v-if="multiplier!=null" class="ml-2 rounded bg-primary/10 px-2 py-0.5 text-sm text-primary">{{Number(multiplier.toFixed(4))}}×</span></h3><p class="mt-1 truncate text-sm text-muted-foreground">{{groupName}}</p></div><button v-if="!inline" type="button" class="rounded-lg px-2 py-1 text-sm text-muted-foreground hover:bg-surface" @click="opened=false">关闭</button></header>
-   <div :class="['flex flex-wrap items-center justify-between gap-3 border-b border-border/50 py-3',!inline&&'px-5']"><span v-if="upstreamOnly" class="text-xs text-muted-foreground">上游模型状态</span><StatusSourceControl v-else-if="ruleId" /><span v-else class="text-xs text-muted-foreground">上游模型状态</span><div class="flex flex-wrap gap-2"><button v-if="groupId" type="button" class="rounded-lg border border-primary/30 px-3 py-1.5 text-sm text-primary" @click="testingModel = { model: modelId || data.monitoredModel }">实际测试</button><button type="button" class="rounded-lg border border-border/50 px-3 py-1.5 text-sm disabled:opacity-50" :disabled="busy" @click="refresh">{{busy?'处理中…':'同步状态'}}</button></div></div>
+   <div :class="['flex flex-wrap items-center justify-between gap-3 border-b border-border/50 py-3',!inline&&'px-5']"><span v-if="upstreamOnly" class="text-xs text-muted-foreground">上游模型状态</span><span v-else-if="ruleId" class="text-sm text-muted-foreground">上游状态同步</span><span v-else class="text-xs text-muted-foreground">上游模型状态</span><div class="flex flex-wrap gap-2">
+     <button v-if="ruleId && !upstreamOnly && activeCheckEnabled !== undefined" type="button"
+       class="rounded-lg border px-3 py-1.5 text-sm disabled:opacity-50"
+       :class="activeCheckEnabled ? 'border-emerald-500/30 text-emerald-700 dark:text-emerald-300' : 'border-border/50 text-muted-foreground'"
+       :aria-pressed="activeCheckEnabled" :disabled="activeCheckBusy"
+       title="按渠道配置的间隔实际调用检测模型，可能产生费用"
+       @click="emit('toggleActiveCheck')">{{ activeCheckEnabled ? '主动检测开' : '主动检测关' }}</button>
+     <button v-if="groupId" type="button" class="rounded-lg border border-primary/30 px-3 py-1.5 text-sm text-primary" @click="testingModel = { model: modelId || data.monitoredModel }">实际测试</button><button type="button" class="rounded-lg border border-border/50 px-3 py-1.5 text-sm disabled:opacity-50" :disabled="busy" @click="refresh">{{busy?'处理中…':'同步状态'}}</button></div></div>
    <div :class="['flex flex-wrap gap-2 py-3',!inline&&'px-5']"><input v-model="search" placeholder="搜索模型" class="min-w-40 flex-1 rounded-lg border border-border/50 bg-background px-3 py-2 text-sm" /><select v-model="filter" class="rounded-lg border border-border/50 bg-background px-3 py-2 text-sm"><option value="all">全部状态</option><option value="healthy">正常</option><option value="failed">故障</option><option value="unknown">当前未知</option></select></div>
-   <p v-if="error" class="px-5 pb-3 text-sm text-red-500">{{error}}</p>
+   <p v-if="activeCheckError || error" role="alert" class="px-5 pb-3 text-sm text-red-500">{{activeCheckError || error}}</p>
    <div :class="inline?'pb-4':'min-h-0 flex-1 overflow-auto px-5 pb-4'">
     <template v-if="references.length"><h4 class="mb-2 text-sm font-medium text-muted-foreground">线路状态</h4><div class="mb-3 grid grid-cols-1 gap-2 sm:grid-cols-2"><article v-for="m in references" :key="m.id" class="min-w-0 rounded-lg border border-border/50 px-3 py-2.5"><div class="mb-2 flex justify-between gap-3 text-sm"><span class="min-w-0 break-words font-medium">{{m.model}}</span><span class="shrink-0 text-xs" :class="color(reportedStatus(m))" :title="m.message">{{statusLabel(m)}}</span></div><ModelStatusStrip :points="m.timeline" :status="reportedStatus(m)" :availability="m.availability" :latency-ms="m.latencyMs" hide-details hide-metrics /></article></div></template>
     <div :class="['grid grid-cols-1 gap-2',!inline&&'sm:grid-cols-2']"><article v-for="m in visible" :key="m.model" class="min-w-0 rounded-lg border border-border/50 px-3 py-2.5"><div class="mb-2 flex min-w-0 flex-wrap items-start justify-between gap-2 text-sm"><span class="min-w-0 break-words font-medium" :title="m.model">{{m.model}}</span><span class="shrink-0 text-xs" :class="color(currentStatus(m))" :title="currentCheck(m)?.message||m.message">{{currentLabel(m)}}</span><button v-if="selectable && m.source!=='catalog'" type="button" class="shrink-0 text-xs text-primary" @click="emit('selectModel',m.model)">设为主检测</button><button v-if="groupId && m.model !== '__other__'" type="button" class="shrink-0 text-xs text-primary" @click="testingModel = { model: m.model }">测试此模型</button></div><ModelStatusStrip :points="displayPoints(m)" :status="m.status" :availability="m.availability" :latency-ms="m.latencyMs" :ping-ms="m.pingMs" :throughput="m.throughput" hide-details hide-metrics /></article></div>
