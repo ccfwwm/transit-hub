@@ -12,6 +12,7 @@ import KeyPolicyEditor from '../components/KeyPolicyEditor.vue'
 import ChannelKeyActions from '../components/ChannelKeyActions.vue'
 import { submitOperation, checkedOperation, operationJSON, followJob, type OperationJob } from '../api/operations'
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
+import { useMediaQuery } from '@vueuse/core'
 import { useI18n } from 'vue-i18n'
 import {
   Activity,
@@ -22,7 +23,6 @@ import {
   Clock3,
   Gauge,
   Loader2,
-  Ellipsis,
   PauseCircle,
   Play,
   Power,
@@ -105,9 +105,10 @@ const groupStatusFilter = ref<GroupStatusFilter>('all')
 const selectedGroup = ref('all')
 const selectedSite = ref('')
 const upstreamOptions = ref<{ id: string; name: string }[]>([])
-const showGroups = ref(false)
-const actionRuleID = ref('')
-const actionChannel = computed(() => summary.value.channels.find(channel => channel.ruleId === actionRuleID.value))
+const wideGroupSidebar = useMediaQuery('(min-width: 1024px)')
+const groupSidebarOverride = ref<boolean>()
+const showGroups = computed(() => groupSidebarOverride.value ?? wideGroupSidebar.value)
+const rowActionClass = 'whitespace-nowrap !h-6 !rounded !px-1.5 !text-[11px] !font-medium'
 const page = ref(1)
 const pageSize = ref(25)
 const selectedRuleIds = ref<string[]>([])
@@ -717,12 +718,6 @@ const toggleSelectedGroupAutoPriority = (enabled: boolean) => {
 const toggleChannelMonitoring = (channel: ChannelMonitorChannel) =>
   runAction(() => checkedOperation({ kind: 'update', ids: [channel.ruleId], settings: { enabled: !channel.enabled } }), { actionKey: channelActionKey(channel, 'monitor') })
 
-function runChannelAction(action: (channel: ChannelMonitorChannel) => unknown) {
-  const channel = actionChannel.value
-  actionRuleID.value = ''
-  if (channel) void action(channel)
-}
-
 const toggleChannelSchedulable = (channel: ChannelMonitorChannel) =>
   runAction(() => setChannelMonitorRuleSchedulable(channel.ruleId, channel.schedulable === false), { actionKey: channelActionKey(channel, 'dispatch') })
 
@@ -885,6 +880,12 @@ const dispatchBadge = (channel:ChannelMonitorChannel) => {
  auto:{label:'检测停用',tone:'border-red-500/25 bg-red-500/10 text-red-700 dark:text-red-300'},
  disabled:{label:'已停用',tone:'border-rose-500/25 bg-rose-500/10 text-rose-700 dark:text-rose-300'},
  unknown:{label:'未知',tone:'border-slate-400/25 bg-slate-500/10 text-slate-500 dark:text-slate-300'}}
+ const rateLimited = state === 'rate' || (summary.value.rateRule.rule.enabled && channel.rateGateStatus === 'blocked' && (state === 'enabled' || state === 'unknown'))
+ if (rateLimited) {
+   const schedulable = channel.schedulable
+   const status = schedulable === true ? '已启用' : schedulable === false ? '已停用' : '未知'
+   return { label: `倍率限制 · ${status}`, tone: badges[schedulable === true ? 'enabled' : schedulable === false ? 'rate' : 'unknown']!.tone }
+ }
  return badges[state]||badges.unknown!
 }
 </script>
@@ -892,23 +893,6 @@ const dispatchBadge = (channel:ChannelMonitorChannel) => {
 <template>
   <div class="flex flex-col gap-2">
     <ModelTestDialog v-if="testingChannel" :site-id="testingChannel.siteId" :group-id="testingChannel.upstreamGroupId" :connection-id="testingChannel.connectionId" :initial-model="testingChannel.effectiveTestModelId" :initial-mode="testingChannel.effectiveTestMode" :label="testingChannel.adminAccountName" @close="testingChannel = null" />
-    <Teleport to="body">
-      <div v-if="actionChannel" class="fixed inset-0 z-[155] grid place-items-center bg-black/25 p-3" @click.self="actionRuleID = ''" @keydown.esc.stop="actionRuleID = ''">
-        <section role="dialog" aria-label="渠道操作" class="w-full max-w-sm space-y-3 rounded-lg border border-border bg-card p-4 shadow-xl">
-          <header class="flex items-center justify-between gap-2"><h2 class="break-all text-sm font-semibold">{{ actionChannel.adminAccountName }}</h2><button type="button" class="shrink-0 px-1 text-xs text-muted-foreground" @click="actionRuleID = ''">关闭</button></header>
-          <GroupKeyPolicy :whitelist-enabled="actionChannel.keyWhitelistEnabled" :initial-policy="actionChannel.keyPolicy" :site-id="actionChannel.siteId" :group-id="actionChannel.upstreamGroupId" :group-name="actionChannel.upstreamGroupName" />
-          <div class="flex flex-wrap gap-1.5">
-                    <ChannelKeyActions :whitelist-enabled="actionChannel.keyWhitelistEnabled" :connection-id="actionChannel.connectionId" :disabled="isChannelBusy(actionChannel)" />
-                    <Button variant="secondary" size="sm" class="!h-7 !rounded-md !px-2 !text-xs !font-medium whitespace-nowrap !bg-blue-500/10 !text-blue-600" :disabled="isChannelBusy(actionChannel)" @click="runChannelAction(channel => runAction(() => syncChannelStatus(channel), { actionKey: channelActionKey(channel, 'sync-status') }))">同步状态</Button>
-                    <Button variant="secondary" size="sm" class="!h-7 !rounded-md !px-2 !text-xs !font-medium whitespace-nowrap !bg-indigo-500/10 !text-indigo-600" :disabled="isChannelBusy(actionChannel)" @click="runChannelAction(channel => openGroupEditor(channel))">修改分组</Button>
-                    <Button variant="secondary" size="sm" class="!h-7 !rounded-md !px-2 !text-xs !font-medium whitespace-nowrap !bg-amber-500/10 !text-amber-700" :disabled="isChannelBusy(actionChannel)||(!actionChannel.supported&&!actionChannel.repairAvailable)" @click="runChannelAction(channel => syncAndTakeOverChannel(channel))">同步接管</Button>
-                    <Button variant="secondary" size="sm" class="!h-7 !rounded-md !px-2 !text-xs !font-medium whitespace-nowrap !bg-violet-500/10 !text-violet-600" :disabled="isChannelBusy(actionChannel)" @click="runChannelAction(channel => openEditor(channel))">规则设置</Button>
-                    <Button v-if="actionChannel.mediaTaskKey" variant="secondary" size="sm" class="!h-7 !rounded-md !px-2 !text-xs !font-medium whitespace-nowrap !bg-orange-500/10 !text-orange-700" :disabled="isChannelBusy(actionChannel)" @click="runChannelAction(channel => resetMedia(channel))">重置媒体任务</Button>
-                    <Button variant="secondary" size="sm" class="!h-7 !rounded-md !px-2 !text-xs !font-medium whitespace-nowrap !bg-red-500/10 !text-red-600" :disabled="isChannelBusy(actionChannel)" @click="runChannelAction(channel => openDisconnect(channel))">取消绑定</Button>
-          </div>
-        </section>
-      </div>
-    </Teleport>
     <p v-if="healthSyncMessage" class="text-xs text-muted-foreground">{{healthSyncMessage}}</p>
 
     <div class="grid grid-cols-3 gap-1.5 lg:grid-cols-6">
@@ -1083,19 +1067,20 @@ const dispatchBadge = (channel:ChannelMonitorChannel) => {
       </div>
     </details>
 
-    <div class="grid min-h-0 flex-1 grid-cols-1 gap-2" :class="showGroups ? 'xl:grid-cols-[170px_minmax(0,1fr)]' : ''">
+    <div class="grid min-h-0 flex-1 grid-cols-1 gap-2" :class="showGroups ? 'lg:grid-cols-[148px_minmax(0,1fr)] 2xl:grid-cols-[170px_minmax(0,1fr)]' : ''">
       <section v-if="showGroups" id="monitor-group-sidebar" class="min-h-0 overflow-hidden rounded-md border border-border/50 bg-surface">
-        <div class="border-b border-border/50 px-4 py-3">
-          <h2 class="text-sm font-semibold text-foreground">{{ t('admin.channelMonitor.groups.title') }}</h2>
-
+        <div class="flex items-center justify-between border-b border-border/50 px-2 py-1.5">
+          <h2 class="text-xs font-semibold">{{ t('admin.channelMonitor.groups.title') }}</h2>
+          <button type="button" class="rounded px-1 py-0.5 text-[11px] text-muted-foreground hover:bg-surface-elevated" aria-label="收起分组" @click="groupSidebarOverride = false">收起</button>
         </div>
-        <div class="max-h-[calc(100dvh-14rem)] min-h-36 overflow-auto">
+        <div class="max-h-48 overflow-auto lg:max-h-[calc(100dvh-14rem)]">
+          <button type="button" :aria-pressed="selectedGroup === 'all'" class="block w-full border-b border-border/40 px-2 py-1.5 text-left text-xs font-medium" :class="selectedGroup === 'all' ? 'bg-primary/10 text-primary' : 'hover:bg-surface-elevated'" @click="selectedGroup = 'all'">{{ t('admin.channelMonitor.groups.all') }}</button>
           <table class="w-full text-left text-xs">
             <thead class="sticky top-0 bg-surface-elevated text-xs text-muted-foreground">
               <tr>
-                <th class="px-2 py-2 font-medium">{{ t('admin.channelMonitor.groups.columns.group') }}</th>
-                <th class="px-2 py-2 font-medium">{{ t('admin.channelMonitor.groups.columns.available') }}</th>
-                <th class="px-2 py-2 font-medium">停检/停调</th>
+                <th class="px-1.5 py-1.5 font-medium">{{ t('admin.channelMonitor.groups.columns.group') }}</th>
+                <th class="whitespace-nowrap px-1 py-1.5 font-medium">{{ t('admin.channelMonitor.groups.columns.available') }}</th>
+                <th class="px-1 py-1.5 font-medium">停检/停调</th>
 
               </tr>
             </thead>
@@ -1109,14 +1094,14 @@ const dispatchBadge = (channel:ChannelMonitorChannel) => {
                 ]"
                 @click="selectGroup(group.groupId)"
               >
-                <td class="px-2 py-2">
-                  <div class="font-medium text-foreground">{{ group.groupName }}</div>
-                  <span :class="['mt-1 inline-flex rounded-md border px-1.5 py-0.5 text-[11px] font-medium', groupPlatformBadgeClass(group.platform)]">
+                <td class="px-1.5 py-1.5">
+                  <button type="button" class="block w-full break-words text-left font-medium" :aria-pressed="selectedGroup === group.groupId" @click.stop="selectGroup(group.groupId)">{{ group.groupName }}</button>
+                  <span :class="['mt-0.5 inline-flex rounded border px-1 text-[10px] font-medium', groupPlatformBadgeClass(group.platform)]">
                     {{ group.platform || t('admin.channelMonitor.common.unknown') }}
                   </span>
                 </td>
-                <td class="px-2 py-2 font-mono text-foreground">{{ group.available }}/{{ group.total }}</td>
-                <td class="px-2 py-2 text-xs text-muted-foreground">{{ group.monitorPaused }}/{{ group.dispatchPaused }}</td>
+                <td class="px-1 py-1.5 font-mono text-foreground">{{ group.available }}/{{ group.total }}</td>
+                <td class="px-1 py-1.5 text-xs text-muted-foreground">{{ group.monitorPaused }}/{{ group.dispatchPaused }}</td>
 
               </tr>
               <tr v-if="!isLoading && visibleGroups.length === 0">
@@ -1132,7 +1117,7 @@ const dispatchBadge = (channel:ChannelMonitorChannel) => {
           <div>
             <div class="flex items-center gap-2">
               <h2 class="text-xs font-semibold">{{ t('admin.channelMonitor.channels.title') }}</h2>
-              <button type="button" class="rounded px-2 py-1 text-xs text-muted-foreground hover:bg-surface-elevated" aria-controls="monitor-group-sidebar" :aria-expanded="showGroups" @click="showGroups = !showGroups">{{ showGroups ? '收起分组' : '分组概览' }}</button>
+              <button v-if="!showGroups" type="button" class="rounded px-2 py-1 text-xs text-muted-foreground hover:bg-surface-elevated" aria-controls="monitor-group-sidebar" aria-expanded="false" @click="groupSidebarOverride = true">分组概览</button>
             </div>
             
           </div>
@@ -1149,8 +1134,12 @@ const dispatchBadge = (channel:ChannelMonitorChannel) => {
         </div>
 
         <div v-else class="max-h-[calc(100dvh-14rem)] min-h-36 overflow-auto">
-          <table data-monitor-table class="w-full min-w-[930px] table-fixed text-left text-xs">
-            <colgroup><col style="width:28px"/><col style="width:23%"/><col style="width:16%"/><col style="width:7%"/><col style="width:6%"/><col style="width:100px"/><col style="width:6%"/><col style="width:14%"/><col style="width:86px"/><col style="width:6%"/><col style="width:100px"/></colgroup>
+          <table data-monitor-table class="w-full min-w-[1060px] table-fixed text-left text-xs">
+            <colgroup>
+              <col class="w-7" /><col /><col class="w-[11%]" /><col class="w-[56px]" /><col class="w-[47px]" />
+              <col class="w-[86px]" /><col class="w-[50px]" /><col class="w-[89px]" /><col class="w-[108px]" />
+              <col class="w-[51px]" /><col class="w-[312px]" />
+            </colgroup>
             <thead class="sticky top-0 bg-surface-elevated text-xs text-muted-foreground">
               <tr>
                 <th class="w-9 px-3 py-2 font-medium"></th>
@@ -1163,7 +1152,7 @@ const dispatchBadge = (channel:ChannelMonitorChannel) => {
                 <th class="px-2 py-2 font-medium">{{ t('admin.channelMonitor.channels.columns.group') }}</th>
                 <th class="px-2 py-2 font-medium">调度状态</th>
                 <th class="px-2 py-2 font-medium">{{ t('admin.channelMonitor.channels.columns.balance') }}</th>
-                <th class="px-2 py-2 text-right font-medium">{{ t('admin.channelMonitor.channels.columns.actions') }}</th>
+                <th class="px-2 py-2 font-medium">{{ t('admin.channelMonitor.channels.columns.actions') }}</th>
               </tr>
             </thead>
             <tbody class="divide-y divide-border/40">
@@ -1185,6 +1174,7 @@ const dispatchBadge = (channel:ChannelMonitorChannel) => {
                       <span class="truncate" :title="channel.upstreamGroupName">{{ channel.siteName }} · {{ channel.upstreamGroupName }}</span>
                       <ShieldAlert v-if="channel.schedulableConflict || channel.priorityConflict" class="size-3 shrink-0 text-amber-600" :aria-label="t('admin.channelMonitor.flags.manualOverrideHelp')" />
                     </div>
+                    <GroupKeyPolicy v-if="channel.siteId && channel.upstreamGroupId" :whitelist-enabled="channel.keyWhitelistEnabled" :initial-policy="channel.keyPolicy" :site-id="channel.siteId" :group-id="channel.upstreamGroupId" :group-name="channel.upstreamGroupName" snapshot />
                   </div>
                 </td>
                 <td class="px-1.5 py-1.5 align-middle">
@@ -1200,13 +1190,13 @@ const dispatchBadge = (channel:ChannelMonitorChannel) => {
                 </td>
                 <td class="px-1.5 py-1.5 align-middle">
                   <div class="font-mono text-xs font-semibold text-foreground">{{ channel.accountPriority ?? '-' }} → {{ channel.recommendedPriority ?? '-' }}</div>
-                  <div class="mt-1 flex items-center gap-1.5">
+                  <div class="mt-1 flex items-center gap-1">
                     <input
                       v-model.number="priorityDrafts[channel.ruleId]"
                       type="number"
                       min="0"
                       max="999"
-                      class="h-6 w-11 shrink-0 rounded-md border border-border/50 bg-surface px-2 text-sm font-mono text-foreground outline-none focus:border-primary focus:ring-1 focus:ring-primary"
+                      class="h-6 w-10 shrink-0 rounded-md border border-border/50 bg-surface px-1 text-xs font-mono text-foreground outline-none focus:border-primary focus:ring-1 focus:ring-primary"
                       :disabled="isChannelBusy(channel) || !channel.supported"
                       :aria-label="t('admin.channelMonitor.rateRule.manualPriority')"
                     />
@@ -1246,9 +1236,18 @@ const dispatchBadge = (channel:ChannelMonitorChannel) => {
                 </td>
 
                 <td class="px-1.5 py-1.5 align-middle">
-                  <div class="flex flex-wrap justify-end gap-1">
-                    <button type="button" class="whitespace-nowrap rounded bg-surface-elevated px-1.5 py-1 font-medium hover:text-primary" @click="testingChannel = channel">实际测试</button>
-                    <button type="button" class="rounded p-1 text-muted-foreground hover:bg-surface-elevated hover:text-foreground" :aria-label="`更多操作：${channel.adminAccountName}`" @click="actionRuleID = channel.ruleId"><Ellipsis class="size-4" /></button>
+                  <div class="space-y-1">
+                    <ChannelKeyActions :whitelist-enabled="channel.keyWhitelistEnabled" :connection-id="channel.connectionId" :disabled="isChannelBusy(channel)">
+                      <Button variant="secondary" size="sm" :class="[rowActionClass, '!bg-blue-500/10 !text-blue-700 dark:!text-blue-300']" :disabled="isChannelBusy(channel)" @click="runAction(() => syncChannelStatus(channel), { actionKey: channelActionKey(channel, 'sync-status') })">同步状态</Button>
+                      <Button variant="secondary" size="sm" :class="rowActionClass" @click="testingChannel = channel">实际测试</Button>
+                    </ChannelKeyActions>
+                    <div class="flex items-center gap-1">
+                      <Button variant="secondary" size="sm" :class="[rowActionClass, '!bg-indigo-500/10 !text-indigo-700 dark:!text-indigo-300']" :disabled="isChannelBusy(channel)" @click="openGroupEditor(channel)">修改分组</Button>
+                      <Button variant="secondary" size="sm" :class="[rowActionClass, '!bg-amber-500/10 !text-amber-700 dark:!text-amber-300']" :disabled="isChannelBusy(channel) || (!channel.supported && !channel.repairAvailable)" @click="syncAndTakeOverChannel(channel)">同步接管</Button>
+                      <Button variant="secondary" size="sm" :class="[rowActionClass, '!bg-violet-500/10 !text-violet-700 dark:!text-violet-300']" :disabled="isChannelBusy(channel)" @click="openEditor(channel)">规则设置</Button>
+                      <Button v-if="channel.mediaTaskKey" variant="secondary" size="sm" :class="[rowActionClass, '!bg-orange-500/10 !text-orange-700 dark:!text-orange-300']" aria-label="重置媒体任务" :disabled="isChannelBusy(channel)" @click="resetMedia(channel)">重置媒体</Button>
+                      <Button variant="secondary" size="sm" :class="[rowActionClass, '!bg-red-500/10 !text-red-700 dark:!text-red-300']" :disabled="isChannelBusy(channel)" @click="openDisconnect(channel)">取消绑定</Button>
+                    </div>
                   </div>
                 </td>
               </tr>

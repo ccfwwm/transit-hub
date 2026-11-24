@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { operationJSON, followJob, type OperationJob } from '../api/operations'
-const props=withDefaults(defineProps<{siteId:string;groupId:string;groupName?:string;whitelistEnabled?:boolean;initialPolicy?:Policy}>(),{whitelistEnabled:undefined})
+const props=withDefaults(defineProps<{siteId:string;groupId:string;groupName?:string;whitelistEnabled?:boolean;initialPolicy?:Policy;snapshot?:boolean}>(),{whitelistEnabled:undefined})
 type Policy={allowedIPs:string[];version:number;inherited:boolean;observedIPs:string[];observedAt?:string;boundKeys:number}
 const policy = ref<Policy>()
 const open = ref(false), text = ref(''), inherited = ref(true), replace = ref(true)
@@ -9,11 +9,12 @@ const busy = ref(false), error = ref(''), message = ref('')
 const url = computed(() => `/upstream-sites/${encodeURIComponent(props.siteId)}/group-key-policy?groupId=${encodeURIComponent(props.groupId)}`)
 const label = computed(() => policy.value?.observedAt
   ? (policy.value.observedIPs.length ? policy.value.observedIPs.join(', ') : '未限制 IP')
-  : props.whitelistEnabled===false ? '未限制 IP' : policy.value?.allowedIPs.join(', ') || (error.value?'读取失败':'读取中…'))
+  : props.whitelistEnabled===false ? '未限制 IP' : policy.value?.allowedIPs.join(', ') || (error.value ? '读取失败' : props.snapshot ? '查看设置' : '读取中…'))
 async function load() {
   policy.value = await operationJSON<Policy>(url.value)
 }
 async function refreshPolicy() {
+  if (props.snapshot && !open.value) return
   try { await load() } catch (e: any) { error.value = e.message }
 }
 async function show() {
