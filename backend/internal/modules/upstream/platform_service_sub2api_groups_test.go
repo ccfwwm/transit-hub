@@ -228,6 +228,9 @@ func TestFetchSub2APIAdminAllGroups_UsesAllEndpoint(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/api/v1/admin/groups/all":
+			if r.URL.Query().Get("include_inactive") != "true" {
+				t.Error("inactive groups must remain available for management")
+			}
 			writeJSON(w, map[string]any{"data": []map[string]any{
 				{"id": 1, "name": "default", "platform": "openai", "status": "active", "rate_multiplier": 1.0},
 				{"id": 2, "name": "disabled", "platform": "claude", "status": "inactive", "rate_multiplier": 2.5},

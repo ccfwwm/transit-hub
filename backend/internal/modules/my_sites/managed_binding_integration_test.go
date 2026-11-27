@@ -35,6 +35,21 @@ func TestManagedBindingName(t *testing.T) {
 	}
 }
 
+func TestForwardingAccountPlatformFollowsDestinationDispatch(t *testing.T) {
+	for _, test := range []struct{ source, destination, want string }{
+		{"imagevideo", "openai", "openai"},
+		{"openai", "deepseek", "deepseek"},
+		{"anthropic", "kimi", "kimi"},
+		{"imagevideo", "composite", "imagevideo"},
+		{"anthropic", "claude", "anthropic"},
+		{"openai", "", "openai"},
+	} {
+		if platform := forwardingAccountPlatform(test.source, test.destination); platform != test.want {
+			t.Errorf("%s to %s uses %s, want %s", test.source, test.destination, platform, test.want)
+		}
+	}
+}
+
 func TestManagedSplitResumesAfterAccountMembershipFailure(t *testing.T) {
 	for _, platform := range []upstream.Platform{upstream.PlatformSub2API, upstream.PlatformNewAPI} {
 		t.Run(string(platform), func(t *testing.T) {

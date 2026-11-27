@@ -2,7 +2,7 @@
 import { computed, ref, watch, onMounted, onBeforeUnmount } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { navigationError } from '@/router'
-import { LayoutDashboard, Network, Settings, LogOut, Globe, Moon, Sun, Percent, Megaphone, ChevronDown, ArrowRightLeft, Activity, KeyRound, PanelLeft } from 'lucide-vue-next'
+import { LayoutDashboard, Network, Settings, LogOut, Globe, Moon, Sun, Percent, Megaphone, ChevronDown, ArrowRightLeft, Activity, KeyRound, PanelLeft, Layers } from 'lucide-vue-next'
 import { useDark, useStorage, useToggle } from '@vueuse/core'
 import OperationProgress from '../components/OperationProgress.vue'
 import { resetOperationWorkspace } from '../api/operations'
@@ -95,6 +95,7 @@ const menuItems = computed(() => [
   { name: t('admin.menu.dashboard'), path: '/admin', icon: LayoutDashboard },
   { name: t('admin.menu.upstream'), path: '/admin/upstream', icon: Network },
   { name: t('admin.menu.upstreamKeys'), path: '/admin/upstream-keys', icon: KeyRound },
+  { name: t('admin.menu.ownGroups'), path: '/admin/own-groups', icon: Layers },
   { name: t('admin.menu.groupRates'), path: '/admin/group-rates', icon: Percent },
   { name: t('admin.menu.groupRateCampaigns'), path: '/admin/group-rate-campaigns', icon: Megaphone },
   { name: t('admin.menu.statusMonitor'), path: '/admin/status-monitor', icon: Activity },

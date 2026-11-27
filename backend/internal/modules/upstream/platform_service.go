@@ -680,7 +680,7 @@ func (s *PlatformService) FetchSub2APIAdminAllGroups(session Session) ([]AdminGr
 		return nil, newRequestError(ErrorAuth, PlatformSub2API)
 	}
 	authOptions := sub2APIRequestOptions(session)
-	response, err := s.httpClient.requestJSON(session.BaseURL+"/api/v1/admin/groups/all", authOptions)
+	response, err := s.httpClient.requestJSON(session.BaseURL+"/api/v1/admin/groups/all?include_inactive=true", authOptions)
 	if err != nil {
 		log.Printf("[sub2api-admin-groups] /api/v1/admin/groups/all 拉取失败，尝试旧接口 base_url=%s err=%v", session.BaseURL, err)
 		response, err = s.httpClient.requestJSON(session.BaseURL+"/api/v1/admin/groups", authOptions)
@@ -2404,40 +2404,12 @@ func (s *PlatformService) UpdateAdminGroupMultiplier(session Session, group Admi
 	}
 }
 
-// updateSub2APIAdminGroupMultiplier 通过 GET+PUT /api/v1/admin/groups/{id} 更新 sub2api 分组倍率。
-// 先 GET 原始详情，复制必要字段，仅替换 rate_multiplier 后 PUT 回去，避免覆盖其他字段。
+// updateSub2APIAdminGroupMultiplier 通过 PUT /api/v1/admin/groups/{id} 更新 sub2api 分组倍率。
 func (s *PlatformService) updateSub2APIAdminGroupMultiplier(session Session, groupID string, multiplier float64) error {
 	if session.Platform != PlatformSub2API || strings.TrimSpace(session.AccessToken) == "" {
 		return newRequestError(ErrorAuth, PlatformSub2API)
 	}
-	authOptions := sub2APIRequestOptions(session)
-
-	// GET 分组详情
-	getURL := session.BaseURL + "/api/v1/admin/groups/" + groupID
-	response, err := s.httpClient.requestJSON(getURL, authOptions)
-	if err != nil {
-		return err
-	}
-	data := dataRecord(response.Payload)
-
-	// 从原始响应中复制必要字段，仅替换 rate_multiplier
-	payload := map[string]any{
-		"rate_multiplier": multiplier,
-	}
-	for _, key := range []string{"name", "description", "platform", "is_exclusive", "status", "subscription_type"} {
-		if v, ok := data[key]; ok {
-			payload[key] = v
-		}
-	}
-
-	// PUT 更新
-	_, err = s.httpClient.requestJSON(getURL, requestOptions{
-		AccessToken:     session.AccessToken,
-		TokenType:       session.TokenType,
-		InsecureSkipTLS: session.InsecureSkipTLS,
-		Method:          http.MethodPut,
-		Body:            payload,
-	})
+	_, err := s.sub2APIAdminGroupRequest(context.Background(), session, groupID, "", http.MethodPut, map[string]any{"rate_multiplier": multiplier})
 	return err
 }
 

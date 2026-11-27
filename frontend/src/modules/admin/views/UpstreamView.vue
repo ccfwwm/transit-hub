@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import DomainAllowlist from '../components/DomainAllowlist.vue'
 import PrimaryModelPicker from '../components/PrimaryModelPicker.vue'
+import ForwardingModelAllowlist from '../components/ForwardingModelAllowlist.vue'
 import MonitorProfileEditor from '../components/MonitorProfileEditor.vue'
 import StatusSourceControl from '../components/StatusSourceControl.vue'
 import GroupModelStatus from '../components/GroupModelStatus.vue'
@@ -102,12 +103,6 @@ const dynamicGroupTypes = computed(() => {
   return Array.from(values).sort()
 })
 
-const compatibleOwnGroups = computed(() => {
-  if (adminPlatform.value === 'newapi' || !groupActionType.value) return ownGroups.value
-  const matching = ownGroups.value.filter(group => normalizeType(group.platform) === groupActionType.value)
-  return matching.length > 0 ? matching : ownGroups.value
-})
-watch(groupActionType, () => { if (!actionConnection.value) groupActionOwnGroupIds.value = [] })
 
 const refreshStatus = computed(() => refreshSettings.value?.enableRefreshInterval
   ? t('admin.upstream.refresh.scheduled', { seconds: Math.max(refreshSettings.value.refreshInterval, minimumRefreshInterval) })
@@ -379,9 +374,16 @@ async function rotateSite(site: UpstreamSite) {
 const chosenGroupConnections = computed(() => groupActionSite.value && groupActionGroup.value ? groupConnections(groupActionSite.value, groupActionGroup.value) : [])
 const occupiedGroupIds = computed(() => new Set(chosenGroupConnections.value.flatMap(connection => connection.ownGroupIds ?? [])))
 const unusedOwnGroups = computed(() => adminPlatform.value === 'sub2api'
-  ? compatibleOwnGroups.value.filter(group => !occupiedGroupIds.value.has(group.id))
-  : compatibleOwnGroups.value)
-const visibleOwnGroups = computed(() => unusedOwnGroups.value.filter(group => group.groupName.toLowerCase().includes(groupActionSearch.value.trim().toLowerCase())))
+  ? ownGroups.value.filter(group => group.status !== 'inactive' && !occupiedGroupIds.value.has(group.id))
+  : ownGroups.value)
+const visibleOwnGroups = computed(() => unusedOwnGroups.value.filter(group =>
+  `${group.groupName} ${group.platform}`.toLowerCase().includes(groupActionSearch.value.trim().toLowerCase())))
+const needsUpstreamTypeChoice = computed(() => {
+  const site = groupActionSite.value
+  const group = groupActionGroup.value
+  const type = site && group ? groupType(site, group) : ''
+  return !type || type.includes(',')
+})
 const canCreateGroupBinding = computed(() => !actionConnection.value && !!adminPlatform.value && !groupOptionsLoading.value
   && groupActionOwnGroupIds.value.length > 0
   && groupActionOwnGroupIds.value.every(id => unusedOwnGroups.value.some(group => group.id === id))
@@ -409,6 +411,7 @@ const openGroupAction = async (site: UpstreamSite, group: UpstreamGroupInfo) => 
   groupActionError.value = ''
   isGroupActionOpen.value = true
   groupActionType.value = groupType(site, group)
+  if (groupActionType.value.includes(',')) groupActionType.value = ''
   groupChannelType.value = channelTypeForGroupType[groupActionType.value]
     ?? NEW_API_CHANNEL_TYPES.find(type => normalizeType(type.name) === groupActionType.value)?.id
     ?? 0
@@ -1169,13 +1172,14 @@ onBeforeUnmount(() => {
           <div class="min-w-0">
           <GroupAPIAddress v-if="groupActionSite && groupActionGroup" :site-id="groupActionSite.id" :group-id="groupActionGroup.id" :account-api-url="actionConnection?.upstreamApiUrl" />
           <PrimaryModelPicker v-if="groupActionSite && groupActionGroup" :key="`${groupActionSite.id}:${groupActionGroup.id}`" v-model="groupActionTestModel" class="mt-4" :site-id="groupActionSite.id" :group-id="groupActionGroup.id" :connection-id="actionConnection?.id" :disabled="isGroupActionLoading" />
+          <ForwardingModelAllowlist v-if="adminPlatform === 'sub2api' && actionConnection?.adminAccountId && groupActionSite && groupActionGroup" :key="actionConnection.id" class="mt-4" :connection-id="actionConnection.id" :site-id="groupActionSite.id" :group-id="groupActionGroup.id" :disabled="isGroupActionLoading" />
           <label class="mt-4 flex cursor-pointer items-center justify-between gap-3 rounded-lg border border-border/50 bg-surface px-4 py-3 text-sm"><span>倍率大于等于分组时仍允许启用</span><input v-model="groupActionAllowHigherRate" type="checkbox" :disabled="isGroupActionLoading" class="h-4 w-4 shrink-0 accent-blue-600" /></label>
           <template v-if="actionConnection">
             <div class="mt-4 rounded-xl border border-border/60 p-3">
               <template v-if="adminPlatform === 'newapi'">
                 <h4 class="text-sm font-medium">自有分组</h4>
                 <div class="mt-2 max-h-48 space-y-2 overflow-auto">
-                  <label v-for="ownGroup in compatibleOwnGroups" :key="ownGroup.id" class="flex items-center justify-between rounded border border-border/50 px-3 py-2 text-sm">
+                  <label v-for="ownGroup in ownGroups" :key="ownGroup.id" class="flex items-center justify-between rounded border border-border/50 px-3 py-2 text-sm">
                     <span>{{ ownGroup.groupName }} · {{ ownGroup.platform }}</span>
                     <input v-model="groupActionOwnGroupIds" type="checkbox" :value="ownGroup.id" :disabled="isGroupActionLoading || groupOptionsLoading" />
                   </label>
@@ -1196,7 +1200,7 @@ onBeforeUnmount(() => {
             </div>
           </template>
           <template v-else>
-            <label v-if="groupActionSite && groupActionGroup && adminPlatform !== 'newapi' && (!groupActionType || groupActionType.includes(','))" class="mt-4 block text-sm">
+            <label v-if="groupActionSite && groupActionGroup && adminPlatform !== 'newapi' && needsUpstreamTypeChoice" class="mt-4 block text-sm">
               {{ t('admin.groupRates.connect.groupTypeLabel') }}
               <select v-model="groupActionType" :disabled="isGroupActionLoading" class="mt-2 h-9 w-full rounded-lg border border-border bg-surface px-2">
                 <option value="">{{ t('admin.groupRates.connect.groupTypePlaceholder') }}</option>
@@ -1213,9 +1217,10 @@ onBeforeUnmount(() => {
             <h4 class="mt-5 text-sm font-medium">{{ adminPlatform === 'sub2api' ? '选择要新增对接的自有分组' : t('admin.groupRates.connect.ownGroupLabel') }}</h4>
             <p v-if="adminPlatform === 'sub2api'" class="mt-1 text-xs text-muted-foreground">每个选中的分组会创建独立的上游 Key 和 Sub2API 转发账号。</p>
             <Loader2 v-if="groupOptionsLoading" class="mt-3 h-5 w-5 animate-spin text-primary" />
-            <p v-else-if="!compatibleOwnGroups.length" class="mt-3 text-sm text-muted-foreground">{{ t('admin.groupRateCampaigns.editor.groupsEmpty') }}</p>
+            <p v-else-if="!ownGroups.some(group => group.status !== 'inactive')" class="mt-3 text-sm text-muted-foreground">{{ t('admin.groupRateCampaigns.editor.groupsEmpty') }}</p>
             <p v-else-if="!unusedOwnGroups.length" class="mt-3 text-sm text-muted-foreground">所有可用的自有分组均已绑定。</p>
-            <input v-else v-model="groupActionSearch" aria-label="搜索可绑定分组" placeholder="搜索可绑定分组" class="mt-3 h-9 w-full rounded-lg border border-border/50 bg-surface px-3 text-sm" />
+            <p v-if="adminPlatform === 'sub2api' && groupActionType && unusedOwnGroups.some(group => groupActionOwnGroupIds.includes(group.id) && group.platform && normalizeType(group.platform) !== groupActionType)" class="mt-2 text-xs text-muted-foreground">{{ t('admin.modelSettings.crossPlatform') }}</p>
+            <input v-if="unusedOwnGroups.length" v-model="groupActionSearch" aria-label="搜索可绑定分组" placeholder="搜索可绑定分组" class="mt-3 h-9 w-full rounded-lg border border-border/50 bg-surface px-3 text-sm" />
             <p v-if="unusedOwnGroups.length && !visibleOwnGroups.length" class="mt-3 text-sm text-muted-foreground">没有匹配的分组</p>
             <div class="mt-3 max-h-56 space-y-2 overflow-y-auto">
               <label

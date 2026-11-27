@@ -23,7 +23,7 @@ func TestSetEnvLinePreservesExistingValuesByDefault(t *testing.T) {
 }
 
 func TestDefaultAppVersionIsReleaseVersion(t *testing.T) {
-	if defaultAppVersion != "2.2.30" {
-		t.Fatalf("expected default app version 2.2.30, got %q", defaultAppVersion)
+	if defaultAppVersion != "2.2.31" {
+		t.Fatalf("expected default app version 2.2.31, got %q", defaultAppVersion)
 	}
 }

@@ -25,6 +25,10 @@ func RegisterRoutes(mux *http.ServeMux, service *Service) {
 	mux.HandleFunc("GET /api/my-sites/binding-models", handler.bindingModels)
 	mux.HandleFunc("GET /api/my-sites/real-connections", handler.listRealConnections)
 	mux.HandleFunc("PATCH /api/my-sites/real-connections/{id}/groups", handler.updateRealConnectionGroups)
+	mux.HandleFunc("GET /api/my-sites/real-connections/{id}/model-allowlist", handler.bindingModelAllowlist)
+	mux.HandleFunc("PUT /api/my-sites/real-connections/{id}/model-allowlist", handler.bindingModelAllowlist)
+	mux.HandleFunc("GET /api/my-sites/own-groups/{id}", handler.ownGroupSettings)
+	mux.HandleFunc("PATCH /api/my-sites/own-groups/{id}", handler.ownGroupSettings)
 	mux.HandleFunc("POST /api/my-sites/real-disconnect", handler.realDisconnect)
 	mux.HandleFunc("POST /api/my-sites/real-connections/{id}/repair", handler.repairConnection)
 }
@@ -186,6 +190,11 @@ func (h *Handler) realDisconnect(w http.ResponseWriter, r *http.Request) {
 }
 
 func writeError(w http.ResponseWriter, err error) {
+	var settingsErr upstream.ModelSettingsError
+	if errors.As(err, &settingsErr) {
+		httpjson.WriteError(w, http.StatusBadRequest, settingsErr.Error())
+		return
+	}
 	var requestErr requestError
 	if errors.As(err, &requestErr) {
 		status := http.StatusBadRequest

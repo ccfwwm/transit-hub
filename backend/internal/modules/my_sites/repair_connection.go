@@ -59,15 +59,15 @@ func (s *Service) RepairRealConnectionAccount(ctx context.Context, userID, conne
 	if err != nil {
 		return "", err
 	}
-	available := map[string]bool{}
+	available := make(map[string]upstream.AdminGroupInfo, len(groups))
 	for _, group := range groups {
-		available[group.ID] = true
+		available[group.ID] = group
 	}
 	if len(conn.OwnGroupIDs) == 0 {
 		return "", requestError(ErrorInvalidGroup)
 	}
 	for _, id := range conn.OwnGroupIDs {
-		if !available[id] {
+		if _, ok := available[id]; !ok {
 			return "", requestError(ErrorInvalidGroup)
 		}
 	}
@@ -79,7 +79,11 @@ func (s *Service) RepairRealConnectionAccount(ctx context.Context, userID, conne
 	if strings.TrimSpace(name) == "" {
 		name = site.Name + " - " + conn.UpstreamGroupName
 	}
-	payload := buildAccountPayload(conn.GroupType, site.BaseURL, conn.UpstreamKey, groupIDs, name)
+	platform := conn.GroupType
+	if len(conn.OwnGroupIDs) == 1 {
+		platform = forwardingAccountPlatform(platform, available[conn.OwnGroupIDs[0]].Platform)
+	}
+	payload := buildAccountPayload(platform, upstream.EffectiveAPIURL(*site, conn.UpstreamGroupID, conn.UpstreamAPIURL), conn.UpstreamKey, groupIDs, name)
 	// Sub2API creation does not accept schedulable. Create expired, explicitly
 	// disable scheduling, then remove the temporary expiration.
 	payload["expires_at"] = 1

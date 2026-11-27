@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import GroupModelStatus from '../components/GroupModelStatus.vue'
 import PrimaryModelPicker from '../components/PrimaryModelPicker.vue'
+import ForwardingModelAllowlist from '../components/ForwardingModelAllowlist.vue'
 import { computed, ref, watch } from 'vue'
 import GroupAPIAddress from '../components/GroupAPIAddress.vue'
 import GroupBindingList from '../components/GroupBindingList.vue'
@@ -104,11 +105,8 @@ const filteredOwnGroups = computed(() => {
   if (editingConnectionGroups.value) {
     return ownGroups.value.filter(group => connectOwnGroups.value.includes(group.id))
   }
-  const upstreamType = normalizeGroupType(selectedGroupType.value || connectingRate.value?.type)
-  const matching = ownGroups.value.filter(group => normalizeGroupType(group.platform) === upstreamType)
-  const compatible = matching.length ? matching : ownGroups.value
   const occupied = new Set(connectingConnections.value.flatMap(connection => connection.ownGroupIds ?? []))
-  return compatible.filter(group => !occupied.has(group.id))
+  return ownGroups.value.filter(group => group.status !== 'inactive' && !occupied.has(group.id))
 })
 
 const dynamicGroupTypes = computed(() => {
@@ -191,10 +189,6 @@ watch(searchQuery, (value) => {
   searchDebounceTimer = setTimeout(() => {
     void setSearch(value)
   }, 300)
-})
-
-watch(selectedGroupType, () => {
-  if (!editingConnectionGroups.value) connectOwnGroups.value = []
 })
 
 // new-api admin：根据自有分组类型过滤可选的渠道类型
@@ -437,7 +431,14 @@ const submitConnector = async () => {
 }
 
 const connectGroupSearch = ref('')
-const visibleConnectGroups = computed(()=>filteredOwnGroups.value.filter(g=>!connectGroupSearch.value||g.groupName.toLowerCase().includes(connectGroupSearch.value.toLowerCase())))
+const visibleConnectGroups = computed(() => filteredOwnGroups.value.filter(group =>
+  `${group.groupName} ${group.platform}`.toLowerCase().includes(connectGroupSearch.value.trim().toLowerCase())))
+const hasCrossPlatformSelection = computed(() => {
+  if (adminPlatform.value !== 'sub2api' || connectMode.value !== 'real') return false
+  const type = normalizeGroupType(selectedGroupType.value || connectingRate.value?.type)
+  return !!type && filteredOwnGroups.value.some(group =>
+    connectOwnGroups.value.includes(group.id) && group.platform && normalizeGroupType(group.platform) !== type)
+})
 const realConnectError = ref('')
 
 const translatedActionError = (err: unknown, fallbackKey: string): string => {
@@ -921,6 +922,7 @@ const historyRowKey = (row: GroupRateHistoryRow, index: number): string => (
               <div class="min-w-0 space-y-4">
           <GroupAPIAddress :site-id="connectingRate.siteId" :group-id="connectingRate.groupId" :account-api-url="editingConnection?.upstreamApiUrl" />
           <PrimaryModelPicker v-model="connectTestModel" :site-id="connectingRate.siteId" :group-id="connectingRate.groupId || ''" :connection-id="editingConnection?.id" :key-id="connectMode === 'bind' ? selectedKeyId : undefined" :disabled="isActionLoading" />
+          <ForwardingModelAllowlist v-if="adminPlatform === 'sub2api' && editingConnection?.adminAccountId" :key="editingConnection.id" :connection-id="editingConnection.id" :site-id="connectingRate.siteId" :group-id="connectingRate.groupId || ''" :disabled="isActionLoading" />
           <label class="flex cursor-pointer items-center justify-between gap-3 rounded-lg border border-border/50 bg-surface px-4 py-3 text-sm"><span>倍率大于等于分组时仍允许启用</span><input v-model="connectAllowHigherRate" type="checkbox" class="h-4 w-4 shrink-0 accent-blue-600" /></label>
 
           <div v-if="!editingConnectionGroups" class="flex items-center gap-1 rounded-xl bg-surface border border-border/50 p-1">
@@ -1037,6 +1039,7 @@ const historyRowKey = (row: GroupRateHistoryRow, index: number): string => (
             <p v-if="adminPlatform === 'sub2api'" class="text-xs text-muted-foreground">
               {{ connectMode === 'real' ? '每个选中的分组会创建独立的上游 Key 和 Sub2API 转发账号。' : '一个已有 Key 可关联一个自有分组。' }}
             </p>
+            <p v-if="hasCrossPlatformSelection" class="text-xs text-muted-foreground">{{ t('admin.modelSettings.crossPlatform') }}</p>
             <input v-model="connectGroupSearch" aria-label="搜索对接分组" placeholder="搜索分组" class="h-9 w-full rounded-lg border border-border/50 bg-surface px-3 text-sm" />
             <div class="grid grid-cols-1 gap-2 sm:grid-cols-2">
               <label

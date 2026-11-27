@@ -190,17 +190,25 @@ func forwardingFields(record map[string]any) (base, key, platform string, groups
 
 // FetchForwardingAccountDetail reads account metadata without exporting credentials.
 func (s *PlatformService) FetchForwardingAccountDetail(ctx context.Context, session Session, id string) (Sub2APIAdminAccountStatus, error) {
-	r, e := s.httpClient.requestJSON(session.BaseURL+"/api/v1/admin/accounts/"+url.PathEscape(id), requestOptions{Context: ctx, AccessToken: session.AccessToken, TokenType: session.TokenType, InsecureSkipTLS: session.InsecureSkipTLS})
-	if e != nil {
-		return Sub2APIAdminAccountStatus{}, fmt.Errorf("无法读取自有渠道凭据: %w", e)
-	}
-	record := dataRecord(r.Payload)
-	if groupID2(record) != id {
-		return Sub2APIAdminAccountStatus{}, fmt.Errorf("自有渠道身份不一致")
+	record, err := s.forwardingAccountRecord(ctx, session, id)
+	if err != nil {
+		return Sub2APIAdminAccountStatus{}, err
 	}
 	a := Sub2APIAdminAccountStatus{ID: id, Name: safeString(record, "name"), Type: safeString(record, "type"), Schedulable: firstBool(record, []string{"schedulable", "is_schedulable", "isSchedulable"})}
 	a.BaseURL, a.APIKey, a.Platform, a.GroupIDs = forwardingFields(record)
 	return a, nil
+}
+
+func (s *PlatformService) forwardingAccountRecord(ctx context.Context, session Session, id string) (map[string]any, error) {
+	r, e := s.httpClient.requestJSON(session.BaseURL+"/api/v1/admin/accounts/"+url.PathEscape(id), requestOptions{Context: ctx, AccessToken: session.AccessToken, TokenType: session.TokenType, InsecureSkipTLS: session.InsecureSkipTLS})
+	if e != nil {
+		return nil, fmt.Errorf("无法读取自有渠道凭据: %w", e)
+	}
+	record := dataRecord(r.Payload)
+	if groupID2(record) != id {
+		return nil, fmt.Errorf("自有渠道身份不一致")
+	}
+	return record, nil
 }
 
 func (s *PlatformService) FetchForwardingAccount(ctx context.Context, session Session, id string) (Sub2APIAdminAccountStatus, error) {

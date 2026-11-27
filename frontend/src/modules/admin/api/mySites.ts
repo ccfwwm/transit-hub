@@ -116,3 +116,36 @@ export const listBindingModels = (query: { siteId: string; groupId: string; conn
  if (query.keyId) params.set('keyId',query.keyId)
  return requestJson(`/my-sites/binding-models?${params}`)
 }
+
+export interface ModelAllowlist {
+  enabled: boolean
+  models: string[]
+}
+
+export interface ForwardingModelSettings extends ModelAllowlist {
+  mediaModels?: string[]
+}
+
+export interface OwnGroupSettings {
+  status: 'active' | 'inactive'
+  allowlist?: ModelAllowlist
+  candidates?: string[]
+}
+
+export const getForwardingModelSettings = (connectionId: string): Promise<ForwardingModelSettings> =>
+  requestJson(`/my-sites/real-connections/${encodeURIComponent(connectionId)}/model-allowlist`)
+
+export const updateForwardingModelSettings = (connectionId: string, data: ModelAllowlist): Promise<ForwardingModelSettings> =>
+  requestJson(`/my-sites/real-connections/${encodeURIComponent(connectionId)}/model-allowlist`, {
+    method: 'PUT',
+    body: JSON.stringify(data),
+  })
+
+export const getOwnGroupSettings = (groupId: string): Promise<OwnGroupSettings> =>
+  requestJson(`/my-sites/own-groups/${encodeURIComponent(groupId)}`)
+
+export const updateOwnGroupSettings = (groupId: string, data: Pick<Partial<OwnGroupSettings>, 'status' | 'allowlist'>): Promise<OwnGroupSettings> =>
+  requestJson(`/my-sites/own-groups/${encodeURIComponent(groupId)}`, {
+    method: 'PATCH',
+    body: JSON.stringify(data),
+  })

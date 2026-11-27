@@ -31,14 +31,17 @@ func (m *KeyManagement) connectManaged(ctx context.Context, uid string, state *S
 	if err != nil {
 		return RealConnectResponse{}, err
 	}
-	labels := map[string]string{}
+	ownByID := make(map[string]upstream.AdminGroupInfo, len(own))
 	for _, group := range own {
-		labels[group.ID] = group.Name
+		ownByID[group.ID] = group
 	}
 	for _, id := range groups {
 		_, parseErr := strconv.Atoi(id)
-		if parseErr != nil || labels[id] == "" {
+		if parseErr != nil || ownByID[id].Name == "" {
 			return RealConnectResponse{}, fmt.Errorf("自有分组 %s 不存在", id)
+		}
+		if ownByID[id].Status == "inactive" {
+			return RealConnectResponse{}, fmt.Errorf("自有分组 %q 已停用", ownByID[id].Name)
 		}
 	}
 	slugs, err := m.siteSlugs(ctx, uid, aid)
@@ -50,7 +53,7 @@ func (m *KeyManagement) connectManaged(ctx context.Context, uid string, state *S
 		slug = bindingSlug(site.BaseURL)
 	}
 	rate := managedRate(site, req.UpstreamGroupID)
-	if _, err = managedBindingName(slug, labels[groups[0]], rate, 1, site.Platform); err != nil {
+	if _, err = managedBindingName(slug, ownByID[groups[0]].Name, rate, 1, site.Platform); err != nil {
 		return RealConnectResponse{}, err
 	}
 	initializations := []bindingNameRow{}
@@ -68,8 +71,8 @@ func (m *KeyManagement) connectManaged(ctx context.Context, uid string, state *S
 	}
 	defer m.invalidate(site)
 	response := RealConnectResponse{Connections: []RealConnection{}}
-	for _, group := range groups {
-		conn, err := m.connectManagedGroup(ctx, uid, state, site, req, groupType, groupName, group, labels[group], slug, rate, existing)
+	for _, groupID := range groups {
+		conn, err := m.connectManagedGroup(ctx, uid, state, site, req, groupType, groupName, ownByID[groupID], slug, rate, existing)
 		if err != nil {
 			if len(response.Connections) > 0 {
 				return response, fmt.Errorf("已完成 %d 个分组，剩余分组可重试: %w", len(response.Connections), err)
@@ -82,8 +85,20 @@ func (m *KeyManagement) connectManaged(ctx context.Context, uid string, state *S
 	return response, nil
 }
 
-func (m *KeyManagement) connectManagedGroup(ctx context.Context, uid string, state *State, site *upstream.Site, req RealConnectRequest, platform, groupName, group, label, slug string, rate *float64, existing []RealConnection) (RealConnection, error) {
+// Sub2API dispatches concrete groups to their own account platform. Composite
+// groups select a platform per request, so their account uses the upstream type.
+func forwardingAccountPlatform(upstreamType, ownType string) string {
+	switch platform := normalizeConnectionGroupType(ownType); platform {
+	case "", "composite":
+		return upstreamType
+	default:
+		return platform
+	}
+}
+
+func (m *KeyManagement) connectManagedGroup(ctx context.Context, uid string, state *State, site *upstream.Site, req RealConnectRequest, upstreamType, groupName string, ownGroup upstream.AdminGroupInfo, slug string, rate *float64, existing []RealConnection) (RealConnection, error) {
 	aid := state.AdminAccountID
+	group, label := ownGroup.ID, ownGroup.Name
 	hash := sha256.Sum256([]byte(uid + "\x00" + aid + "\x00" + site.ID + "\x00" + req.UpstreamGroupID + "\x00" + group))
 	id := fmt.Sprintf("mk-%x", hash[:16])
 	for _, c := range existing {
@@ -168,7 +183,8 @@ func (m *KeyManagement) connectManagedGroup(ctx context.Context, uid string, sta
 	if err != nil {
 		return RealConnection{}, err
 	}
-	payload := buildAccountPayload(platform, base, secret, []int{groupInt}, name)
+	accountPlatform := forwardingAccountPlatform(upstreamType, ownGroup.Platform)
+	payload := buildAccountPayload(accountPlatform, base, secret, []int{groupInt}, name)
 	accountID, err = m.ensureManagedAccount(ctx, state.Session, accountID, name, RealConnection{}, secret, payload)
 	if err != nil {
 		return RealConnection{}, err
@@ -182,7 +198,7 @@ func (m *KeyManagement) connectManagedGroup(ctx context.Context, uid string, sta
 	conn := RealConnection{
 		ID: id, UserID: uid, WorkspaceAdminAccountID: aid, UpstreamSiteID: site.ID, UpstreamAPIURL: base,
 		UpstreamGroupID: req.UpstreamGroupID, UpstreamGroupName: groupName, UpstreamKeyID: keyID, UpstreamKey: secret,
-		AdminAccountID: accountID, AdminAccountName: name, OwnGroupIDs: []string{group}, GroupType: platform, CreatedAt: time.Now().UTC().Format(time.RFC3339Nano),
+		AdminAccountID: accountID, AdminAccountName: name, OwnGroupIDs: []string{group}, GroupType: upstreamType, CreatedAt: time.Now().UTC().Format(time.RFC3339Nano),
 	}
 	if err = m.sites.connRepository.SaveRealConnection(ctx, conn); err != nil {
 		return RealConnection{}, err
